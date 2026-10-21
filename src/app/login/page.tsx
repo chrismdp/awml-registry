@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { LoginForm } from "@/components/LoginForm";
 import { Logo } from "@/components/Logo";
@@ -18,7 +19,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <LoginForm providers={socialProviderNames()} next={target} />
         <p className="small">The link works once, for 15 minutes. No passwords.</p>
       </main>
-      <p className="foot">We never send your workflows to a model.</p>
+      <p className="foot">
+        By signing in you agree to the <Link href="/terms">terms</Link> and{" "}
+        <Link href="/privacy">privacy policy</Link>. We never send your workflows to a model.
+      </p>
     </div>
   );
 }

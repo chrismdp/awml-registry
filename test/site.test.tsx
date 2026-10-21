@@ -12,6 +12,8 @@ import InventoryPage from "@/app/[owner]/inventory/page";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import TokensPage from "@/app/settings/tokens/page";
 import LoginPage from "@/app/login/page";
+import PrivacyPage from "@/app/privacy/page";
+import TermsPage from "@/app/terms/page";
 import { makeToken } from "@/app/settings/tokens/actions";
 import { example, orgWith, person, request, signIn, type Who } from "./helpers";
 import { pageRequest, renderPage } from "./pages";
@@ -280,5 +282,24 @@ describe("the engine", () => {
     expect(await engine.check("- just a list\n")).not.toEqual([]);
     expect(await engine.summarise({ security, platform })).toEqual(JSON.parse(example("dinners.summary.json")));
     expect(await engine.draw(security)).toBe(example("dinners-security.mmd").replace(/\n$/, ""));
+  });
+});
+
+describe("the privacy policy and terms", () => {
+  it("names who runs the registry, what it keeps and who to contact", async () => {
+    const privacy = text((await renderPage(PrivacyPage, {})).html);
+    expect(privacy).toContain("chrismdp Ltd");
+    expect(privacy).toContain("16198002");
+    expect(privacy).toContain("chris@chrismdp.com");
+    expect(privacy).toContain("in the EU");
+    const terms = text((await renderPage(TermsPage, {})).html);
+    expect(terms).toContain("chrismdp Ltd");
+    expect(terms).toContain("England and Wales");
+  });
+
+  it("links to both from the sign-in page", async () => {
+    const { html } = await renderPage(LoginPage, {});
+    expect(html).toContain('href="/terms"');
+    expect(html).toContain('href="/privacy"');
   });
 });
