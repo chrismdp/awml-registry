@@ -13,7 +13,8 @@
     "cf:build": "AWML_TARGET=cloudflare opennextjs-cloudflare build",
     "cf:preview": "AWML_TARGET=cloudflare opennextjs-cloudflare preview",
     "cf:migrate:local": "wrangler d1 migrations apply awml-registry --local",
-    "engine:update": "bash scripts/engine-update.sh"
+    "engine:update": "bash scripts/engine-update.sh",
+    "lint": "eslint ."
   },
   "dependencies": {
     "better-auth": "^1.7.12",
@@ -32,7 +33,9 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "drizzle-kit": "^0.31.11",
-    "typescript": "^7.0.2",
+    "eslint": "^10.13.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.0",
     "vitest": "^5.0.5",
     "wrangler": "^4.151.3"
   }
