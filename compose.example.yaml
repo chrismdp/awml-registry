@@ -1,0 +1,22 @@
+# Copy to compose.yaml, set the values, then: docker compose up -d
+services:
+  registry:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      # The address people reach the registry at.
+      BETTER_AUTH_URL: http://localhost:3000
+      # At least 32 random characters: openssl rand -base64 32
+      BETTER_AUTH_SECRET: change-me
+      # Optional sign-in providers.
+      # GITHUB_CLIENT_ID: ""
+      # GITHUB_CLIENT_SECRET: ""
+      # GOOGLE_CLIENT_ID: ""
+      # GOOGLE_CLIENT_SECRET: ""
+    volumes:
+      - registry-data:/data
+    restart: unless-stopped
+
+volumes:
+  registry-data:
