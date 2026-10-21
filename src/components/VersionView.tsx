@@ -1,8 +1,9 @@
 import Link from "next/link";
-import type { CheckResult, StoredSummary } from "@/db/schema";
+import type { CheckResult } from "@/db/schema";
+import type { Summary } from "@/engine";
 import { dateTime } from "@/server/page";
 import type { View } from "@/server/registry";
-import { Counts } from "./Counts";
+import { SummaryTable } from "./SummaryTable";
 import { Mermaid } from "./Mermaid";
 
 export type VersionViewProps = {
@@ -16,7 +17,7 @@ export type VersionViewProps = {
   pushedAt: Date;
   drawings: { view: View; mermaid: string }[];
   check: CheckResult;
-  summary: StoredSummary;
+  summary: Summary;
   versions: { number: number; pushedAt: Date; pushedBy: string | null }[];
 };
 
@@ -54,7 +55,7 @@ export function VersionView(p: VersionViewProps) {
 
       <section>
         <h2>Summary</h2>
-        <Counts counts={p.summary.counts} />
+        <SummaryTable summary={p.summary} />
       </section>
 
       <section>

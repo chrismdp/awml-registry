@@ -16,6 +16,7 @@ ENV NODE_ENV=production \
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/drizzle ./drizzle
+COPY --from=build /app/vendor/awml ./vendor/awml
 RUN mkdir -p /data && chown node:node /data
 USER node
 VOLUME /data

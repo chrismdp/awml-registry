@@ -5,6 +5,7 @@ import { user, version, workflow } from "@/db/schema";
 import { edition } from "@/edition";
 import { engine, type Files } from "@/engine";
 import { record } from "./audit";
+import { measures, total } from "./summary";
 import { findOwner, isOwnerOrMember, type Owner } from "./owners";
 import { refuse, type Result } from "./result";
 import { workflowSlugProblem } from "./slugs";
@@ -275,7 +276,7 @@ export async function ownerPage(db: Db, viewer: Viewer, ownerSlug: string) {
   return { owner, member, workflows };
 }
 
-// Every workflow of an organisation with its latest summary counts, and totals.
+// Every workflow of an organisation with its latest summary, and the totals across them.
 export async function inventory(db: Db, viewer: Viewer, orgSlug: string) {
   const owner = await findOwner(db, orgSlug);
   if (!owner || owner.type !== "organisation") return null;
@@ -298,14 +299,11 @@ export async function inventory(db: Db, viewer: Viewer, orgSlug: string) {
         )
     : [];
   const byWorkflow = new Map(latest.map((l) => [l.workflowId, l]));
-  const totals: Record<string, number> = {};
   const rows = workflows.map((w) => {
     const l = byWorkflow.get(w.id);
-    const counts = l?.summary.counts ?? {};
-    for (const [k, v] of Object.entries(counts)) totals[k] = (totals[k] ?? 0) + v;
-    return { slug: w.slug, title: w.title, visibility: w.visibility, latest: l?.number ?? null, counts };
+    return { slug: w.slug, title: w.title, visibility: w.visibility, latest: l?.number ?? null, summary: l?.summary ?? null };
   });
-  const keys = Object.keys(totals).sort();
-  return { organisation: owner, rows, totals, keys };
+  const summaries = rows.flatMap((r) => (r.summary ? [r.summary] : []));
+  return { organisation: owner, rows, totals: total(summaries), measures: measures(summaries) };
 }
 

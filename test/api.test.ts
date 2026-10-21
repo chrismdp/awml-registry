@@ -43,6 +43,36 @@ describe("pushing a workflow through the API", () => {
     expect(body.errors.length).toBeGreaterThan(0);
   });
 
+  it("refuses an invalid file with 422 and the messages `awml check` prints for it", async () => {
+    const ana = await person("ana");
+    const printed = example("bad.check.txt").trim().split("\n");
+    expect(printed.length).toBeGreaterThan(0);
+    const res = await request("POST", `/api/v1/${ana.username}/broken/versions`, {
+      as: { token: ana.token },
+      json: { security: example("bad.yaml") },
+    });
+    expect(res.status).toBe(422);
+    expect((await res.json()).errors).toEqual(printed.map((line) => line.replace(/^bad\.yaml: /, "security: ")));
+  });
+
+  it("stores the summary `awml summary --json` gives, for one file or both", async () => {
+    const ana = await person("ana");
+    const cases = [
+      [{ security }, "dinners-security.summary.json"],
+      [{ platform }, "dinners-platform.summary.json"],
+      [{ security, platform }, "dinners.summary.json"],
+    ] as const;
+    for (const [i, [files, expected]] of cases.entries()) {
+      const res = await request("POST", `/api/v1/${ana.username}/w${i}/versions`, {
+        as: { token: ana.token },
+        json: files,
+      });
+      expect(res.status).toBe(201);
+      const stored = await (await request("GET", `/api/v1/${ana.username}/w${i}/v/1`)).json();
+      expect(stored.summary).toEqual(JSON.parse(example(expected)));
+    }
+  });
+
   it("refuses a push with no files", async () => {
     const ana = await person("ana");
     const res = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
@@ -151,7 +181,7 @@ describe("reading a workflow through the API", () => {
     expect(body.number).toBe(1);
     expect(body.files).toEqual({ security, platform });
     expect(body.check).toEqual({ security: [], platform: [] });
-    expect(body.summary.counts).toBeTypeOf("object");
+    expect(body.summary).toEqual(JSON.parse(example("dinners.summary.json")));
   });
 
   it("answers 404 for a version that does not exist", async () => {

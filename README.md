@@ -66,7 +66,7 @@ npx wrangler dev
 
 ## Where to change things
 
-- `src/engine/index.ts` picks the code that checks, summarises and draws a workflow file. Today it is a stand-in; the AWML Go package compiled to WebAssembly replaces it.
+- `vendor/awml/` holds the AWML Go package compiled to WebAssembly, which checks, summarises and draws each file, so the registry and the `awml` command line agree. `vendor/awml/VERSION` names the AWML commit. To move to a newer AWML, run `npm run engine:update -- /path/to/awml`; it needs Go, and rewrites the test fixtures with what the native `awml` prints so `npm test` compares the two.
 - `src/edition.ts` decides whether an organisation may push and keep private workflows, and what the home page shows. The default allows everything.
 - `drizzle/` holds the database migrations. After changing `src/db/schema.ts`, run `npm run db:generate`.
 

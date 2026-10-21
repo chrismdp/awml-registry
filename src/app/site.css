@@ -9,3 +9,5 @@ pre { overflow-x: auto; background: #f6f6f6; padding: 0.5rem; }
 .drawing { overflow-x: auto; }
 .list { padding-left: 1.25rem; }
 [role="alert"] { color: #a00; }
+.wide { overflow-x: auto; }
+ul.labels { margin: 0; padding-left: 1rem; }

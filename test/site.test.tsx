@@ -4,6 +4,8 @@ import { edition } from "@/edition";
 import { engine } from "@/engine";
 import { createOrganisation } from "@/server/organisations";
 import { listTokens } from "@/server/tokens";
+import { inventory } from "@/server/registry";
+import { getViewer } from "@/server/viewer";
 import HomePage from "@/app/page";
 import ExplorePage from "@/app/explore/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
@@ -65,20 +67,32 @@ describe("a workflow's page", () => {
 });
 
 describe("an organisation's inventory", () => {
-  it("shows every workflow's latest summary counts and the totals across them", async () => {
+  it("shows every workflow's latest summary and totals across them, listing publishing line labels", async () => {
     const olive = await person("olive");
     await orgWith("acme", olive);
     await push("acme", "dinners", { token: olive.token }, { security });
     await push("acme", "dinners", { token: olive.token }, { security, platform });
     await push("acme", "payroll", { token: olive.token }, { security, visibility: "private" });
-    const { counts } = await engine.summarise({ security });
-    const kinds = Object.keys(counts);
-    expect(kinds.length).toBeGreaterThan(0);
+    const both = JSON.parse(example("dinners.summary.json"));
+    const one = JSON.parse(example("dinners-security.summary.json"));
+
+    const inv = (await inventory(await getDb(), (await getViewer(new Headers({ cookie: olive.cookie }))), "acme"))!;
+    expect(inv.rows.map((r) => [r.slug, r.latest])).toEqual([["dinners", 2], ["payroll", 1]]);
+    expect(inv.rows[0].summary).toEqual(both);
+    expect(inv.totals.steps.code).toBe(both.steps.code + one.steps.code);
+    expect(inv.totals.outsideActions.ask).toBe(both.outsideActions.ask + one.outsideActions.ask);
+    expect(inv.totals.operations.do).toBe(both.operations.do + one.operations.do);
+    expect(inv.totals.platforms).toBe(both.platforms + one.platforms);
+    expect(inv.totals.publishingLines.count).toBe(both.publishingLines.count + one.publishingLines.count);
+    expect(inv.totals.publishingLines.labels).toEqual(["standing rule: dinners to carers"]);
+
     const page = await renderPage(InventoryPage, { owner: "acme" }, { as: { cookie: olive.cookie } });
     expect(page.status).toBe(200);
     expect(page.html).toContain("2 workflows");
-    const totalRow = page.html.slice(page.html.indexOf("<tfoot>"));
-    for (const k of kinds) expect(totalRow).toContain(`<td>${counts[k] * 2}</td>`);
+    for (const heading of ["AI", "Code", "Person", "Allow", "Ask", "Block", "Publishing lines", "Refused reads", "Red lines", "bring-in"])
+      expect(page.html).toContain(`>${heading}<`);
+    expect(page.html).toContain("standing rule: dinners to carers");
+    expect(page.html).not.toMatch(/gaps/i);
   });
 });
 
@@ -137,13 +151,14 @@ describe("the tokens page", () => {
   });
 });
 
-describe("the stub engine", () => {
-  it("refuses garbage and accepts a real workflow file", async () => {
+describe("the engine", () => {
+  it("gives the verdict, summary and drawing the native awml gives", async () => {
     expect(await engine.check(security)).toEqual([]);
-    expect(await engine.check("- just a list\n")).not.toEqual([]);
-    expect(await engine.check("awml: '0.2'\ntitle: x\n")).toEqual(
-      expect.arrayContaining(["missing field: view", "missing field: parts"]),
+    expect(await engine.check(example("bad.yaml"))).toEqual(
+      example("bad.check.txt").trim().split("\n").map((l) => l.replace(/^bad\.yaml: /, "")),
     );
-    expect(await engine.check(": : :")).not.toEqual([]);
+    expect(await engine.check("- just a list\n")).not.toEqual([]);
+    expect(await engine.summarise({ security, platform })).toEqual(JSON.parse(example("dinners.summary.json")));
+    expect(await engine.draw(security)).toBe(example("dinners-security.mmd").replace(/\n$/, ""));
   });
 });

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import type { Summary } from "@/engine/types";
 
 const id = () => text("id").primaryKey().$defaultFn(() => crypto.randomUUID());
 const createdAt = () =>
@@ -126,7 +127,7 @@ export const version = sqliteTable(
     security: text("security"),
     platform: text("platform"),
     check: text("check", { mode: "json" }).notNull().$type<CheckResult>(),
-    summary: text("summary", { mode: "json" }).notNull().$type<StoredSummary>(),
+    summary: text("summary", { mode: "json" }).notNull().$type<Summary>(),
   },
   (t) => [uniqueIndex("version_workflow_number_idx").on(t.workflowId, t.number)],
 );
@@ -162,4 +163,3 @@ export const auditEvent = sqliteTable(
 );
 
 export type CheckResult = { security?: string[]; platform?: string[] };
-export type StoredSummary = { counts: Record<string, number> };
