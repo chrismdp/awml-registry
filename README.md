@@ -60,7 +60,7 @@ The same app runs on Cloudflare Workers through the OpenNext adapter, with its d
 
 ```sh
 npm run cf:migrate:local
-echo 'BETTER_AUTH_SECRET=<32 random characters>' > .dev.vars
+printf 'BETTER_AUTH_SECRET=<32 random characters>\nBETTER_AUTH_URL=http://localhost:8787\n' > .dev.vars
 npm run cf:build
 npx wrangler dev
 ```

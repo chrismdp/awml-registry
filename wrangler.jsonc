@@ -19,16 +19,18 @@
     {
       "binding": "DB",
       "database_name": "awml-registry",
-      // Local development needs no real id. A deploy needs the id from `wrangler d1 create`.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      // Created with --jurisdiction=eu, so the data stays in the EU.
+      "database_id": "57f9eead-d814-4f46-9866-1c54b64a6c95",
       "migrations_dir": "drizzle"
     }
   ],
   // Cloudflare Email Service sends the sign-in links. It needs the sending
   // domain onboarded in the Cloudflare account first.
   "send_email": [{ "name": "EMAIL" }],
+  "routes": [{ "pattern": "awml.io/*", "zone_name": "awml.io" }],
+  // Local preview overrides BETTER_AUTH_URL with http://localhost:8787 in .dev.vars.
   "vars": {
-    "BETTER_AUTH_URL": "http://localhost:8787",
+    "BETTER_AUTH_URL": "https://awml.io",
     "MAIL_FROM": "AWML <login@awml.io>"
   }
 }
