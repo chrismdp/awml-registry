@@ -13,13 +13,16 @@ export default async function SettingsPage({
   if (!viewer) redirect("/login?next=/settings");
   const orgs = await organisationsOf(db, viewer.id);
   return (
-    <section>
+    <section className="plain-page">
       <h1>Settings</h1>
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       <p>
         Signed in as <Link href={`/${viewer.username}`}>{viewer.username}</Link> ({viewer.email}).
       </p>
+      <form method="post" action="/logout">
+        <button type="submit">Sign out</button>
+      </form>
       <p>
         <Link href="/settings/tokens">API tokens</Link>
       </p>

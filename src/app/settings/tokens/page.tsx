@@ -9,7 +9,7 @@ export default async function TokensPage() {
   if (!viewer) redirect("/login?next=/settings/tokens");
   const tokens = await listTokens(db, viewer.id);
   return (
-    <section>
+    <section className="plain-page">
       <h1>API tokens</h1>
       <p>A token lets the awml command line, or any script, push and pull as you.</p>
       <MakeTokenForm action={makeToken} />

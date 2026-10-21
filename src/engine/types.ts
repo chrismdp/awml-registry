@@ -3,7 +3,10 @@
 
 export type Files = { security?: string; platform?: string };
 
-// What `awml summary --json` gives for a workflow: the things an inventory counts.
+// What `awml summary --json` gives for a workflow: the things an inventory
+// counts, and the names of its AI steps, people, scopes and platforms. The Go
+// package writes an empty list as null. Summaries saved before AWML named
+// things have no lists at all; src/server/summary.ts reads both the same.
 export type Summary = {
   steps: { ai: number; code: number; person: number };
   operations: Record<string, number>;
@@ -15,9 +18,13 @@ export type Summary = {
   surfaces: number;
   scopes: number;
   platforms: number;
-  publishingLines: { count: number; labels: string[] };
+  publishingLines: { count: number; labels: string[] | null };
   refusedReads: number;
   redLines: number;
+  aiSteps?: string[] | null;
+  people?: { label: string; kind: "person" | "review" }[] | null;
+  scopeNames?: string[] | null;
+  platformNames?: string[] | null;
 };
 
 export interface Engine {

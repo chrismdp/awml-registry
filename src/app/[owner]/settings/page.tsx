@@ -28,12 +28,12 @@ export default async function OrgSettingsPage({
     listAudit(db, organisation.id),
   ]);
   return (
-    <section>
+    <section className="plain-page">
       <h1>{organisation.name}: settings</h1>
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
 
-      <h2>Members</h2>
+      <h2 id="members">Members</h2>
       <table>
         <thead>
           <tr>
@@ -74,7 +74,7 @@ export default async function OrgSettingsPage({
         <button type="submit">Add</button>
       </form>
 
-      <h2>Audit log</h2>
+      <h2 id="audit">Audit log</h2>
       {audit.length === 0 ? (
         <p>Nothing yet.</p>
       ) : (

@@ -51,9 +51,26 @@ export function total(summaries: Summary[]): Summary {
     platforms: sum((s) => s.platforms),
     publishingLines: {
       count: sum((s) => s.publishingLines.count),
-      labels: [...new Set(summaries.flatMap((s) => s.publishingLines.labels))],
+      labels: [...new Set(summaries.flatMap((s) => s.publishingLines.labels ?? []))],
     },
     refusedReads: sum((s) => s.refusedReads),
     redLines: sum((s) => s.redLines),
   };
 }
+
+// The names in a summary, each an empty list when there are none.
+export function names(s: Summary) {
+  return {
+    aiSteps: s.aiSteps ?? [],
+    people: s.people ?? [],
+    scopeNames: s.scopeNames ?? [],
+    platformNames: s.platformNames ?? [],
+    publishingLabels: s.publishingLines.labels ?? [],
+  };
+}
+
+// How many steps there are, whoever decides them.
+export const stepCount = (s: Summary) => s.steps.ai + s.steps.code + s.steps.person;
+
+// Whether a person decides anything: a person step or a review.
+export const hasPerson = (s: Summary) => s.steps.person + s.reviews > 0;

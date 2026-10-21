@@ -11,7 +11,7 @@ export default async function OwnerPage({ params }: { params: Promise<{ owner: s
   const { owner, member, workflows } = page;
   const isOrg = owner.type === "organisation";
   return (
-    <section>
+    <section className="plain-page">
       <h1>{owner.name}</h1>
       <p>
         {owner.slug}

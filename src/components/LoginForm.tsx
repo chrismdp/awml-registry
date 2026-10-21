@@ -10,13 +10,23 @@ export function LoginForm({ providers, next }: { providers: ("github" | "google"
   const [state, setState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   return (
     <>
-      {providers.map((provider) => (
-        <p key={provider}>
-          <button type="button" onClick={() => auth.signIn.social({ provider, callbackURL: next })}>
-            Sign in with {provider === "github" ? "GitHub" : "Google"}
-          </button>
-        </p>
-      ))}
+      {providers.length > 0 && (
+        <>
+          <div className="providers">
+            {providers.map((provider, i) => (
+              <button
+                key={provider}
+                type="button"
+                className={i === 0 ? "button" : "button outline"}
+                onClick={() => auth.signIn.social({ provider, callbackURL: next })}
+              >
+                Continue with {provider === "github" ? "GitHub" : "Google"}
+              </button>
+            ))}
+          </div>
+          <div className="or">or by email</div>
+        </>
+      )}
       <form
         onSubmit={async (e) => {
           e.preventDefault();
@@ -26,11 +36,10 @@ export function LoginForm({ providers, next }: { providers: ("github" | "google"
           setState(error ? "failed" : "sent");
         }}
       >
-        <label>
-          Email <input type="email" name="email" required autoComplete="email" />
-        </label>{" "}
-        <button type="submit" disabled={state === "sending"}>
-          Email me a sign-in link
+        <label htmlFor="si-email">Email</label>
+        <input id="si-email" type="email" name="email" required autoComplete="email" placeholder="you@company.com" />
+        <button type="submit" className="button outline" disabled={state === "sending"}>
+          Email me a link
         </button>
       </form>
       {state === "sent" && <p role="status">Check your email for a link to sign in.</p>}

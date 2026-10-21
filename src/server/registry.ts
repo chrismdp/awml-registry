@@ -246,13 +246,25 @@ const ownerSlugSql = sql<string>`coalesce(
   (select slug from organisation where organisation.id = ${workflow.ownerOrganisationId})
 )`;
 
-// The public gallery, newest first, searched by title.
+const isLatest = sql`${version.number} = (select max(v2.number) from version v2 where v2.workflow_id = ${version.workflowId})`;
+
+// The public gallery, newest first, searched by title, with each workflow's
+// latest summary and the file its card draws: the security view, or the
+// platform view when there is no security file.
 export async function explore(db: Db, query = "", limit = 50) {
   const q = query.trim();
   const escaped = q.replace(/[\\%_]/g, (c) => `\\${c}`);
   return db
-    .select({ owner: ownerSlugSql, slug: workflow.slug, title: workflow.title, updatedAt: workflow.updatedAt })
+    .select({
+      owner: ownerSlugSql,
+      slug: workflow.slug,
+      title: workflow.title,
+      updatedAt: workflow.updatedAt,
+      summary: version.summary,
+      drawn: sql<string>`coalesce(${version.security}, ${version.platform})`,
+    })
     .from(workflow)
+    .innerJoin(version, and(eq(version.workflowId, workflow.id), isLatest))
     .where(
       and(
         eq(workflow.visibility, "public"),
@@ -289,19 +301,28 @@ export async function inventory(db: Db, viewer: Viewer, orgSlug: string) {
   const ids = workflows.map((w) => w.id);
   const latest = ids.length
     ? await db
-        .select({ workflowId: version.workflowId, number: version.number, summary: version.summary })
+        .select({
+          workflowId: version.workflowId,
+          number: version.number,
+          summary: version.summary,
+          hasSecurity: sql<number>`${version.security} is not null`,
+          hasPlatform: sql<number>`${version.platform} is not null`,
+        })
         .from(version)
-        .where(
-          and(
-            inArray(version.workflowId, ids),
-            sql`${version.number} = (select max(v2.number) from version v2 where v2.workflow_id = ${version.workflowId})`,
-          ),
-        )
+        .where(and(inArray(version.workflowId, ids), isLatest))
     : [];
   const byWorkflow = new Map(latest.map((l) => [l.workflowId, l]));
   const rows = workflows.map((w) => {
     const l = byWorkflow.get(w.id);
-    return { slug: w.slug, title: w.title, visibility: w.visibility, latest: l?.number ?? null, summary: l?.summary ?? null };
+    return {
+      slug: w.slug,
+      title: w.title,
+      visibility: w.visibility,
+      latest: l?.number ?? null,
+      summary: l?.summary ?? null,
+      hasSecurity: Boolean(l?.hasSecurity),
+      hasPlatform: Boolean(l?.hasPlatform),
+    };
   });
   const summaries = rows.flatMap((r) => (r.summary ? [r.summary] : []));
   return { organisation: owner, rows, totals: total(summaries), measures: measures(summaries) };

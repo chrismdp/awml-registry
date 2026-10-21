@@ -11,6 +11,7 @@ import ExplorePage from "@/app/explore/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import TokensPage from "@/app/settings/tokens/page";
+import LoginPage from "@/app/login/page";
 import { makeToken } from "@/app/settings/tokens/actions";
 import { example, orgWith, person, request, signIn, type Who } from "./helpers";
 import { pageRequest, renderPage } from "./pages";
@@ -19,6 +20,31 @@ const security = example("dinners-security.yaml");
 const platform = example("dinners-platform.yaml");
 
 const withTitle = (title: string) => security.replace("title: The family's dinners", `title: ${title}`);
+
+// A workflow with no AI, nobody deciding and no platform file.
+const binDay = `awml: "0.2"
+title: Bin day
+view: security
+groups:
+  - { id: home, label: "home: Sam" }
+parts:
+  - { id: wed, kind: trigger, label: "Wednesday 18:00" }
+  - { id: remind, kind: code, op: do, label: "Post the bin reminder", in: home }
+  - { id: chat, kind: surface, label: "House chat", in: home }
+lines:
+  - { from: wed, to: remind, kind: start }
+  - { from: remind, to: chat, kind: data }
+`;
+
+// The page's text, with tags and the spaces between them taken out.
+const text = (html: string) =>
+  html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&#x27;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ");
 
 async function push(owner: string, slug: string, as: Who, body: Record<string, unknown>) {
   const res = await request("POST", `/api/v1/${owner}/${slug}/versions`, { as, json: body });
@@ -39,6 +65,18 @@ describe("the public gallery", () => {
     expect((await renderPage(ExplorePage, {}, { search: { q: "%" } })).html).toContain("No public workflow");
   });
 
+  it("shows each workflow as a card with its drawing, who decides its steps and its address", async () => {
+    const ana = await person("ana");
+    await push(ana.username, "dinners", { token: ana.token }, { security, platform });
+    const page = await renderPage(ExplorePage, {});
+    const shown = text(page.html);
+    expect(shown).toContain("Public workflows");
+    expect(shown).toContain("Workflows people have drawn and shared. Borrow one and make it yours.");
+    expect(shown).toContain("The family's dinners AI 1 Code 3 Person 0 ana / dinners");
+    expect(page.html).toContain(await engine.draw(security).then((m) => m.split("\n")[0]));
+    expect(page.html).toContain('placeholder="Search by title"');
+  });
+
   it("is the home page unless the edition gives one", async () => {
     const ana = await person("ana");
     await push(ana.username, "dinners", { token: ana.token }, { security });
@@ -54,15 +92,50 @@ describe("the public gallery", () => {
 });
 
 describe("a workflow's page", () => {
-  it("draws both views, links each file and gives the command to push the next version", async () => {
+  it("draws one view at a time behind a tab for each, and downloads the file on show", async () => {
     const ana = await person("ana");
     await push(ana.username, "dinners", { token: ana.token }, { security, platform });
     const page = await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" });
-    expect(page.html).toContain("Security view");
-    expect(page.html).toContain("Platform view");
-    expect(page.html).toContain(`/${ana.username}/dinners/v/1/security.yaml`);
+    const shown = text(page.html);
+    expect(shown).toContain("ana / dinners The family's dinners No mistakes Public · Version 1 of 1");
+    expect(shown).toContain("Who may see each part Where each part runs");
     expect(page.html).toContain(await engine.draw(security).then((m) => m.split("\n")[0]));
-    expect(page.html).toContain(`awml push ${ana.username}/dinners security.yaml platform.yaml`);
+    expect(page.html).toContain(`href="/${ana.username}/dinners/v/1/security.yaml"`);
+    expect(page.html).toContain(`href="?view=platform"`);
+
+    const other = await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" }, { search: { view: "platform" } });
+    expect(other.html).toContain(await engine.draw(platform).then((m) => m.split("\n")[1]));
+    expect(other.html).toContain(`href="/${ana.username}/dinners/v/1/platform.yaml"`);
+  });
+
+  it("says who decides, what reaches outside, what leaves its scope and everything in it", async () => {
+    const ana = await person("ana");
+    await push(ana.username, "dinners", { token: ana.token }, { security, platform });
+    const shown = text((await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" })).html);
+    expect(shown).toContain("Who decides 1 AI 3 code No step is decided by a person.");
+    expect(shown).toContain("Outside actions Allow 1 Ask 1 Block 0");
+    expect(shown).toContain("Leaves its scope standing rule: dinners to carers");
+    expect(shown).toContain("Everything in it Triggers 3 Reviews 1 Notes 3 Connectors 3 Surfaces 3 Scopes 3");
+  });
+
+  it("gives the command to push the next version, and says the one before stays", async () => {
+    const ana = await person("ana");
+    await push(ana.username, "dinners", { token: ana.token }, { security, platform });
+    const shown = text((await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" })).html);
+    expect(shown).toContain("Change it Every change is checked, then saved as version 2. Version 1 stays as it is.");
+    expect(shown).toContain(`Push from your machine awml push ${ana.username}/dinners security.yaml platform.yaml`);
+    expect(shown).not.toContain("Ask your own AI");
+    expect(shown).not.toContain("Edit the YAML here");
+  });
+
+  it("names the person steps when people decide some of the steps", async () => {
+    const ana = await person("ana");
+    const withPerson = security.replace("kind: ai, label: \"Plan", "kind: person, label: \"Plan");
+    await push(ana.username, "dinners", { token: ana.token }, { security: withPerson });
+    const shown = text((await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" })).html);
+    expect(shown).toContain("Who decides 3 code 1 person 1 step is decided by a person.");
+    expect(shown).toContain("Who may see each part");
+    expect(shown).not.toContain("Where each part runs");
   });
 });
 
@@ -86,13 +159,60 @@ describe("an organisation's inventory", () => {
     expect(inv.totals.publishingLines.count).toBe(both.publishingLines.count + one.publishingLines.count);
     expect(inv.totals.publishingLines.labels).toEqual(["standing rule: dinners to carers"]);
 
+  });
+
+  it("counts where AI and people are across the workflows, and lists each one's AI steps, people, scopes and platforms", async () => {
+    const olive = await person("olive");
+    await orgWith("acme", olive);
+    await push("acme", "dinners", { token: olive.token }, { security, platform, visibility: "private" });
+    await push("acme", "bin-day", { token: olive.token }, { security: binDay });
+
     const page = await renderPage(InventoryPage, { owner: "acme" }, { as: { cookie: olive.cookie } });
     expect(page.status).toBe(200);
-    expect(page.html).toContain("2 workflows");
-    for (const heading of ["AI", "Code", "Person", "Allow", "Ask", "Block", "Publishing lines", "Refused reads", "Red lines", "bring-in"])
-      expect(page.html).toContain(`>${heading}<`);
-    expect(page.html).toContain("standing rule: dinners to carers");
-    expect(page.html).not.toMatch(/gaps/i);
+    const shown = text(page.html);
+    expect(shown).toContain("Workflows Inventory Members Audit log");
+    expect(shown).toContain("acme's AI workflows");
+    expect(shown).toContain("Where AI is, where people are, what it can see and where it runs.");
+    expect(shown).toContain("1 of 2 use AI somewhere");
+    expect(shown).toContain("1 of 2 have no person in them at all");
+    expect(shown).toContain("4 scopes touched, 1 line leaves one");
+    expect(shown).toContain("1 of 2 don't say where they run yet");
+    expect(shown).toContain("Workflow AI People Scopes it touches Runs on");
+    expect(shown).toContain(
+      "Bin day Public None Code only Nobody home No platform view yet",
+    );
+    expect(shown).toContain(
+      "The family's dinners Private · 1 line leaves a scope 1 of 4 steps Plan next week's dinners 1 review Owen's yes to the exact basket carers family household Server: claude-sonnet-4-5 The family messaging app The supermarket The calendar The kitchen screen",
+    );
+  });
+
+  it("says so when an organisation has no workflows yet", async () => {
+    const olive = await person("olive");
+    await orgWith("acme", olive);
+    const shown = text((await renderPage(InventoryPage, { owner: "acme" }, { as: { cookie: olive.cookie } })).html);
+    expect(shown).toContain("acme has no workflows yet. Push the first one with awml push acme/<name> security.yaml");
+    expect(shown).not.toContain("use AI somewhere");
+  });
+});
+
+describe("the sign-in page", () => {
+  it("offers only the providers that are set up, and always the email link", async () => {
+    const shown = text((await renderPage(LoginPage, {})).html);
+    expect(shown).toContain("Sign in New here? This makes your account too.");
+    expect(shown).toContain("Email me a link");
+    expect(shown).toContain("The link works once, for 15 minutes. No passwords.");
+    expect(shown).not.toContain("Continue with GitHub");
+    expect(shown).not.toContain("or by email");
+
+    process.env.GITHUB_CLIENT_ID = "id";
+    try {
+      const withGitHub = text((await renderPage(LoginPage, {})).html);
+      expect(withGitHub).toContain("Continue with GitHub");
+      expect(withGitHub).not.toContain("Continue with Google");
+      expect(withGitHub).toContain("or by email");
+    } finally {
+      delete process.env.GITHUB_CLIENT_ID;
+    }
   });
 });
 
