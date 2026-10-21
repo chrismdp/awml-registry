@@ -6,19 +6,19 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "node scripts/migrate.mjs && next start",
+    "start": "next start",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "node scripts/migrate.mjs",
-    "cf:build": "opennextjs-cloudflare build",
-    "cf:preview": "opennextjs-cloudflare preview",
+    "cf:build": "AWML_TARGET=cloudflare opennextjs-cloudflare build",
+    "cf:preview": "AWML_TARGET=cloudflare opennextjs-cloudflare preview",
     "cf:migrate:local": "wrangler d1 migrations apply awml-registry --local"
   },
   "dependencies": {
     "better-auth": "^1.7.12",
     "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.45.4",
+    "mermaid": "^12.2.0",
     "next": "^16.4.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

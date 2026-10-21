@@ -1,0 +1,11 @@
+/* Plain and tidy until the design is done. */
+body { font-family: system-ui, sans-serif; line-height: 1.5; max-width: 60rem; margin: 0 auto; padding: 0 1rem 3rem; }
+header.site nav { display: flex; gap: 0.25rem; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid #ddd; }
+header.site .end { margin-left: auto; }
+form.inline { display: inline; }
+table { border-collapse: collapse; }
+th, td { text-align: left; padding: 0.25rem 0.75rem 0.25rem 0; border-bottom: 1px solid #eee; }
+pre { overflow-x: auto; background: #f6f6f6; padding: 0.5rem; }
+.drawing { overflow-x: auto; }
+.list { padding-left: 1.25rem; }
+[role="alert"] { color: #a00; }
