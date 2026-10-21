@@ -22,6 +22,7 @@
     "drizzle-orm": "^0.45.4",
     "mermaid": "^12.2.0",
     "next": "^16.4.2",
+    "nodemailer": "^10.1.7",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "yaml": "^2.9.1"
@@ -30,6 +31,7 @@
     "@opennextjs/cloudflare": "^1.20.12",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.5",
+    "@types/nodemailer": "^8.0.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "drizzle-kit": "^0.31.11",

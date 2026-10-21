@@ -40,7 +40,7 @@ function makeAuth(db: Db) {
       magicLink({
         expiresIn: 60 * 15,
         storeToken: "hashed",
-        sendMagicLink: ({ email, url }) => getEmailSender().sendMagicLink(email, url),
+        sendMagicLink: async ({ email, url }) => (await getEmailSender()).sendMagicLink(email, url),
       }),
     ],
     databaseHooks: {

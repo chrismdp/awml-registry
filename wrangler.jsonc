@@ -24,7 +24,11 @@
       "migrations_dir": "drizzle"
     }
   ],
+  // Cloudflare Email Service sends the sign-in links. It needs the sending
+  // domain onboarded in the Cloudflare account first.
+  "send_email": [{ "name": "EMAIL" }],
   "vars": {
-    "BETTER_AUTH_URL": "http://localhost:8787"
+    "BETTER_AUTH_URL": "http://localhost:8787",
+    "MAIL_FROM": "AWML <login@awml.io>"
   }
 }

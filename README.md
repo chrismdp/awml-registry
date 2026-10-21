@@ -16,7 +16,7 @@ npm run dev
 
 Open http://localhost:3000. The data goes in `data/registry.db`, made on first use.
 
-To sign in, enter your email. Without an email provider, the registry prints the sign-in link in the terminal running `npm run dev`; open it in your browser.
+To sign in, enter your email. Unless you set up email (see Settings), the registry prints the sign-in link in the terminal running `npm run dev`; open it in your browser.
 
 To push from the command line, make a token at `/settings/tokens`, then:
 
@@ -37,8 +37,11 @@ Run the tests with `npm test` and the type check with `npm run typecheck`.
 | `DATABASE_PATH` | The SQLite file. Default: `data/registry.db` |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | Optional. Sign-in with GitHub; the callback is `<BETTER_AUTH_URL>/api/auth/callback/github` |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional. Sign-in with Google; the callback is `<BETTER_AUTH_URL>/api/auth/callback/google` |
+| `MAIL_FROM` | Who sign-in emails come from, such as `Registry <login@example.com>`. Default: `AWML <login@awml.io>` |
+| `SMTP_URL` | An SMTP server to send sign-in emails through, such as `smtps://user:password@mail.example.com` |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | The same as `SMTP_URL`, in parts. The port defaults to 587; port 465 uses TLS from the start |
 
-Sign-in by email link always works. Sending real email is not built yet: the link is written to the server's log.
+Sign-in by email link always works. With `SMTP_URL` or `SMTP_HOST` set, the links are emailed. With neither, they are only written to the server's log, and the log says so each time.
 
 ## Host it yourself
 
@@ -63,6 +66,8 @@ npx wrangler dev
 ```
 
 `npm run cf:build` swaps the SQLite file driver for the D1 one, so the Worker never carries the SQLite library.
+
+On Cloudflare, sign-in emails go through Cloudflare Email Service. `wrangler.jsonc` binds it as `EMAIL` (`"send_email": [{ "name": "EMAIL" }]`) and sets `MAIL_FROM`. The sending domain must be onboarded in the Cloudflare account first, and sending to any address needs the Workers Paid plan. Without the binding, the Worker prints the links to its log.
 
 ## Where to change things
 
