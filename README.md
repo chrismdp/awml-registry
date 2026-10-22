@@ -34,7 +34,7 @@ The registry is also an MCP server, at `https://awml.io/mcp`. Connect your AI to
 
 Every request to `/mcp` needs you signed in, so your AI asks you to sign in when you connect it. Public workflows stay readable without an account on the website, through the API and with `awml pull`.
 
-**Claude.ai and Claude Desktop.** In Settings, open Connectors and add a custom connector with the URL `https://awml.io/mcp`. Claude sends you to awml.io to sign in, then asks you to allow it.
+**Claude.ai and Claude Desktop.** In Customize, open Connectors and add a custom connector with the URL `https://awml.io/mcp`. Claude sends you to awml.io to sign in, then asks you to allow it. If Claude asks how to register, choose to register automatically: the registry offers dynamic client registration. On a Team or Enterprise plan, an owner can add the connector for everyone in Organization settings, then each member connects it.
 
 **ChatGPT.** Add a connector with the same URL. It signs in the same way.
 

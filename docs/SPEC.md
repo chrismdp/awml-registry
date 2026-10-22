@@ -67,7 +67,7 @@ User slugs and organisation slugs share one namespace. Reserved slugs that no us
 | `/.well-known/oauth-authorization-server[/api/auth]` | The sign-in server's metadata (RFC 8414): registration, authorisation and token endpoints under `/api/auth/oauth2/` |
 | `/consent` | Where a person lets an AI client act as them, after signing in at `/login` |
 
-The API takes `Authorization: Bearer <token>` or a browser session. The CLI talks to `https://awml.io` unless `--registry` or `AWML_REGISTRY` names another.
+The API takes `Authorization: Bearer <token>` or a browser session. The CLI talks to `https://awml.io` unless `--registry` or `AWML_REGISTRY_URL` names another.
 
 ## Access
 
