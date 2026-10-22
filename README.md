@@ -78,7 +78,7 @@ Connect your AI to it and it can check, read and publish workflows as you, with 
 
 Every request to `/mcp` needs you signed in, so your AI asks you to sign in when you connect it. Public workflows stay readable without an account on the website, through the API and with `awml pull`.
 
-**Claude.ai and Claude Desktop.** In Customize, open Connectors and add a custom connector with the URL `<registry>/mcp`. Claude reaches it from the internet, so it needs a public `https` address. Claude sends you to your registry to sign in, then asks you to allow it. If Claude asks how to register, choose to register automatically: the registry offers dynamic client registration. On a Team or Enterprise plan, an owner can add the connector for everyone in Organization settings, then each member connects it.
+**Claude.ai and Claude Desktop.** In Customize, open Connectors and add a custom connector with the URL `<registry>/mcp`. Claude reaches it from the internet, so it needs a public `https` address. Claude sends you to your registry to sign in, then asks you to allow it. Claude introduces itself with a client ID metadata document by default, and the registry accepts that or dynamic client registration, so there is nothing to choose. Your registry fetches that document from Claude's own address, so it needs to reach the internet. On a Team or Enterprise plan, an owner can add the connector for everyone in Organization settings, then each member connects it.
 
 **ChatGPT.** Add a connector with the same URL. It signs in the same way.
 

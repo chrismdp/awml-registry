@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { setDb } from "@/db/client";
 import { openSqlite } from "@/db/driver";
+import { setMetadataTransport } from "@/server/client-metadata";
 import { setEmailSender } from "@/server/email";
 import { sentEmails } from "./helpers";
 import { pageRequest } from "./pages";
@@ -26,4 +27,5 @@ beforeEach(() => {
 
 afterEach(() => {
   setDb(undefined);
+  setMetadataTransport(undefined);
 });

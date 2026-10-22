@@ -6,149 +6,18 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { auditEvent } from "@/db/schema";
 import { listTokens, revokeToken } from "@/server/tokens";
-import LoginPage from "@/app/login/page";
 import ConsentPage from "@/app/consent/page";
 import { BASE, example, orgWith, person, request } from "./helpers";
+import { call, CIMD_CLIENT, connect, MCP, message, post, serveMetadata } from "./mcp-client";
 import { renderPage } from "./pages";
 import { route } from "./router";
 
 const security = example("dinners-security.yaml");
 const platform = example("dinners-platform.yaml");
 
-const MCP = `${BASE}/mcp`;
 const METADATA = `${BASE}/.well-known/oauth-protected-resource/mcp`;
 
-type Message = {
-  result?: { content: { type: string; text: string }[]; structuredContent?: unknown; isError?: boolean } & Record<
-    string,
-    unknown
-  >;
-  error?: { code: number; message: string };
-};
-
-// One JSON-RPC request to /mcp, as an MCP client sends it over streamable HTTP.
-async function post(method: string, params: unknown, bearer?: string) {
-  const headers = new Headers({
-    "content-type": "application/json",
-    accept: "application/json, text/event-stream",
-    "mcp-protocol-version": "2025-06-18",
-  });
-  if (bearer) headers.set("authorization", `Bearer ${bearer}`);
-  return route(
-    new Request(MCP, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) }),
-  );
-}
-
-// The JSON-RPC message in a response, sent as JSON or as a server-sent event.
-async function message(res: Response): Promise<Message> {
-  const text = await res.text();
-  if (!res.headers.get("content-type")?.includes("text/event-stream")) return JSON.parse(text);
-  const data = text
-    .split("\n")
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trim());
-  return JSON.parse(data.at(-1)!);
-}
-
-// A tool's answer: its text, its structured content, and whether it refused.
-type Answer = { text: string; data: any; isError: boolean };
-
-async function call(tool: string, args: Record<string, unknown>, bearer?: string): Promise<Answer> {
-  const res = await post("tools/call", { name: tool, arguments: args }, bearer);
-  expect(res.status, `${tool} answered ${res.status}`).toBe(200);
-  const { result, error } = await message(res);
-  if (error || !result) throw new Error(error?.message ?? "no result");
-  return {
-    text: result.content.map((c) => c.text).join("\n"),
-    data: result.structuredContent,
-    isError: Boolean(result.isError),
-  };
-}
-
 const publish = (bearer: string | undefined, args: Record<string, unknown>) => call("publish", args, bearer);
-
-// A page's search params as Next.js gives them: a repeated key as a list.
-function searchOf(url: URL) {
-  const search: Record<string, string | string[]> = {};
-  for (const [key, value] of url.searchParams) {
-    const had = search[key];
-    search[key] = had === undefined ? value : [had, value].flat();
-  }
-  return search;
-}
-
-// Someone connecting an AI client the way Claude.ai or Claude Code does: the
-// client registers itself, sends them to sign in and allow it, and swaps the
-// code it gets back for an access token for /mcp.
-async function connect(who: { cookie: string }, opts: { resource?: string } = { resource: MCP }) {
-  const callback = "http://localhost:33418/callback";
-  const registered = await request("POST", "/api/auth/oauth2/register", {
-    json: {
-      client_name: "Test AI",
-      redirect_uris: [callback],
-      token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-    },
-  });
-  expect(registered.status).toBe(201);
-  const { client_id } = await registered.json();
-
-  const verifier = crypto.randomUUID() + crypto.randomUUID();
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-  const challenge = Buffer.from(digest).toString("base64url");
-  const query = new URLSearchParams({
-    response_type: "code",
-    client_id,
-    redirect_uri: callback,
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    scope: "openid offline_access",
-    state: "s1",
-    ...(opts.resource ? { resource: opts.resource } : {}),
-  });
-
-  // Signed out, authorising sends them to the sign-in page.
-  const toSignIn = await request("GET", `/api/auth/oauth2/authorize?${query}`);
-  expect(toSignIn.status).toBe(302);
-  const signInAt = new URL(toSignIn.headers.get("location")!, BASE);
-  expect(signInAt.pathname).toBe("/login");
-
-  // Once signed in, the sign-in page sends them back to finish authorising.
-  const back = await renderPage(LoginPage, {}, { as: who, search: searchOf(signInAt) });
-  expect(back.status).toBe(307);
-  const toConsent = await request("GET", back.location!, { as: who });
-  expect(toConsent.status).toBe(302);
-  const consentAt = new URL(toConsent.headers.get("location")!, BASE);
-  expect(consentAt.pathname).toBe("/consent");
-
-  // The consent page names the client, and Allow posts this.
-  const page = await renderPage(ConsentPage, {}, { as: who, search: searchOf(consentAt) });
-  expect(page.status).toBe(200);
-  expect(page.html).toContain("Test AI");
-  const allowed = await route(
-    new Request(`${BASE}/api/auth/oauth2/consent`, {
-      method: "POST",
-      headers: { cookie: who.cookie, origin: BASE, "content-type": "application/json" },
-      body: JSON.stringify({ accept: true, oauth_query: consentAt.search.slice(1) }),
-    }),
-  );
-  expect(allowed.status).toBe(200);
-  const code = new URL((await allowed.json()).url).searchParams.get("code")!;
-
-  const token = await request("POST", "/api/auth/oauth2/token", {
-    form: {
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: callback,
-      client_id,
-      code_verifier: verifier,
-      ...(opts.resource ? { resource: opts.resource } : {}),
-    },
-  });
-  expect(token.status).toBe(200);
-  return (await token.json()).access_token as string;
-}
 
 // Org "acme" with owner Olive and member Mo, holding one private workflow;
 // org "beta" with owner Bea, holding a private and a public one; and Nell,
@@ -301,7 +170,7 @@ describe("the MCP server at /mcp", () => {
 });
 
 describe("connecting an AI client", () => {
-  it("publishes where the registry's authorisation server is, and that server offers registration and PKCE", async () => {
+  it("publishes where the registry's authorisation server is, and that server offers registration, metadata documents and PKCE", async () => {
     const resource = await route(new Request(METADATA));
     expect(resource.status).toBe(200);
     expect(await resource.json()).toMatchObject({ resource: MCP, authorization_servers: [`${BASE}/api/auth`] });
@@ -314,6 +183,7 @@ describe("connecting an AI client", () => {
         authorization_endpoint: `${BASE}/api/auth/oauth2/authorize`,
         token_endpoint: `${BASE}/api/auth/oauth2/token`,
         registration_endpoint: `${BASE}/api/auth/oauth2/register`,
+        client_id_metadata_document_supported: true,
         code_challenge_methods_supported: ["S256"],
       });
     }
@@ -336,6 +206,7 @@ describe("connecting an AI client", () => {
       const addresses = Object.entries(server).filter(([k]) => k === "issuer" || k.endsWith("_endpoint") || k === "jwks_uri");
       expect(addresses.length).toBeGreaterThan(4);
       for (const [key, value] of addresses) expect(value, key).toMatch(new RegExp(`^${own}/api/auth`));
+      expect(server.client_id_metadata_document_supported).toBe(true);
     } finally {
       process.env.BETTER_AUTH_URL = original;
     }
@@ -343,7 +214,17 @@ describe("connecting an AI client", () => {
 
   it("signs in on the sign-in page, allows the client on the consent page and gets a token that works on /mcp", async () => {
     const ana = await person("ana");
-    const accessToken = await connect(ana);
+    const { accessToken } = await connect(ana);
+    const res = await publish(accessToken, { owner: ana.username, slug: "dinners", security });
+    expect(res.data).toMatchObject({ owner: ana.username, number: 1 });
+  });
+
+  it("a client named by the address of its metadata document signs in, is allowed and gets a token that works on /mcp", async () => {
+    const ana = await person("ana");
+    const asked = serveMetadata();
+    const { accessToken, clientId } = await connect(ana, { clientId: CIMD_CLIENT });
+    expect(clientId).toBe(CIMD_CLIENT);
+    expect(asked).toContain(CIMD_CLIENT);
     const res = await publish(accessToken, { owner: ana.username, slug: "dinners", security });
     expect(res.data).toMatchObject({ owner: ana.username, number: 1 });
   });
@@ -359,7 +240,7 @@ describe("connecting an AI client", () => {
 
   it("refuses an OAuth token that was not issued for /mcp", async () => {
     const ana = await person("ana");
-    const notForMcp = await connect(ana, {});
+    const { accessToken: notForMcp } = await connect(ana, { resource: undefined });
     const res = await post("tools/call", { name: "list", arguments: {} }, notForMcp);
     expect(res.status).toBe(401);
     expect(res.headers.get("www-authenticate")).toContain('error="invalid_token"');
@@ -426,7 +307,7 @@ describe("Negative boundary", () => {
 describe("Cross-tenant boundary", () => {
   it("organisation A's token and OAuth session cannot list, get or publish organisation B's private workflows", async () => {
     const { mo, bea } = await twoOrgs();
-    const oauth = await connect(mo);
+    const { accessToken: oauth } = await connect(mo);
     for (const bearer of [mo.token, oauth]) {
       expect((await call("list", { owner: "beta" }, bearer)).data.workflows.map((w: { slug: string }) => w.slug)).toEqual([
         "open-plans",
@@ -447,7 +328,7 @@ describe("Cross-tenant boundary", () => {
 describe("Token and OAuth give the same access", () => {
   it("a person's registry token and their OAuth token answer every tool the same", async () => {
     const { mo } = await twoOrgs();
-    const oauth = await connect(mo);
+    const { accessToken: oauth } = await connect(mo);
     const reads: [string, Record<string, unknown>][] = [
       ["list", {}],
       ["list", { owner: "acme" }],
@@ -600,7 +481,7 @@ describe("platforms through /mcp", () => {
 
   it("organisation A's token and OAuth session cannot search, get, add to or fit against organisation B's private platforms", async () => {
     const { mo, bea } = await twoOrgsWithPlatforms();
-    const oauth = await connect(mo);
+    const { accessToken: oauth } = await connect(mo);
     for (const bearer of [mo.token, oauth]) {
       const searched = await call("search_platforms", { query: "vault" }, bearer);
       expect([searched.data.platforms, searched.text]).toEqual([[], "No platforms."]);
@@ -619,7 +500,7 @@ describe("platforms through /mcp", () => {
 
   it("a person's registry token and their OAuth token answer every platform tool the same", async () => {
     const { mo } = await twoOrgsWithPlatforms();
-    const oauth = await connect(mo);
+    const { accessToken: oauth } = await connect(mo);
     const calls: [string, Record<string, unknown>][] = [
       ["search_platforms", {}],
       ["search_platforms", { query: "box" }],

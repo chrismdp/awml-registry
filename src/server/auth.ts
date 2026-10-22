@@ -1,3 +1,4 @@
+import { cimd } from "@better-auth/cimd";
 import { mcp } from "@better-auth/mcp";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -5,6 +6,7 @@ import { jwt } from "better-auth/plugins/jwt";
 import { magicLink } from "better-auth/plugins/magic-link";
 import { getDb, type Db } from "@/db/client";
 import * as schema from "@/db/schema";
+import { fetchClientMetadata } from "./client-metadata";
 import { getEmailSender } from "./email";
 import { mcpUrl } from "./http";
 import { freeUsername } from "./slugs";
@@ -72,6 +74,9 @@ function makeAuth(db: Db) {
         // do, is a web app.
         clientRegistrationDefaultApplicationType: "infer",
       }),
+      // Or the client names itself by the https address of its metadata
+      // document, and the registry fetches it (see client-metadata.ts).
+      cimd({ fetchClientMetadataResource: fetchClientMetadata, metadataProfile: "mcp-2026-07-28" }),
     ],
     databaseHooks: {
       user: {

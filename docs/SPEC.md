@@ -82,7 +82,7 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `awml pull owner/slug[@n] [-o dir]` | Downloads the files of the latest version, or of version n |
 | `/mcp` | The MCP server, streamable HTTP (see "The MCP server") |
 | `/.well-known/oauth-protected-resource[/mcp]` | Where `/mcp` says its sign-in lives (RFC 9728) |
-| `/.well-known/oauth-authorization-server[/api/auth]` | The sign-in server's metadata (RFC 8414): registration, authorisation and token endpoints under `/api/auth/oauth2/` |
+| `/.well-known/oauth-authorization-server[/api/auth]` | The sign-in server's metadata (RFC 8414): registration, authorisation and token endpoints under `/api/auth/oauth2/`, and `client_id_metadata_document_supported` |
 | `/consent` | Where a person lets an AI client act as them, after signing in at `/login` |
 
 The API takes `Authorization: Bearer <token>` or a browser session. The CLI talks to `https://awml.io` unless `--registry` or `AWML_REGISTRY_URL` names another.
@@ -161,12 +161,14 @@ The person's own AI reads a platform's recipe and does the installing. The regis
 
 **Signing in, two ways, both the same person.**
 
-- OAuth 2.1 through Better Auth's MCP plugin (`@better-auth/mcp`), with dynamic client registration. An AI client finds it from the address alone: `/mcp` answers a request without a token with a 401 whose `WWW-Authenticate` names the protected resource metadata, which names the sign-in server. The person signs in on `/login` as usual and allows the client on `/consent`. The access token is a JWT for `/mcp` only.
+- OAuth 2.1 through Better Auth's MCP plugin (`@better-auth/mcp`). The client names itself by the https address of its client ID metadata document (CIMD, Better Auth's `@better-auth/cimd` with the MCP 2026-07-28 profile), as Claude.ai's custom connectors do by default, or registers itself with dynamic client registration. The sign-in server's metadata offers both. An AI client finds it from the address alone: `/mcp` answers a request without a token with a 401 whose `WWW-Authenticate` names the protected resource metadata, which names the sign-in server. The person signs in on `/login` as usual and allows the client on `/consent`. The access token is a JWT for `/mcp` only.
 - `Authorization: Bearer <registry token>`, a token from `/settings/tokens`, for clients that take a header.
 
 **Every request to `/mcp` needs one of them, reads of public workflows included.** AI clients decide whether a server needs signing in when they first connect, so a server that answers anonymously never gets signed in to. Anyone can still read public workflows without an account on the website, through `GET /api/v1/...` and with `awml pull`. Decided 2026-10-22, over letting anonymous callers read public workflows through `/mcp`.
 
 Every address the sign-in metadata gives comes from `BETTER_AUTH_URL`, so a self-hosted registry's `/mcp` works the same at its own address.
+
+**Fetching a client's metadata document** reaches only public addresses. Better Auth refuses a `client_id` whose host is a private, loopback, link-local or reserved address, gives up after five seconds and reads at most 5 KB; `src/server/client-metadata.ts` stops waiting at the five seconds even while a name is still being resolved. Under it, in Node (the Docker image), Better Auth's own transport resolves the name once, refuses unless every address is public, connects to that address only and never follows a redirect. On a Worker, which cannot choose the address it connects to, the name is resolved first over DNS over HTTPS and fetched only when every A and AAAA answer is public, without following a redirect. The tests are in `test/client-metadata.test.ts`. Added on 2026-10-22, after Claude.ai's custom connectors defaulted to CIMD and a person had to choose dynamic registration by hand.
 
 | Boundary | Test (`test/mcp.test.ts`) |
 |---|---|
