@@ -9,8 +9,8 @@ The source of truth for the decisions is the Claude Doc "AWML Registry spec" (ht
 | Decision | Choice |
 |---|---|
 | Code and licence | This repo, chrismdp/awml-registry, under FSL-1.1-MIT. The AWML spec and CLI stay MIT. |
-| Editions | This repo is the whole self-hostable registry and contains **no billing code**. The hosted service at awml.io is a separate private repo that adds Stripe billing, the marketing pages and the Cloudflare deploy settings. This repo exposes an `edition` hook the hosted repo replaces; the default edition allows everything. |
-| Address | One domain, awml.io. The registry is served from the root, so a workflow lives at `awml.io/{owner}/{slug}`. The marketing pages belong to the hosted repo, not this one. |
+| Editions | This repo is the whole self-hostable registry and contains **no billing code**. The hosted service at awml.io is a separate private repo, chrismdp/awml-cloud, that adds Stripe billing, the marketing pages and the Cloudflare deploy settings (see "The hosted service"). This repo exposes an `edition` hook the hosted repo replaces; the default edition allows everything. |
+| Address | One domain, awml.io. The registry is served from the root, so a workflow lives at `awml.io/{owner}/{slug}`, and the gallery at `awml.io/gallery`. The marketing pages belong to the hosted repo, not this one. |
 | Stack | Next.js (App Router, React, TypeScript) with Drizzle ORM over SQLite. |
 | Hosting | Hosted: Cloudflare Workers through the OpenNext Cloudflare adapter, data in D1. Self-hosted: the same app as a Docker container, data in a SQLite file. |
 | Sign-in | GitHub, Google, and a passwordless link by email. Through Better Auth, which keeps its tables in the same database. SAML single sign-on later through Better Auth's SSO plugin. |
@@ -41,14 +41,15 @@ The source of truth for the decisions is the Claude Doc "AWML Registry spec" (ht
 | Audit event | Organisation, actor, action, target, at. Rows are only ever added |
 | OAuth clients, consents, access and refresh tokens, resources; JWKS | Better Auth's MCP plugin and JWT plugin keep these for AI clients signing in to `/mcp` |
 
-User slugs and organisation slugs share one namespace. Reserved slugs that no user or organisation may take: `api`, `explore`, `settings`, `login`, `logout`, `signup`, `auth`, `new`, `admin`, `pricing`, `security`, `docs`, `about`, `blog`, `terms`, `privacy`, `help`, `status`, `_next`, `static`, `assets`, `mcp`, `consent`.
+User slugs and organisation slugs share one namespace. Reserved slugs that no user or organisation may take: `api`, `explore`, `gallery`, `settings`, `login`, `logout`, `signup`, `auth`, `new`, `admin`, `pricing`, `security`, `docs`, `about`, `blog`, `terms`, `privacy`, `help`, `status`, `_next`, `static`, `assets`, `mcp`, `consent`.
 
 ## Pages, API and CLI
 
 | Route or command | What it does |
 |---|---|
 | `/` | In this repo: the gallery. The hosted edition puts its home page here |
-| `/explore` | The gallery of public workflows, newest first, with search by title |
+| `/gallery` | The gallery of public workflows, newest first, with search by title |
+| `/explore` | Where the gallery was. Redirects permanently (308) to `/gallery`, keeping the search |
 | `/{owner}` | A user's or organisation's workflows: the public ones to everyone, the private ones to members too |
 | `/{owner}/{slug}` | The latest version: both views drawn, the summary, the check result, the list of versions, and the command to push the next one |
 | `/{owner}/{slug}/v/{n}` | One version, the same way |
@@ -94,8 +95,20 @@ Each boundary has a test:
 - `canKeepPrivate(org): Promise<boolean>`: whether the organisation may push a private workflow. Default: `true`.
 - `canPush(org): Promise<boolean>`: whether the organisation may push at all (the hosted edition says no after a lapsed payment; reading stays allowed). Default: `true`.
 - `homePage`: optional React component for `/`. Default: the gallery.
+- `legalLinks`: optional addresses of the terms and the privacy policy, `{ terms, privacy }`, which the sign-in page links to. Default: none, and the sign-in page names neither. The hosted edition sets `/terms` and `/privacy`, its own pages.
 
 Nothing else in this repo knows that billing exists.
+
+## The hosted service
+
+awml.io is built from chrismdp/awml-cloud, a private repo that holds this one as a submodule pinned to a commit. Its build copies this repo, lays its own files over it at the same paths and deploys the result. Everything specific to awml.io lives there, not here:
+
+- `src/edition.ts`, with the home page about the AWML spec and the links to its terms and privacy policy.
+- `/terms` and `/privacy`, which name the company that runs awml.io.
+- `wrangler.jsonc` with awml.io's settings: the route, the D1 database, `BETTER_AUTH_URL` and `MAIL_FROM`.
+- The deploy to awml.io on each push to its main branch.
+
+This repo's `wrangler.jsonc` has placeholders for a self-hoster to fill in, and its CI only type checks, lints and tests. Moved out on 2026-10-22.
 
 ## The MCP server
 

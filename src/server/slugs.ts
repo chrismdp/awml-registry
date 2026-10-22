@@ -4,7 +4,7 @@ import { organisation, user } from "@/db/schema";
 
 // Paths at the root of the site that no user or organisation may take.
 export const RESERVED_SLUGS = new Set([
-  "api", "explore", "settings", "login", "logout", "signup", "auth", "new", "admin",
+  "api", "explore", "gallery", "settings", "login", "logout", "signup", "auth", "new", "admin",
   "pricing", "security", "docs", "about", "blog", "terms", "privacy", "help", "status",
   "_next", "static", "assets", "mcp", "consent",
 ]);

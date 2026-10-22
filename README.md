@@ -1,5 +1,7 @@
 # AWML Registry
 
+You do not have to host a registry yourself. There is an official one at [awml.io](https://awml.io), free for public workflows.
+
 The AWML Registry stores, versions and draws [AWML](https://github.com/chrismdp/awml) workflow files. You push a workflow's security file, platform file or both, and the registry checks them, numbers each push as a new version, and draws both views. Public workflows are open to anyone. An organisation can also keep private workflows, which only its members see, with an inventory of all its workflows and an audit log.
 
 `docs/SPEC.md` says what v1 does and why.
@@ -102,16 +104,39 @@ npm run cf:build
 npx wrangler dev --local-upstream localhost:8787 --upstream-protocol http
 ```
 
-`npm run cf:build` swaps the SQLite file driver for the D1 one, so the Worker never carries the SQLite library. Without `--local-upstream`, `wrangler dev` makes each request look as if it came to awml.io, the route in `wrangler.jsonc`, and signing in fails with "Invalid origin".
+`npm run cf:build` swaps the SQLite file driver for the D1 one, so the Worker never carries the SQLite library. Once `wrangler.jsonc` has a route, `wrangler dev` makes each request look as if it came to the route's domain unless you pass `--local-upstream`, and signing in fails with "Invalid origin".
 
 Locally, sign-in emails are written to `.wrangler/tmp/email/`, and the log says where.
 
-On Cloudflare, sign-in emails go through Cloudflare Email Service. `wrangler.jsonc` binds it as `EMAIL` (`"send_email": [{ "name": "EMAIL" }]`) and sets `MAIL_FROM`. The sending domain must be onboarded in the Cloudflare account first, and sending to any address needs the Workers Paid plan. Without the binding, the Worker prints the links to its log.
+On Cloudflare, sign-in emails go through Cloudflare Email Service. `wrangler.jsonc` binds it as `EMAIL` (`"send_email": [{ "name": "EMAIL" }]`). The sending domain must be onboarded in the Cloudflare account first, and sending to any address needs the Workers Paid plan. Without the binding, the Worker prints the links to its log.
+
+### Deploy your own to Cloudflare
+
+You need a Cloudflare account. Sign in to it with `npx wrangler login`, then:
+
+1. Make the database. `npx wrangler d1 create awml-registry` makes it and prints its id; add `--jurisdiction eu` to keep the data in the EU.
+2. Fill in the places in `wrangler.jsonc` marked "Yours:":
+   - `database_id`: the id the last step printed.
+   - `BETTER_AUTH_URL`: the address people reach the registry at. Without a route, that is the Worker's own address, `https://awml-registry.<your subdomain>.workers.dev`.
+   - `MAIL_FROM`: who sign-in emails come from, at the domain you onboarded for sending, such as `Registry <login@registry.example.com>`.
+   - `routes`, if you want: your own domain in place of `workers.dev`, on a zone in your Cloudflare account. The comment there shows one.
+3. Set the secrets. Each command asks for the value, and offers to make the Worker the first time:
+
+   ```sh
+   npx wrangler secret put BETTER_AUTH_SECRET     # openssl rand -base64 32 makes one
+   npx wrangler secret put GITHUB_CLIENT_ID       # optional, for signing in with GitHub
+   npx wrangler secret put GITHUB_CLIENT_SECRET   # optional
+   npx wrangler secret put GOOGLE_CLIENT_ID       # optional, for signing in with Google
+   npx wrangler secret put GOOGLE_CLIENT_SECRET   # optional
+   ```
+
+   The GitHub and Google callbacks are `<BETTER_AUTH_URL>/api/auth/callback/github` and `<BETTER_AUTH_URL>/api/auth/callback/google`.
+4. Deploy with `npm run cf:deploy`. It applies the database migrations to the D1 database, builds the Worker and deploys it. Run it again for each change.
 
 ## Where to change things
 
 - `vendor/awml/` holds the AWML Go package compiled to WebAssembly, which checks, summarises and draws each file, so the registry and the `awml` command line agree. `vendor/awml/VERSION` names the AWML commit. To move to a newer AWML, run `npm run engine:update -- /path/to/awml`; it needs Go, and rewrites the test fixtures with what the native `awml` prints so `npm test` compares the two.
-- `src/edition.ts` decides whether an organisation may push and keep private workflows, and what the home page shows. The default allows everything.
+- `src/edition.ts` decides whether an organisation may push and keep private workflows, what the home page shows, and whether the sign-in page links to terms and a privacy policy. The default allows everything, shows the gallery at `/` and links to neither.
 - `drizzle/` holds the database migrations. After changing `src/db/schema.ts`, run `npm run db:generate`.
 
 ## Licence

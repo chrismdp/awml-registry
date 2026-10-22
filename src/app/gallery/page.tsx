@@ -3,7 +3,7 @@ import { engine } from "@/engine";
 import { pageContext } from "@/server/page";
 import { explore } from "@/server/registry";
 
-export default async function ExplorePage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
+export default async function GalleryPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const q = (await searchParams).q ?? "";
   const { db } = await pageContext();
   const rows = await explore(db, q);

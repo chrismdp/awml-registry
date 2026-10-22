@@ -1,7 +1,7 @@
 import { edition } from "@/edition";
-import ExplorePage from "./explore/page";
+import GalleryPage from "./gallery/page";
 
 export default async function HomePage(props: { searchParams: Promise<{ q?: string }> }) {
   const Home = edition.homePage;
-  return Home ? <Home /> : ExplorePage(props);
+  return Home ? <Home /> : GalleryPage(props);
 }

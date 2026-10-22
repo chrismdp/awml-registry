@@ -7,13 +7,11 @@ import { listTokens } from "@/server/tokens";
 import { inventory } from "@/server/registry";
 import { getViewer } from "@/server/viewer";
 import HomePage from "@/app/page";
-import ExplorePage from "@/app/explore/page";
+import GalleryPage from "@/app/gallery/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import TokensPage from "@/app/settings/tokens/page";
 import LoginPage from "@/app/login/page";
-import PrivacyPage from "@/app/privacy/page";
-import TermsPage from "@/app/terms/page";
 import { makeToken } from "@/app/settings/tokens/actions";
 import { example, orgWith, person, request, signIn, type Who } from "./helpers";
 import { pageRequest, renderPage } from "./pages";
@@ -59,24 +57,25 @@ describe("the public gallery", () => {
     await push(ana.username, "older", { token: ana.token }, { security: withTitle("Weekly dinners") });
     await new Promise((r) => setTimeout(r, 5));
     await push(ana.username, "newer", { token: ana.token }, { security: withTitle("Client email") });
-    const all = (await renderPage(ExplorePage, {})).html;
+    const all = (await renderPage(GalleryPage, {})).html;
     expect(all.indexOf("Client email")).toBeLessThan(all.indexOf("Weekly dinners"));
-    const found = (await renderPage(ExplorePage, {}, { search: { q: "dinner" } })).html;
+    const found = (await renderPage(GalleryPage, {}, { search: { q: "dinner" } })).html;
     expect(found).toContain("Weekly dinners");
     expect(found).not.toContain("Client email");
-    expect((await renderPage(ExplorePage, {}, { search: { q: "%" } })).html).toContain("No public workflow");
+    expect((await renderPage(GalleryPage, {}, { search: { q: "%" } })).html).toContain("No public workflow");
   });
 
   it("shows each workflow as a card with its drawing, who decides its steps and its address", async () => {
     const ana = await person("ana");
     await push(ana.username, "dinners", { token: ana.token }, { security, platform });
-    const page = await renderPage(ExplorePage, {});
+    const page = await renderPage(GalleryPage, {});
     const shown = text(page.html);
     expect(shown).toContain("Public workflows");
     expect(shown).toContain("Workflows people have drawn and shared. Borrow one and make it yours.");
     expect(shown).toContain("The family's dinners AI 1 Code 3 Person 0 ana / dinners");
     expect(page.html).toContain(await engine.draw(security).then((m) => m.split("\n")[0]));
     expect(page.html).toContain('placeholder="Search by title"');
+    expect(page.html).toContain('action="/gallery"');
   });
 
   it("is the home page unless the edition gives one", async () => {
@@ -90,6 +89,13 @@ describe("the public gallery", () => {
     } finally {
       edition.homePage = original;
     }
+  });
+
+  it("moved from /explore, which sends old links and searches to /gallery for good", async () => {
+    const searched = await request("GET", "/explore?q=family+dinners");
+    expect(searched.status).toBe(308);
+    expect(searched.headers.get("location")).toBe("/gallery?q=family+dinners");
+    expect((await request("GET", "/explore")).headers.get("location")).toBe("/gallery");
   });
 });
 
@@ -228,12 +234,13 @@ describe("names", () => {
     expect((await signIn("admin@example.com")).user.username).toBe("admin-2");
     expect((await signIn("mcp@example.com")).user.username).toBe("mcp-2");
     expect((await signIn("consent@example.com")).user.username).toBe("consent-2");
+    expect((await signIn("gallery@example.com")).user.username).toBe("gallery-2");
   });
 
   it("refuses an organisation slug that is reserved, malformed or taken by a user", async () => {
     const ana = await person("ana");
     const db = await getDb();
-    for (const slug of ["explore", "api", "Bad Slug", "ana"]) {
+    for (const slug of ["gallery", "explore", "api", "Bad Slug", "ana"]) {
       const made = await createOrganisation(db, ana.id, { slug, name: "x" });
       expect(made.ok, slug).toBe(false);
     }
@@ -290,21 +297,22 @@ describe("the engine", () => {
   });
 });
 
-describe("the privacy policy and terms", () => {
-  it("names who runs the registry, what it keeps and who to contact", async () => {
-    const privacy = text((await renderPage(PrivacyPage, {})).html);
-    expect(privacy).toContain("chrismdp Ltd");
-    expect(privacy).toContain("16198002");
-    expect(privacy).toContain("chris@chrismdp.com");
-    expect(privacy).toContain("in the EU");
-    const terms = text((await renderPage(TermsPage, {})).html);
-    expect(terms).toContain("chrismdp Ltd");
-    expect(terms).toContain("England and Wales");
-  });
+describe("the terms and privacy policy", () => {
+  it("are linked from the sign-in page only when the edition gives them", async () => {
+    const plain = await renderPage(LoginPage, {});
+    expect(plain.html).not.toContain('href="/terms"');
+    expect(text(plain.html)).not.toContain("By signing in you agree");
+    expect(text(plain.html)).toContain("We never send your workflows to a model.");
 
-  it("links to both from the sign-in page", async () => {
-    const { html } = await renderPage(LoginPage, {});
-    expect(html).toContain('href="/terms"');
-    expect(html).toContain('href="/privacy"');
+    edition.legalLinks = { terms: "/terms", privacy: "/privacy" };
+    try {
+      const linked = await renderPage(LoginPage, {});
+      expect(linked.html).toContain('href="/terms"');
+      expect(linked.html).toContain('href="/privacy"');
+      expect(text(linked.html)).toContain("By signing in you agree to the terms and privacy policy");
+      expect(text(linked.html)).toContain("We never send your workflows to a model.");
+    } finally {
+      delete edition.legalLinks;
+    }
   });
 });

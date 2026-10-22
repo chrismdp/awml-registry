@@ -8,7 +8,7 @@ import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
 import OwnerPage from "@/app/[owner]/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import OrgSettingsPage from "@/app/[owner]/settings/page";
-import ExplorePage from "@/app/explore/page";
+import GalleryPage from "@/app/gallery/page";
 import { example, orgWith, person, request, type Who } from "./helpers";
 import { renderPage } from "./pages";
 
@@ -88,7 +88,7 @@ describe("Negative boundary", () => {
   it("a private workflow never appears in the public gallery or its search", async () => {
     await acme();
     for (const search of [{}, { q: "dinners" }] as Record<string, string>[]) {
-      const page = await renderPage(ExplorePage, {}, { search });
+      const page = await renderPage(GalleryPage, {}, { search });
       expect(page.html).not.toContain("payroll");
     }
   });

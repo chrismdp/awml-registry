@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Logo } from "@/components/Logo";
 import { SiteFrame, SiteNav } from "@/components/SiteFrame";
+import { edition } from "@/edition";
 import { organisationsOf } from "@/server/organisations";
 import { pageContext } from "@/server/page";
 import "./site.css";
@@ -25,7 +26,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <Logo />
         <SiteNav
           links={[
-            { href: "/explore", label: "Gallery", match: "^/(explore)?$" },
+            // `/` is the gallery too, unless the edition gives a home page.
+            { href: "/gallery", label: "Gallery", match: edition.homePage ? "^/gallery$" : "^/(gallery)?$" },
             { href: inventory, label: "Inventory", match: "/inventory$" },
             { href: DOCS, label: "Docs" },
           ]}

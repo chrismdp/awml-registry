@@ -9,6 +9,7 @@ import * as orgs from "@/app/api/orgs/route";
 import * as members from "@/app/api/orgs/[org]/members/route";
 import * as removeMember from "@/app/api/orgs/[org]/members/[userId]/remove/route";
 import * as mcp from "@/app/mcp/route";
+import * as explore from "@/app/explore/route";
 import * as protectedResource from "@/app/.well-known/oauth-protected-resource/[[...path]]/route";
 import * as authorisationServer from "@/app/.well-known/oauth-authorization-server/[[...path]]/route";
 
@@ -25,6 +26,7 @@ const routes: [RegExp, Module][] = [
   [/^\/api\/orgs\/(?<org>[^/]+)\/members$/, members as Module],
   [/^\/api\/orgs\/(?<org>[^/]+)\/members\/(?<userId>[^/]+)\/remove$/, removeMember as Module],
   [/^\/mcp$/, mcp as Module],
+  [/^\/explore$/, explore as Module],
   [/^\/\.well-known\/oauth-protected-resource(?:\/(?<path>.+))?$/, protectedResource as Module],
   [/^\/\.well-known\/oauth-authorization-server(?:\/(?<path>.+))?$/, authorisationServer as Module],
   [/^\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/v\/(?<n>[^/]+)\/(?<file>[^/]+)$/, yamlFile as Module],

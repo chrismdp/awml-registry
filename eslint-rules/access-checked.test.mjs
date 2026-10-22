@@ -39,7 +39,7 @@ tester.run("access-checked", rule, {
     },
     {
       name: "a route that is not owner-scoped reads the public gallery",
-      filename: at("explore/page.tsx"),
+      filename: at("gallery/page.tsx"),
       code: `const { db } = await pageContext(); const rows = await explore(db, q);`,
     },
   ],
@@ -70,7 +70,7 @@ tester.run("access-checked", rule, {
     },
     {
       name: "any route importing the schema or drizzle",
-      filename: at("explore/page.tsx"),
+      filename: at("gallery/page.tsx"),
       code: `import { workflow } from "@/db/schema"; import { eq } from "drizzle-orm";`,
       errors: [
         { messageId: "directData", data: { source: "@/db/schema" } },

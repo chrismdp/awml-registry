@@ -12,7 +12,7 @@ export function Gallery({ cards, q }: { cards: Card[]; q: string }) {
           <h1>Public workflows</h1>
           <p>Workflows people have drawn and shared. Borrow one and make it yours.</p>
         </div>
-        <form action="/explore" role="search" className="search">
+        <form action="/gallery" role="search" className="search">
           <label htmlFor="g-search" className="hidden-label">
             Search by title
           </label>

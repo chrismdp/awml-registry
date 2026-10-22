@@ -1,5 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
+  // To run your own registry on Cloudflare, fill in the four places marked
+  // "Yours:" below. The README's "Run it on Cloudflare" says how.
   "name": "awml-registry",
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-10-01",
@@ -19,18 +21,23 @@
     {
       "binding": "DB",
       "database_name": "awml-registry",
-      // Created with --jurisdiction=eu, so the data stays in the EU.
-      "database_id": "57f9eead-d814-4f46-9866-1c54b64a6c95",
+      // Yours: the id `npx wrangler d1 create awml-registry` prints. Local
+      // preview and `npm run cf:migrate:local` work without it.
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "drizzle"
     }
   ],
   // Cloudflare Email Service sends the sign-in links. It needs the sending
   // domain onboarded in the Cloudflare account first.
   "send_email": [{ "name": "EMAIL" }],
-  "routes": [{ "pattern": "awml.io/*", "zone_name": "awml.io" }],
-  // Local preview overrides BETTER_AUTH_URL with http://localhost:8787 in .dev.vars.
+  // Yours, if you like: serve the registry at your own domain rather than on
+  // workers.dev, with a route on a zone in your Cloudflare account, such as
+  // "routes": [{ "pattern": "registry.example.com/*", "zone_name": "example.com" }],
   "vars": {
-    "BETTER_AUTH_URL": "https://awml.io",
-    "MAIL_FROM": "AWML <login@awml.io>"
+    // Yours: the address people reach the registry at. Local preview
+    // overrides it with http://localhost:8787 in .dev.vars.
+    "BETTER_AUTH_URL": "https://registry.example.com",
+    // Yours: who sign-in emails come from, at a domain onboarded for sending.
+    "MAIL_FROM": "Registry <login@example.com>"
   }
 }

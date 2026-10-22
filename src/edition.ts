@@ -11,6 +11,9 @@ export interface Edition {
   canPush(org: EditionOrganisation): Promise<boolean>;
   // What `/` shows. Without one, `/` is the gallery.
   homePage?: ComponentType;
+  // Where the terms and privacy policy are, for the sign-in page to link to.
+  // Without them, the sign-in page names neither.
+  legalLinks?: { terms: string; privacy: string };
 }
 
 export const edition: Edition = {
