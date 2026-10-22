@@ -119,6 +119,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: write
       contents: write
       pull-requests: write
     steps:
@@ -151,3 +152,4 @@ jobs:
           else
             gh pr create --head "$branch" --title "$title" --body-file "$message"
           fi
+          gh workflow run ci.yml --ref "$branch"

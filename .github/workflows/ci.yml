@@ -5,6 +5,8 @@ name: CI
 on:
   push:
   pull_request:
+  # The factory starts this by hand, because pushes made with the Actions token start nothing.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
