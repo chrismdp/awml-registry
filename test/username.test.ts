@@ -510,7 +510,7 @@ describe("old names on /mcp", () => {
       expect(platformRead.data).toMatchObject({
         owner: "ana-cooks",
         slug: "worker",
-        url: `${BASE}/api/v1/platforms/ana-cooks/worker`,
+        url: `${BASE}/platforms/ana-cooks/worker`,
       });
       expect(platformRead.text).toContain("platform ana-cooks/worker, version 1 of 1");
       const fitted = await call("fit_workflow", { workflow: "ana/dinners", platforms: ["ana/worker@1"] }, who.token);
@@ -531,7 +531,7 @@ describe("old names on /mcp", () => {
       owner: "ana-cooks",
       slug: "worker",
       number: 2,
-      url: `${BASE}/api/v1/platforms/ana-cooks/worker/v/2`,
+      url: `${BASE}/platforms/ana-cooks/worker`,
     });
     // Someone else's write to the old name is refused as at the current name.
     for (const [tool, args] of [
