@@ -5,6 +5,11 @@ import * as workflowApi from "@/app/api/v1/[owner]/[slug]/route";
 import * as versionsApi from "@/app/api/v1/[owner]/[slug]/versions/route";
 import * as versionApi from "@/app/api/v1/[owner]/[slug]/v/[n]/route";
 import * as yamlFile from "@/app/[owner]/[slug]/v/[n]/[file]/route";
+import * as platformApi from "@/app/api/v1/platforms/[owner]/[slug]/route";
+import * as platformVersionsApi from "@/app/api/v1/platforms/[owner]/[slug]/versions/route";
+import * as platformVersionApi from "@/app/api/v1/platforms/[owner]/[slug]/v/[n]/route";
+import * as platformFile from "@/app/platforms/[owner]/[slug]/v/[n]/[file]/route";
+import * as fitApi from "@/app/api/v1/fit/route";
 import * as orgs from "@/app/api/orgs/route";
 import * as members from "@/app/api/orgs/[org]/members/route";
 import * as removeMember from "@/app/api/orgs/[org]/members/[userId]/remove/route";
@@ -19,6 +24,12 @@ type Module = Partial<Record<"GET" | "POST", Handler>>;
 
 const routes: [RegExp, Module][] = [
   [/^\/api\/auth\/(?<all>.+)$/, auth as Module],
+  // A path's fixed segments come before its placeholders, as in Next.js.
+  [/^\/api\/v1\/fit$/, fitApi as Module],
+  [/^\/api\/v1\/platforms\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/versions$/, platformVersionsApi as Module],
+  [/^\/api\/v1\/platforms\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/v\/(?<n>[^/]+)$/, platformVersionApi as Module],
+  [/^\/api\/v1\/platforms\/(?<owner>[^/]+)\/(?<slug>[^/]+)$/, platformApi as Module],
+  [/^\/platforms\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/v\/(?<n>[^/]+)\/(?<file>[^/]+)$/, platformFile as Module],
   [/^\/api\/v1\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/versions$/, versionsApi as Module],
   [/^\/api\/v1\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/v\/(?<n>[^/]+)$/, versionApi as Module],
   [/^\/api\/v1\/(?<owner>[^/]+)\/(?<slug>[^/]+)$/, workflowApi as Module],

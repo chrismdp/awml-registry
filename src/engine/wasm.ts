@@ -3,7 +3,7 @@
 // names the AWML commit; `npm run engine:update` rebuilds it.
 import { createAWML, type AWML } from "../../vendor/awml/awml.js";
 import { loadAwmlModule } from "@/engine/module";
-import type { Engine, Files, Summary } from "./types";
+import type { Engine, Files, FitReport, Summary } from "./types";
 
 // One Go runtime per process or Worker isolate, started on first use.
 let started: Promise<AWML> | undefined;
@@ -23,5 +23,8 @@ export const wasmEngine: Engine = {
   },
   async draw(yaml) {
     return (await awml()).draw(yaml);
+  },
+  async fit(security, descriptions) {
+    return JSON.parse((await awml()).fitJSON([security, ...descriptions])) as FitReport;
   },
 };

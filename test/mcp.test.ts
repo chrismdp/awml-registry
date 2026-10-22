@@ -185,14 +185,24 @@ const initialize = {
 };
 
 describe("the MCP server at /mcp", () => {
-  it("answers initialize and lists its five tools to someone signed in", async () => {
+  it("answers initialize and lists its nine tools to someone signed in", async () => {
     const ana = await person("ana");
     const init = await message(await post("initialize", initialize, ana.token));
     expect(init.result).toMatchObject({ serverInfo: { name: "awml-registry" }, capabilities: { tools: {} } });
     const tools = (await message(await post("tools/list", {}, ana.token))).result as unknown as {
       tools: { name: string }[];
     };
-    expect(tools.tools.map((t) => t.name).sort()).toEqual(["check", "get", "list", "publish", "search"]);
+    expect(tools.tools.map((t) => t.name).sort()).toEqual([
+      "add_platform",
+      "check",
+      "fit_workflow",
+      "get",
+      "get_platform",
+      "list",
+      "publish",
+      "search",
+      "search_platforms",
+    ]);
   });
 
   it("checks files with the engine and gives the mistakes `awml check` prints, saving nothing", async () => {
@@ -454,6 +464,177 @@ describe("Token and OAuth give the same access", () => {
     }
     const byToken = await publish(mo.token, { owner: "acme", slug: "payroll", security });
     const byOAuth = await publish(oauth, { owner: "acme", slug: "payroll", security });
+    expect([byToken.data.number, byOAuth.data.number]).toEqual([2, 3]);
+  });
+});
+
+// Platforms: AWML's example code worker, and a private machine of each
+// organisation's own, which the client email workflow would fit.
+const worker = example("platforms/worker.yaml");
+const clientEmail = example("client-email.yaml");
+const machine = (id: string, label: string) => `awml: "0.3"
+platform: { id: ${id}, label: "${label}" }
+off_for_up_to: PT0S
+steps: code
+agents: []
+calls: [anthropic]
+holds: [notes]
+`;
+const recipe = "# Install it\n\n1. Copy the workflow's code across.\n2. Put the model key in the secret store.\n";
+
+// twoOrgs, with a private platform for each organisation and a public one of
+// beta's.
+async function twoOrgsWithPlatforms() {
+  const people = await twoOrgs();
+  const { olive, bea } = people;
+  for (const [who, args] of [
+    [olive, { owner: "acme", slug: "back-office", description: machine("back-office", "Acme back office"), recipe, visibility: "private" }],
+    [bea, { owner: "beta", slug: "vault", description: machine("beta-vault", "Beta vault server"), recipe, visibility: "private" }],
+    [bea, { owner: "beta", slug: "open-box", description: worker }],
+  ] as const)
+    expect((await call("add_platform", args, who.token)).isError).toBe(false);
+  return people;
+}
+
+describe("platforms through /mcp", () => {
+  it("adds a platform with its recipe and gets it back, the latest version or a given one", async () => {
+    const ana = await person("ana");
+    const added = await call("add_platform", { owner: ana.username, slug: "box", description: worker, recipe }, ana.token);
+    expect(added.isError).toBe(false);
+    expect(added.data).toEqual({
+      owner: ana.username,
+      slug: "box",
+      number: 1,
+      url: `${BASE}/api/v1/platforms/${ana.username}/box/v/1`,
+    });
+    await call("add_platform", { owner: ana.username, slug: "box", description: machine("box", "A box") }, ana.token);
+    const latest = await call("get_platform", { owner: ana.username, slug: "box" }, ana.token);
+    expect(latest.data).toMatchObject({
+      owner: ana.username,
+      slug: "box",
+      label: "A box",
+      visibility: "public",
+      number: 2,
+      versions: [2, 1],
+      recipe: null,
+    });
+    const first = await call("get_platform", { owner: ana.username, slug: "box", version: 1 }, ana.token);
+    expect(first.data).toMatchObject({ number: 1, label: "A code worker", description: worker, recipe });
+    expect(first.text).toContain(worker);
+    expect(first.text).toContain(recipe);
+    expect(await call("get_platform", { owner: ana.username, slug: "box", version: 9 }, ana.token)).toMatchObject({
+      isError: true,
+      text: "Not found.",
+    });
+  });
+
+  it("refuses a description with mistakes, giving the messages `awml check` gives, and saves nothing", async () => {
+    const ana = await person("ana");
+    const res = await call("add_platform", { owner: ana.username, slug: "box", description: "awml: \"0.3\"\nplatform: { id: x }\n" }, ana.token);
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("description: platform has no label");
+    expect((await call("get_platform", { owner: ana.username, slug: "box" }, ana.token)).text).toBe("Not found.");
+  });
+
+  it("searches public platforms and the caller's organisations' own by text", async () => {
+    const { mo } = await twoOrgsWithPlatforms();
+    const all = await call("search_platforms", {}, mo.token);
+    expect(all.data.platforms.map((p: { owner: string; slug: string }) => `${p.owner}/${p.slug}`).sort()).toEqual([
+      "acme/back-office",
+      "beta/open-box",
+    ]);
+    const found = await call("search_platforms", { query: "back office" }, mo.token);
+    expect(found.data.platforms).toEqual([
+      expect.objectContaining({ owner: "acme", slug: "back-office", label: "Acme back office", visibility: "private" }),
+    ]);
+    expect(found.text).toContain("acme/back-office (private): Acme back office");
+    expect((await call("search_platforms", { query: "worker" }, mo.token)).data.platforms.map((p: { slug: string }) => p.slug)).toEqual([
+      "open-box",
+    ]);
+  });
+
+  it("fits a workflow against the platforms named, or every platform the caller can see, as the API does", async () => {
+    const { mo } = await twoOrgsWithPlatforms();
+    await publish(mo.token, { owner: mo.username, slug: "client-email", security: clientEmail });
+    for (const args of [
+      { workflow: `${mo.username}/client-email` },
+      { security: clientEmail, platforms: ["beta/open-box", "acme/back-office"] },
+    ]) {
+      const fitted = await call("fit_workflow", args, mo.token);
+      const api = await request("POST", "/api/v1/fit", { as: { token: mo.token }, json: args });
+      expect(fitted.data).toEqual(await api.json());
+    }
+    const fitted = await call("fit_workflow", { workflow: `${mo.username}/client-email@1`, platforms: ["beta/open-box", "acme/back-office"] }, mo.token);
+    expect(fitted.text.split("\n")).toEqual([
+      `${mo.username}/client-email v1:`,
+      "beta/open-box v1 doesn't fit: engagements is kept at notes/engagements, which the platform doesn't hold; project is kept at notes/projects, which the platform doesn't hold",
+      "acme/back-office v1 fits: choose, draft and learn may use anthropic",
+    ]);
+    const gaps = await call("fit_workflow", { security, platforms: ["beta/open-box"] }, mo.token);
+    expect(gaps.text.split("\n")[0]).toBe("The workflow doesn't say all the fit needs:");
+    expect((await call("fit_workflow", { workflow: "acme/nothing-here" }, mo.token)).text).toBe("Not found: acme/nothing-here.");
+  });
+
+  it("a member adds and reads their organisation's private platform, and the audit log records both", async () => {
+    const { mo } = await twoOrgsWithPlatforms();
+    const added = await call("add_platform", { owner: "acme", slug: "back-office", description: machine("back-office", "Acme back office") }, mo.token);
+    expect(added.data.number).toBe(2);
+    expect((await call("get_platform", { owner: "acme", slug: "back-office" }, mo.token)).data.visibility).toBe("private");
+    expect(await audit("push", mo.id)).toEqual([{ target: "platforms/acme/back-office v2" }]);
+    expect(await audit("private_view", mo.id)).toEqual([{ target: "platforms/acme/back-office v2" }]);
+  });
+
+  it("a non-member cannot find, read, add to or fit against a private platform: it looks not found", async () => {
+    const { nell, olive } = await twoOrgsWithPlatforms();
+    const hidden = await call("get_platform", { owner: "acme", slug: "back-office" }, nell.token);
+    const missing = await call("get_platform", { owner: "acme", slug: "nothing-here" }, nell.token);
+    expect([hidden.isError, hidden.text]).toEqual([missing.isError, missing.text]);
+    expect((await call("search_platforms", {}, nell.token)).data.platforms.map((p: { slug: string }) => p.slug)).toEqual(["open-box"]);
+    expect((await call("add_platform", { owner: "acme", slug: "back-office", description: worker }, nell.token)).text).toBe("Not found.");
+    const named = await call("fit_workflow", { security: clientEmail, platforms: ["acme/back-office"] }, nell.token);
+    expect([named.isError, named.text]).toEqual([true, "Not found: acme/back-office."]);
+    const all = await call("fit_workflow", { security: clientEmail }, nell.token);
+    expect(all.data.results.map((r: { platform: string }) => r.platform)).toEqual(["beta/open-box"]);
+    expect((await call("get_platform", { owner: "acme", slug: "back-office" }, olive.token)).data.versions).toEqual([1]);
+  });
+
+  it("organisation A's token and OAuth session cannot search, get, add to or fit against organisation B's private platforms", async () => {
+    const { mo, bea } = await twoOrgsWithPlatforms();
+    const oauth = await connect(mo);
+    for (const bearer of [mo.token, oauth]) {
+      const searched = await call("search_platforms", { query: "vault" }, bearer);
+      expect([searched.data.platforms, searched.text]).toEqual([[], "No platforms."]);
+      expect((await call("get_platform", { owner: "beta", slug: "vault" }, bearer)).text).toBe("Not found.");
+      expect((await call("add_platform", { owner: "beta", slug: "vault", description: worker }, bearer)).text).toBe("Not found.");
+      const intoPublic = await call("add_platform", { owner: "beta", slug: "open-box", description: worker }, bearer);
+      expect([intoPublic.isError, intoPublic.text]).toEqual([true, "Only members of beta can push here."]);
+      const fitted = await call("fit_workflow", { security: clientEmail }, bearer);
+      const said = JSON.stringify(fitted);
+      for (const secret of ["beta/vault", "beta-vault", "Beta vault server"]) expect(said).not.toContain(secret);
+      expect(fitted.data.results.map((r: { platform: string }) => r.platform).sort()).toEqual(["acme/back-office", "beta/open-box"]);
+    }
+    expect((await call("get_platform", { owner: "beta", slug: "vault" }, bea.token)).data.versions).toEqual([1]);
+    expect((await audit("private_view", mo.id)).map((a) => a.target)).not.toContain("platforms/beta/vault v1");
+  });
+
+  it("a person's registry token and their OAuth token answer every platform tool the same", async () => {
+    const { mo } = await twoOrgsWithPlatforms();
+    const oauth = await connect(mo);
+    const calls: [string, Record<string, unknown>][] = [
+      ["search_platforms", {}],
+      ["search_platforms", { query: "box" }],
+      ["get_platform", { owner: "acme", slug: "back-office" }],
+      ["get_platform", { owner: "beta", slug: "vault" }],
+      ["get_platform", { owner: "beta", slug: "open-box", version: 1 }],
+      ["fit_workflow", { security: clientEmail }],
+      ["fit_workflow", { security: clientEmail, platforms: ["beta/vault"] }],
+      ["add_platform", { owner: "beta", slug: "open-box", description: worker }],
+    ];
+    for (const [tool, args] of calls) {
+      expect(await call(tool, args, oauth), `${tool} ${JSON.stringify(args)}`).toEqual(await call(tool, args, mo.token));
+    }
+    const byToken = await call("add_platform", { owner: "acme", slug: "back-office", description: worker }, mo.token);
+    const byOAuth = await call("add_platform", { owner: "acme", slug: "back-office", description: worker }, oauth);
     expect([byToken.data.number, byOAuth.data.number]).toEqual([2, 3]);
   });
 });

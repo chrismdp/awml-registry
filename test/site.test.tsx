@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import { isValidElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { LoginForm } from "@/components/LoginForm";
+import { drawingFont } from "@/components/Mermaid";
 import { getDb } from "@/db/client";
 import { engine } from "@/engine";
 import { createOrganisation } from "@/server/organisations";
@@ -321,6 +324,22 @@ describe("the engine", () => {
     expect(await engine.check("- just a list\n")).not.toEqual([]);
     expect(await engine.summarise({ security, platform })).toEqual(JSON.parse(example("dinners.summary.json")));
     expect(await engine.draw(security)).toBe(example("dinners-security.mmd").replace(/\n$/, ""));
+  });
+});
+
+describe("drawing a workflow", () => {
+  it("asks for Inter, which the registry serves itself under the SIL Open Font License", async () => {
+    expect(drawingFont(await engine.draw(security))).toBe("Inter, sans-serif");
+    const css = fs.readFileSync(path.join("src", "app", "site.css"), "utf8");
+    const face = /@font-face\s*{([^}]*)}/.exec(css)?.[1] ?? "";
+    expect(face).toMatch(/font-family:\s*"Inter"/);
+    const src = /src:\s*url\("([^"]+)"\)\s*format\("woff2"\)/.exec(face)?.[1];
+    expect(src).toBeDefined();
+    const file = path.join("src", "app", src!);
+    expect(fs.readFileSync(file).subarray(0, 4).toString()).toBe("wOF2");
+    expect(fs.readFileSync(path.join(path.dirname(file), "LICENSE.txt"), "utf8")).toContain(
+      "SIL OPEN FONT LICENSE Version 1.1",
+    );
   });
 });
 

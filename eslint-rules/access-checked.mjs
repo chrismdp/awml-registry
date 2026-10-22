@@ -1,17 +1,21 @@
-// Every route that reads a workflow, a version, an owner's list, an inventory,
-// an organisation's members or its audit log goes through the functions in
-// src/server that apply the access check, before it reads anything else.
-// Those functions call isOwnerOrMember (src/server/owners.ts) or
-// organisationToManage (src/server/organisations.ts), which is what makes a
-// private workflow a 404 to anyone outside its organisation.
+// Every route that reads a workflow, a platform, a version, an owner's list,
+// an inventory, an organisation's members or its audit log goes through the
+// functions in src/server that apply the access check, before it reads
+// anything else. Those functions call isOwnerOrMember (src/server/owners.ts)
+// or organisationToManage (src/server/organisations.ts), which is what makes a
+// private workflow or platform a 404 to anyone outside its organisation.
 
-// The checked ways in, by file: src/server/registry.ts and src/server/organisations.ts.
+// The checked ways in, by file: src/server/registry.ts, src/server/platforms.ts,
+// src/server/fit.ts and src/server/organisations.ts.
 export const ENTRY_POINTS = [
   "readWorkflow",
   "readVersion",
   "pushVersion",
   "ownerPage",
   "inventory",
+  "readPlatformVersion",
+  "pushPlatformVersion",
+  "fitWorkflow",
   "organisationToManage",
   "addMember",
   "removeMember",
@@ -20,8 +24,8 @@ export const ENTRY_POINTS = [
 // Reads that only an organisation's owners may make.
 const OWNERS_ONLY = ["listAudit", "listMembers"];
 
-// Routes under an owner or an organisation.
-const OWNER_SCOPED = /\/src\/app\/(\[owner\]|api\/v1|api\/orgs\/\[org\])\//;
+// Routes under an owner or an organisation, and the platforms' files.
+const OWNER_SCOPED = /\/src\/app\/(\[owner\]|api\/v1|api\/orgs\/\[org\]|platforms)\//;
 
 const DATA_IMPORTS = /^(@\/db\/schema|drizzle-orm)(\/|$)/;
 

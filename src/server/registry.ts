@@ -71,7 +71,11 @@ async function checkFiles(files: Files) {
     check[view] = found;
     errors.push(...found.map((e) => `${view}: ${e}`));
     if (found.length) continue;
-    const doc = parse(text) as { view?: string; title?: string };
+    const doc = parse(text) as { view?: string; title?: string; platform?: unknown };
+    if (doc.view === undefined && doc.platform !== undefined) {
+      errors.push(`${view}: this is a platform description, not a workflow's view. Push it as a platform.`);
+      continue;
+    }
     if (doc.view !== view)
       errors.push(`${view}: this file says view: ${doc.view}, so send it as the ${doc.view} file.`);
     title ??= doc.title;

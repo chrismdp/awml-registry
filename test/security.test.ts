@@ -9,7 +9,7 @@ import OwnerPage from "@/app/[owner]/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import OrgSettingsPage from "@/app/[owner]/settings/page";
 import GalleryPage from "@/app/gallery/page";
-import { example, orgWith, person, request, type Who } from "./helpers";
+import { example, orgWith, person, request, withEdition, type Who } from "./helpers";
 import { renderPage } from "./pages";
 
 const security = example("dinners-security.yaml");
@@ -355,5 +355,224 @@ describe("The edition hook", () => {
     expect(
       (await renderPage(WorkflowPage, { owner: "acme", slug: "payroll" }, { as: { cookie: mo.cookie } })).status,
     ).toBe(200);
+  });
+});
+
+// Private platforms follow the private workflow rules. Org "acme" keeps a
+// private platform, its back office, and org "beta" keeps one of its own,
+// which every workflow here would fit, so a fit that used it would show it.
+const backOffice = `awml: "0.3"
+platform: { id: back-office, label: "Acme's back office" }
+off_for_up_to: PT0S
+steps: code
+agents: []
+calls: [anthropic]
+holds: [notes]
+`;
+const betaVault = backOffice.replace("back-office", "beta-vault").replace("Acme's back office", "Beta's vault server");
+const recipe = "# Install on the back office\n\n1. Copy the workflow's code to /srv/workflows.\n";
+const clientEmail = example("client-email.yaml");
+
+async function pushPlatform(owner: string, slug: string, as: Who, body: Record<string, unknown>) {
+  return request("POST", `/api/v1/platforms/${owner}/${slug}/versions`, { as, json: body });
+}
+
+// Acme's back office, private, with Olive as owner and Mo as member; Beta's
+// vault, private, and a public platform of Beta's; and Nell, who belongs to
+// nothing.
+async function platforms() {
+  const olive = await person("olive");
+  const mo = await person("mo");
+  const nell = await person("nell");
+  const bea = await person("bea");
+  await orgWith("acme", olive, [mo]);
+  await orgWith("beta", bea);
+  const pushes = [
+    await pushPlatform("acme", "back-office", { token: olive.token }, { description: backOffice, recipe, visibility: "private" }),
+    await pushPlatform("beta", "vault", { token: bea.token }, { description: betaVault, recipe, visibility: "private" }),
+    await pushPlatform("beta", "open-box", { token: bea.token }, { description: example("platforms/worker.yaml") }),
+  ];
+  for (const res of pushes) expect(res.status).toBe(201);
+  return { olive, mo, nell, bea };
+}
+
+// Every way to read a platform, as statuses.
+async function platformReads(owner: string, slug: string, as: Who) {
+  const status = async (path: string) => (await request("GET", path, { as })).status;
+  return {
+    api: await status(`/api/v1/platforms/${owner}/${slug}`),
+    versionApi: await status(`/api/v1/platforms/${owner}/${slug}/v/1`),
+    description: await status(`/platforms/${owner}/${slug}/v/1/description.yaml`),
+    recipe: await status(`/platforms/${owner}/${slug}/v/1/recipe.md`),
+  };
+}
+
+const allPlatformReads = (status: number) => ({ api: status, versionApi: status, description: status, recipe: status });
+
+async function auditRows(action: "push" | "private_view") {
+  const db = await getDb();
+  const rows = await db.select().from(auditEvent);
+  return rows.filter((r) => r.action === action && r.target.startsWith("platforms/")).map((r) => r.target);
+}
+
+describe("Private platforms", () => {
+  describe("Positive boundary", () => {
+    it("a member can read and push a private platform, and the audit log records the pushes and the views", async () => {
+      const { mo } = await platforms();
+      for (const as of [{ token: mo.token }, { cookie: mo.cookie }])
+        expect(await platformReads("acme", "back-office", as)).toEqual(allPlatformReads(200));
+      const pushed = await pushPlatform("acme", "back-office", { token: mo.token }, { description: backOffice });
+      expect([pushed.status, (await pushed.json()).number]).toEqual([201, 2]);
+      expect(await auditRows("push")).toEqual([
+        "platforms/acme/back-office v1",
+        "platforms/beta/vault v1",
+        "platforms/beta/open-box v1",
+        "platforms/acme/back-office v2",
+      ]);
+      expect(await auditRows("private_view")).toContain("platforms/acme/back-office v1");
+    });
+
+    it("a member's fit uses their organisation's private platforms, and records the view", async () => {
+      const { mo } = await platforms();
+      const res = await request("POST", "/api/v1/fit", { as: { token: mo.token }, json: { security: clientEmail } });
+      const { results } = await res.json();
+      expect(results.map((r: { platform: string }) => r.platform).sort()).toEqual(["acme/back-office", "beta/open-box"]);
+      expect(results.find((r: { platform: string }) => r.platform === "acme/back-office")).toMatchObject({ fits: true });
+      expect(await auditRows("private_view")).toEqual(["platforms/acme/back-office v1"]);
+    });
+  });
+
+  describe("Negative boundary", () => {
+    it("a non-member and a signed-out visitor get 404 on a private platform's API, versions and files", async () => {
+      const { nell } = await platforms();
+      for (const as of [{ token: nell.token }, { cookie: nell.cookie }, undefined])
+        expect(await platformReads("acme", "back-office", as)).toEqual(allPlatformReads(404));
+      expect(await auditRows("private_view")).toEqual([]);
+    });
+
+    it("a private platform answers exactly as a missing one does", async () => {
+      const { nell } = await platforms();
+      for (const as of [{ token: nell.token }, undefined]) {
+        for (const [hidden, missing] of [
+          ["/api/v1/platforms/acme/back-office", "/api/v1/platforms/acme/nothing-here"],
+          ["/platforms/acme/back-office/v/1/description.yaml", "/platforms/acme/nothing-here/v/1/description.yaml"],
+        ]) {
+          const a = await request("GET", hidden, { as });
+          const b = await request("GET", missing, { as });
+          expect([a.status, await a.text()]).toEqual([b.status, await b.text()]);
+        }
+      }
+    });
+
+    it("a non-member cannot push to a private platform: 404, and nothing is saved", async () => {
+      const { nell, olive } = await platforms();
+      const res = await pushPlatform("acme", "back-office", { token: nell.token }, { description: backOffice });
+      expect(res.status).toBe(404);
+      const read = await (await request("GET", "/api/v1/platforms/acme/back-office", { as: { token: olive.token } })).json();
+      expect(read.versions).toHaveLength(1);
+    });
+  });
+
+  describe("Cross-tenant boundary", () => {
+    it("a token from a member of one organisation can neither read nor push another organisation's private platforms", async () => {
+      const { mo } = await platforms();
+      expect(await platformReads("beta", "vault", { token: mo.token })).toEqual(allPlatformReads(404));
+      expect((await pushPlatform("beta", "vault", { token: mo.token }, { description: backOffice })).status).toBe(404);
+    });
+
+    it("a token from a member of one organisation cannot push to another organisation's public platforms", async () => {
+      const { mo } = await platforms();
+      expect((await pushPlatform("beta", "open-box", { token: mo.token }, { description: backOffice })).status).toBe(403);
+      expect((await pushPlatform("beta", "brand-new", { token: mo.token }, { description: backOffice })).status).toBe(403);
+      const read = await (await request("GET", "/api/v1/platforms/beta/open-box")).json();
+      expect(read.versions).toHaveLength(1);
+    });
+
+    it("fit never uses or reveals another organisation's private platform, in its results or its reasons", async () => {
+      const { mo, nell } = await platforms();
+      const ana = await person("ana");
+      const workflow = await request("POST", `/api/v1/${ana.username}/client-email/versions`, {
+        as: { token: ana.token },
+        json: { security: clientEmail },
+      });
+      expect(workflow.status).toBe(201);
+      for (const [who, seen] of [
+        [mo, ["acme/back-office", "beta/open-box"]],
+        [nell, ["beta/open-box"]],
+      ] as const) {
+        for (const body of [{ security: clientEmail }, { workflow: `${ana.username}/client-email` }]) {
+          const res = await request("POST", "/api/v1/fit", { as: { token: who.token }, json: body });
+          const text = await res.text();
+          expect(res.status).toBe(200);
+          const results = JSON.parse(text).results as { platform: string }[];
+          expect(results.map((r) => r.platform).sort()).toEqual(seen);
+          for (const secret of ["beta/vault", "beta-vault", "Beta's vault server"]) expect(text).not.toContain(secret);
+        }
+      }
+      const named = await request("POST", "/api/v1/fit", {
+        as: { token: mo.token },
+        json: { security: clientEmail, platforms: ["beta/vault"] },
+      });
+      const missing = await request("POST", "/api/v1/fit", {
+        as: { token: mo.token },
+        json: { security: clientEmail, platforms: ["beta/nothing-here"] },
+      });
+      expect(named.status).toBe(404);
+      expect((await named.text()).replace("vault", "nothing-here")).toBe(await missing.text());
+      expect(await auditRows("private_view")).toEqual(["platforms/acme/back-office v1", "platforms/acme/back-office v1"]);
+    });
+  });
+
+  describe("Roles boundary", () => {
+    it("an owner and a member both push and read the organisation's private platforms; a member who leaves cannot", async () => {
+      const { olive, mo } = await platforms();
+      for (const who of [olive, mo]) {
+        expect(await platformReads("acme", "back-office", { token: who.token })).toEqual(allPlatformReads(200));
+        expect((await pushPlatform("acme", "back-office", { token: who.token }, { description: backOffice })).status).toBe(201);
+      }
+      await request("POST", `/api/orgs/acme/members/${mo.id}/remove`, { as: { cookie: mo.cookie } });
+      expect(await platformReads("acme", "back-office", { token: mo.token })).toEqual(allPlatformReads(404));
+      expect((await pushPlatform("acme", "back-office", { token: mo.token }, { description: backOffice })).status).toBe(404);
+    });
+
+    it("the edition decides whether an organisation may push and keep private platforms, as for workflows", async () => {
+      const { olive } = await platforms();
+      await withEdition({ canKeepPrivate: async () => false }, async () => {
+        const res = await pushPlatform("acme", "another", { token: olive.token }, {
+          description: backOffice,
+          visibility: "private",
+        });
+        expect([res.status, (await res.json()).errors]).toEqual([403, ["acme cannot keep private platforms."]]);
+      });
+      await withEdition({ canPush: async () => false }, async () => {
+        expect((await pushPlatform("acme", "back-office", { token: olive.token }, { description: backOffice })).status).toBe(403);
+        expect((await platformReads("acme", "back-office", { token: olive.token })).api).toBe(200);
+      });
+    });
+  });
+
+  describe("A token that is not valid", () => {
+    it("gets the same 401 for a private, a public and a missing platform, on a push and on a fit", async () => {
+      const { mo } = await platforms();
+      await revoke(mo);
+      const answer = async (method: string, path: string, json?: unknown) => {
+        const res = await request(method, path, { as: { token: mo.token }, json });
+        return { status: res.status, body: await res.text() };
+      };
+      const hidden = await answer("GET", "/api/v1/platforms/acme/back-office");
+      expect(hidden.status).toBe(401);
+      expect(hidden.body).toMatch(/token is not valid/);
+      for (const other of [
+        await answer("GET", "/api/v1/platforms/beta/open-box"),
+        await answer("GET", "/api/v1/platforms/acme/nothing-here"),
+        await answer("GET", "/api/v1/platforms/acme/back-office/v/1"),
+        await answer("POST", "/api/v1/platforms/acme/back-office/versions", { description: backOffice }),
+        await answer("POST", "/api/v1/fit", { security: clientEmail }),
+      ])
+        expect(other).toEqual(hidden);
+      const file = await answer("GET", "/platforms/acme/back-office/v/1/description.yaml");
+      expect(file.status).toBe(401);
+      expect(file.body).toMatch(/token is not valid/);
+    });
   });
 });

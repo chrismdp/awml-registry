@@ -40,4 +40,14 @@ cp "$src/examples/dinners-security.yaml" "$src/examples/dinners-platform.yaml" "
 (cd "$fixtures" && { "$tmp/awml" check bad.yaml || true; } > bad.check.txt)
 (cd "$fixtures" && "$tmp/awml" draw dinners-security.yaml > dinners-security.mmd)
 
+# The fit: a workflow that says what it needs, AWML's example platforms, and
+# what `awml fit --json` says of them; and the gaps it finds in a workflow
+# that doesn't say.
+rm -rf "$fixtures/platforms"
+mkdir -p "$fixtures/platforms"
+cp "$src/examples/client-email.yaml" "$fixtures/"
+cp "$src/examples/platforms/"*.yaml "$fixtures/platforms/"
+(cd "$fixtures" && "$tmp/awml" fit --json client-email.yaml platforms/*.yaml > client-email.fit.json)
+(cd "$fixtures" && { "$tmp/awml" fit --json dinners-security.yaml platforms/worker.yaml || true; } > dinners.fit.json)
+
 echo "vendor/awml now holds $(head -1 "$out/VERSION")"

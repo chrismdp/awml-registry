@@ -314,6 +314,49 @@ export const version = sqliteTable(
   (t) => [uniqueIndex("version_workflow_number_idx").on(t.workflowId, t.number)],
 );
 
+// A platform a workflow can run on, described in AWML's platform description
+// format. Owned like a workflow, and versioned like one.
+export const platform = sqliteTable(
+  "platform",
+  {
+    id: id(),
+    ownerUserId: text("owner_user_id").references(() => user.id),
+    ownerOrganisationId: text("owner_organisation_id").references(() => organisation.id),
+    slug: text("slug").notNull(),
+    label: text("label").notNull(),
+    visibility: text("visibility", { enum: ["public", "private"] }).notNull(),
+    createdAt: createdAt(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
+  },
+  (t) => [
+    uniqueIndex("platform_user_slug_idx").on(t.ownerUserId, t.slug),
+    uniqueIndex("platform_org_slug_idx").on(t.ownerOrganisationId, t.slug),
+    index("platform_visibility_updated_idx").on(t.visibility, t.updatedAt),
+    check(
+      "platform_one_owner",
+      sql`(${t.ownerUserId} IS NULL) <> (${t.ownerOrganisationId} IS NULL)`,
+    ),
+  ],
+);
+
+// One version of a platform: its description as YAML, and the install recipe
+// as Markdown when it has one.
+export const platformVersion = sqliteTable(
+  "platform_version",
+  {
+    id: id(),
+    platformId: text("platform_id")
+      .notNull()
+      .references(() => platform.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    pushedBy: text("pushed_by").notNull().references(() => user.id),
+    pushedAt: integer("pushed_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
+    description: text("description").notNull(),
+    recipe: text("recipe"),
+  },
+  (t) => [uniqueIndex("platform_version_platform_number_idx").on(t.platformId, t.number)],
+);
+
 export const token = sqliteTable(
   "token",
   {

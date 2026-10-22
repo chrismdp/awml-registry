@@ -38,6 +38,16 @@ tester.run("access-checked", rule, {
       code: `const added = await addMember(await getDb(), viewer?.id, org, identifier, "member");`,
     },
     {
+      name: "a platform's file route reads through readPlatformVersion",
+      filename: at("platforms/[owner]/[slug]/v/[n]/[file]/route.ts"),
+      code: `const found = await readPlatformVersion(await getDb(), viewer, owner, slug, n);`,
+    },
+    {
+      name: "the fit goes through fitWorkflow",
+      filename: at("api/v1/fit/route.ts"),
+      code: `const fitted = await fitWorkflow(await getDb(), viewer, body);`,
+    },
+    {
       name: "a route that is not owner-scoped reads the public gallery",
       filename: at("gallery/page.tsx"),
       code: `const { db } = await pageContext(); const rows = await explore(db, q);`,
@@ -49,6 +59,12 @@ tester.run("access-checked", rule, {
       filename: at("[owner]/[slug]/v/[n]/[file]/route.ts"),
       code: `const db = await getDb(); const v = await findVersion(db, owner, slug, n);`,
       errors: [{ messageId: "unchecked", data: { name: "findVersion" } }],
+    },
+    {
+      name: "a platform's file route that reads before any access check",
+      filename: at("platforms/[owner]/[slug]/v/[n]/[file]/route.ts"),
+      code: `const db = await getDb(); const v = await findPlatformFile(db, owner, slug, n);`,
+      errors: [{ messageId: "unchecked", data: { name: "findPlatformFile" } }],
     },
     {
       name: "an owner-scoped route that queries the database itself",

@@ -4,6 +4,8 @@ You do not have to host a registry yourself. There is an official one at [awml.i
 
 The AWML Registry stores, versions and draws [AWML](https://github.com/chrismdp/awml) workflow files. You push a workflow's security file, platform file or both, and the registry checks them, numbers each push as a new version, and draws both views. Public workflows are open to anyone. An organisation can also keep private workflows, which only its members see, with an inventory of all its workflows and an audit log.
 
+The registry also keeps platforms: descriptions of where a workflow can run, each with an optional install recipe. It works out which platforms a workflow fits, with the same AWML code as `awml fit`.
+
 `docs/SPEC.md` says what v1 does and why.
 
 ## Run it on your machine
@@ -32,6 +34,30 @@ curl -X POST http://localhost:3000/api/v1/<you>/<workflow>/versions \
 
 Run the tests with `npm test` and the type check with `npm run typecheck`.
 
+## Platforms and where a workflow can run
+
+A platform is described in AWML's platform description format (see "Placing a workflow: where it can run" in AWML's `SPEC.md`). Push one with its install recipe, the Markdown steps an agent follows to install a workflow there:
+
+```sh
+curl -X POST http://localhost:3000/api/v1/platforms/<you>/<platform>/versions \
+  -H "Authorization: Bearer <token>" -H "content-type: application/json" \
+  -d '{"description": "<the YAML of the description>", "recipe": "<Markdown steps>"}'
+```
+
+A recipe says where each secret goes, but never holds a secret itself. Anyone can read it, unless the platform is private. Only an organisation can keep a private platform, as with workflows: add `"visibility": "private"` to the first push.
+
+Read the latest version at `GET /api/v1/platforms/<owner>/<platform>`, one version at `.../v/<n>`, and its files at `/platforms/<owner>/<platform>/v/<n>/description.yaml` and `.../recipe.md`.
+
+To find where a workflow can run:
+
+```sh
+curl -X POST http://localhost:3000/api/v1/fit \
+  -H "Authorization: Bearer <token>" -H "content-type: application/json" \
+  -d '{"workflow": "<owner>/<workflow>", "platforms": ["<owner>/<platform>"]}'
+```
+
+Leave out `platforms` to fit against every platform you can see: the public ones, and your organisations' private ones. Send `"security": "<YAML>"` in place of `workflow` to fit a security view that is not in the registry. For each platform, the answer says whether the workflow fits, and if not, every reason. A new registry has no platforms until someone pushes one.
+
 ## Use the awml command
 
 The `awml` command talks to awml.io unless you tell it otherwise. To use your own registry, set `AWML_REGISTRY_URL` to its address, or pass its address with `--registry`:
@@ -48,7 +74,7 @@ If the registry says the token is not valid, it was revoked or mistyped. Make a 
 
 Your registry is also an MCP server, at `/mcp` on its address. Below, `<registry>` is that address: the `BETTER_AUTH_URL` of your own registry, or `https://awml.io` for the official one. Every address the sign-in gives out comes from `BETTER_AUTH_URL` too.
 
-Connect your AI to it and it can check, read and publish workflows as you, with the tools `check`, `publish`, `get`, `list` and `search` (`docs/SPEC.md` says what each does). It runs on your account, and the registry sends nothing to a model.
+Connect your AI to it and it can check, read and publish workflows as you, with the tools `check`, `publish`, `get`, `list` and `search`. It can find and add platforms with `search_platforms`, `get_platform` and `add_platform`, and find where a workflow can run with `fit_workflow`. Then it can follow a platform's recipe to install the workflow there. `docs/SPEC.md` says what each tool does. It runs on your account, and the registry sends nothing to a model.
 
 Every request to `/mcp` needs you signed in, so your AI asks you to sign in when you connect it. Public workflows stay readable without an account on the website, through the API and with `awml pull`.
 
@@ -165,10 +191,13 @@ You need a Cloudflare account. Sign in to it with `npx wrangler login`, then:
 
 ## Where to change things
 
-- `vendor/awml/` holds the AWML Go package compiled to WebAssembly, which checks, summarises and draws each file, so the registry and the `awml` command line agree. `vendor/awml/VERSION` names the AWML commit. To move to a newer AWML, run `npm run engine:update -- /path/to/awml`; it needs Go, and rewrites the test fixtures with what the native `awml` prints so `npm test` compares the two.
-- `src/edition.ts` decides whether an organisation may push and keep private workflows, what the home page shows, and whether the sign-in page links to terms and a privacy policy. The default allows everything, shows the gallery at `/` and links to neither.
+- `vendor/awml/` holds the AWML Go package compiled to WebAssembly, which checks, summarises, draws and fits each file, so the registry and the `awml` command line agree. `vendor/awml/VERSION` names the AWML commit. To move to a newer AWML, run `npm run engine:update -- /path/to/awml`; it needs Go, and rewrites the test fixtures with what the native `awml` prints so `npm test` compares the two.
+- `src/edition.ts` decides whether an organisation may push and keep private workflows and platforms, what the home page shows, and whether the sign-in page links to terms and a privacy policy. The default allows everything, shows the gallery at `/` and links to neither.
 - `drizzle/` holds the database migrations. After changing `src/db/schema.ts`, run `npm run db:generate`.
+- `src/fonts/` holds Inter, the font AWML's drawings ask for, which the registry serves itself so drawings look the same in every browser.
 
 ## Licence
 
 The registry is under the [Functional Source License, Version 1.1, MIT Future License](LICENSE) (FSL-1.1-MIT). You may use, change and run it for any purpose except offering it to others as a competing commercial product or service. Each version becomes MIT two years after its release. AWML itself, its spec, command line and Go package, is MIT.
+
+The Inter font in `src/fonts/` is by The Inter Project Authors, under the SIL Open Font License 1.1, in `src/fonts/LICENSE.txt`.

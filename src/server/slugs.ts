@@ -6,7 +6,7 @@ import { organisation, user } from "@/db/schema";
 export const RESERVED_SLUGS = new Set([
   "api", "explore", "gallery", "settings", "login", "logout", "signup", "auth", "new", "admin",
   "pricing", "security", "docs", "about", "blog", "terms", "privacy", "help", "status",
-  "_next", "static", "assets", "mcp", "consent",
+  "_next", "static", "assets", "mcp", "consent", "platforms",
 ]);
 
 // Paths under an owner that no workflow may take.
@@ -29,6 +29,12 @@ export function workflowSlugProblem(slug: string): string | null {
   if (!isSlug(slug))
     return "A workflow's slug is 1 to 40 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.";
   if (RESERVED_WORKFLOW_SLUGS.has(slug)) return `"${slug}" is reserved.`;
+  return null;
+}
+
+export function platformSlugProblem(slug: string): string | null {
+  if (!isSlug(slug))
+    return "A platform's slug is 1 to 40 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.";
   return null;
 }
 

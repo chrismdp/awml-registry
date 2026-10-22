@@ -24,6 +24,18 @@
   --gutter: 32px;
 }
 
+/* Inter, which AWML's drawings ask for, served from the registry itself under
+   the SIL Open Font License (src/fonts/LICENSE.txt). The browser fetches it
+   only on a page that draws a workflow, where the Mermaid component loads it
+   before Mermaid measures the labels. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/Inter-Regular.woff2") format("woff2");
+}
+
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); line-height: 1.5; }
 a { color: var(--link); }

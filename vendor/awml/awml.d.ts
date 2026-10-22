@@ -3,6 +3,8 @@ export interface AWML {
   check(source: string): string[];
   summaryJSON(sources: string | string[]): string;
   summary(sources: string | string[]): unknown;
+  fitJSON(sources: string[]): string;
+  fit(sources: string[]): unknown;
   draw(source: string): string;
 }
 

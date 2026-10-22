@@ -27,6 +27,19 @@ export type Summary = {
   platformNames?: string[] | null;
 };
 
+// What `awml fit --json` gives: for each platform, whether the workflow fits
+// it, every reason it doesn't, and the companies each AI step may use there.
+// The gaps are what the workflow doesn't say that the fit needs; when there
+// are any, there are no results.
+export type FitResult = {
+  platform: string;
+  judged: boolean;
+  fits: boolean;
+  reasons: string[];
+  models: Record<string, string[]>;
+};
+export type FitReport = { results: FitResult[]; gaps: string[] };
+
 export interface Engine {
   // The messages `awml check` gives for one file; empty when it has no mistakes.
   check(yaml: string): Promise<string[]>;
@@ -34,4 +47,7 @@ export interface Engine {
   summarise(files: Files): Promise<Summary>;
   // Mermaid text for one file that passes check, drawn in the browser.
   draw(yaml: string): Promise<string>;
+  // Where a workflow can run: its security view judged against platform
+  // descriptions, each named by its own id. Every file must pass check.
+  fit(security: string, descriptions: string[]): Promise<FitReport>;
 }

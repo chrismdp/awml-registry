@@ -15,7 +15,9 @@ import * as z from "zod";
 import { getDb } from "@/db/client";
 import { getAuth } from "./auth";
 import { mcpUrl, ownUrl } from "./http";
+import { fitWorkflow, type Fit } from "./fit";
 import { organisationsOf } from "./organisations";
+import { pushPlatformVersion, readPlatformVersion, searchPlatforms } from "./platforms";
 import { checkWorkflow, explore, ownerPage, pushVersion, readVersion } from "./registry";
 import { userIdForSecret } from "./tokens";
 import { viewerFor, type Viewer } from "./viewer";
@@ -107,14 +109,43 @@ const listing = (rows: Listed[]) => {
   return answer(text, { workflows });
 };
 
+const platformUrl = (owner: string, slug: string, number?: number) =>
+  ownUrl(`/api/v1/platforms/${owner}/${slug}${number === undefined ? "" : `/v/${number}`}`);
+
+// The AI steps that may use the same companies, as `awml fit` says it:
+// "choose, draft and learn may use anthropic".
+function mayUse(models: Record<string, string[]>) {
+  const byCompanies = new Map<string, string[]>();
+  for (const [step, companies] of Object.entries(models)) {
+    const key = companies.join(" and ");
+    byCompanies.set(key, [...(byCompanies.get(key) ?? []), step]);
+  }
+  const list = (items: string[]) => (items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0]);
+  return [...byCompanies].map(([companies, steps]) => `${list(steps)} may use ${companies}`).join("; ");
+}
+
+function fitText(fit: Fit) {
+  if (fit.gaps.length) return ["The workflow doesn't say all the fit needs:", ...fit.gaps].join("\n");
+  const lines = fit.workflow ? [`${fit.workflow.owner}/${fit.workflow.slug} v${fit.workflow.number}:`] : [];
+  if (!fit.results.length) lines.push("No platforms to fit against.");
+  for (const r of fit.results) {
+    const where = `${r.platform} v${r.number}`;
+    if (r.fits) lines.push(`${where} fits${Object.keys(r.models).length ? `: ${mayUse(r.models)}` : ""}`);
+    else lines.push(`${where} doesn't fit: ${r.reasons.join("; ")}`);
+  }
+  return lines.join("\n");
+}
+
 function server(person: Person) {
   const s = new McpServer(
     { name: "awml-registry", version: "1.0.0" },
     {
       instructions:
-        "The AWML registry stores and draws AWML workflows. Use check to find mistakes in a workflow's YAML, " +
-        "publish to save a new version of owner/slug, get to read one, list for an owner's workflows and " +
-        "search for public ones. Every call acts as the signed-in person.",
+        "The AWML registry stores and draws AWML workflows, and the platforms they can run on. Use check to find " +
+        "mistakes in a workflow's YAML, publish to save a new version of owner/slug, get to read one, list for an " +
+        "owner's workflows and search for public ones. Use search_platforms and get_platform to find platforms and " +
+        "read their descriptions and install recipes, add_platform to save one, and fit_workflow to find where a " +
+        "workflow can run. Every call acts as the signed-in person.",
     },
   );
 
@@ -247,6 +278,118 @@ function server(person: Person) {
     async ({ query }) => {
       const found = await explore(await getDb(), query ?? "");
       return listing(found.map(({ owner, slug, title, updatedAt }) => ({ owner, slug, title, updatedAt })));
+    },
+  );
+
+  const platformSlug = z.string().describe("The platform's slug: lowercase letters, digits and single hyphens");
+
+  s.registerTool(
+    "search_platforms",
+    {
+      title: "Search platforms",
+      description:
+        "Search the platforms you may see by words in their label or slug, newest first: public platforms, and the private ones of organisations you belong to. With no query, gives them all.",
+      inputSchema: z.object({ query: z.string().optional().describe("Words in the label or slug") }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ query }) => {
+      const found = await searchPlatforms(await getDb(), person, query ?? "");
+      const platforms = found.map((p) => ({ ...p, updatedAt: p.updatedAt.toISOString() }));
+      const text = platforms.length
+        ? platforms.map((p) => `${p.owner}/${p.slug} (${p.visibility}): ${p.label}`).join("\n")
+        : "No platforms.";
+      return answer(text, { platforms });
+    },
+  );
+
+  s.registerTool(
+    "get_platform",
+    {
+      title: "Read a platform",
+      description:
+        "Read a platform's description (AWML's platform description, as YAML) and its install recipe (Markdown steps an agent follows to install a workflow there), the latest version or the version given.",
+      inputSchema: z.object({
+        owner,
+        slug: platformSlug,
+        version: z.number().int().positive().optional().describe("A version number. Default: the latest."),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ owner, slug, version }) => {
+      const db = await getDb();
+      const p = await readPlatformVersion(db, person, owner, slug, version ?? "latest");
+      if (!p) return NOT_FOUND;
+      const versions = p.versions.map((x) => x.number);
+      const text = [
+        `${p.label}: platform ${p.owner}/${p.slug}, version ${p.number} of ${versions[0]}, ${p.visibility}.`,
+        `description.yaml:\n${p.description}`,
+        p.recipe === null ? "No install recipe." : `recipe.md:\n${p.recipe}`,
+      ].join("\n\n");
+      return answer(text, {
+        owner: p.owner,
+        slug: p.slug,
+        label: p.label,
+        visibility: p.visibility,
+        number: p.number,
+        versions,
+        url: platformUrl(p.owner, p.slug, version === undefined ? undefined : p.number),
+        pushedAt: p.pushedAt.toISOString(),
+        pushedBy: p.pushedBy,
+        description: p.description,
+        recipe: p.recipe,
+      });
+    },
+  );
+
+  s.registerTool(
+    "add_platform",
+    {
+      title: "Add a platform",
+      description:
+        "Save a new version of the platform owner/slug from its description, and its install recipe if it has one. The description is checked first and refused if it has mistakes. A recipe says what to create, where each secret goes, how to schedule the triggers and how to check the workflow runs; it must never hold a secret itself. The owner is your own username or an organisation you belong to. The first version sets whether the platform is public or private, and only an organisation can keep a private one.",
+      inputSchema: z.object({
+        owner,
+        slug: platformSlug,
+        description: z.string().describe("The platform description, as YAML: awml, platform, off_for_up_to, steps, agents, calls, holds"),
+        recipe: z.string().optional().describe("The install recipe, as Markdown. Never a secret."),
+        visibility: z
+          .enum(["public", "private"])
+          .optional()
+          .describe("Only for the first version. Default public. Private needs an organisation."),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ owner, slug, description, recipe, visibility }) => {
+      const db = await getDb();
+      const pushed = await pushPlatformVersion(db, person, owner, slug, { description, recipe, visibility });
+      if (!pushed.ok) return refused(pushed.errors);
+      const url = platformUrl(pushed.owner, pushed.slug, pushed.number);
+      return answer(`Saved version ${pushed.number} of the platform ${pushed.owner}/${pushed.slug}: ${url}`, {
+        owner: pushed.owner,
+        slug: pushed.slug,
+        number: pushed.number,
+        url,
+      });
+    },
+  );
+
+  s.registerTool(
+    "fit_workflow",
+    {
+      title: "Find where a workflow can run",
+      description:
+        "Judge a workflow's security view against platforms with the AWML engine, as `awml fit` does: for each platform, whether the workflow fits, every reason it doesn't, and the companies each AI step may use there. Name the workflow as owner/slug or owner/slug@version, or send its security view as YAML. Name the platforms as owner/slug or owner/slug@version, or leave them out to fit against every platform you may see. When the workflow doesn't say all the fit needs, gives the gaps instead.",
+      inputSchema: z.object({
+        workflow: z.string().optional().describe("owner/slug or owner/slug@version"),
+        security: z.string().optional().describe("The security view, as YAML, in place of a workflow"),
+        platforms: z.array(z.string()).optional().describe("Platforms as owner/slug or owner/slug@version. Default: every one you may see."),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ workflow, security, platforms }) => {
+      const fitted = await fitWorkflow(await getDb(), person, { workflow, security, platforms });
+      if (!fitted.ok) return refused(fitted.errors);
+      return answer(fitText(fitted.fit), fitted.fit);
     },
   );
 
