@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pickSender, smtpOptions, type EmailBinding, type MailTransport } from "@/server/email";
 
-const url = "https://awml.io/api/auth/magic-link/verify?token=abc&callbackURL=%2Fsettings";
+const url = "https://registry.example.com/api/auth/magic-link/verify?token=abc&callbackURL=%2Fsettings";
+const MAIL_FROM = "Registry <login@registry.example.com>";
 
 function fakeBinding() {
   const sent: unknown[] = [];
@@ -34,14 +35,14 @@ describe("choosing how sign-in links are sent", () => {
   it("uses Cloudflare's EMAIL binding when it is there, even with SMTP set", () => {
     const { binding } = fakeBinding();
     const smtp = fakeSmtp();
-    const chosen = pickSender({ binding, env: { SMTP_URL: "smtp://x" }, createTransport: smtp.createTransport });
+    const chosen = pickSender({ binding, env: { MAIL_FROM, SMTP_URL: "smtp://x" }, createTransport: smtp.createTransport });
     expect(chosen.kind).toBe("cloudflare");
     expect(smtp.made).toEqual([]);
   });
 
   it("uses SMTP when SMTP_URL is set", () => {
     const smtp = fakeSmtp();
-    const chosen = pickSender({ env: { SMTP_URL: "smtps://u:p@mail.example.com" }, createTransport: smtp.createTransport });
+    const chosen = pickSender({ env: { MAIL_FROM, SMTP_URL: "smtps://u:p@mail.example.com" }, createTransport: smtp.createTransport });
     expect(chosen.kind).toBe("smtp");
     expect(smtp.made).toEqual(["smtps://u:p@mail.example.com"]);
   });
@@ -49,7 +50,7 @@ describe("choosing how sign-in links are sent", () => {
   it("uses SMTP when SMTP_HOST is set, with its port, user and password", () => {
     const smtp = fakeSmtp();
     const chosen = pickSender({
-      env: { SMTP_HOST: "mail.example.com", SMTP_PORT: "465", SMTP_USER: "u", SMTP_PASS: "p" },
+      env: { MAIL_FROM, SMTP_HOST: "mail.example.com", SMTP_PORT: "465", SMTP_USER: "u", SMTP_PASS: "p" },
       createTransport: smtp.createTransport,
     });
     expect(chosen.kind).toBe("smtp");
@@ -94,10 +95,23 @@ describe("the sign-in email", () => {
     expect(message.html).not.toContain("&callbackURL");
   });
 
-  it("comes from AWML <login@awml.io> unless MAIL_FROM says otherwise", async () => {
+  it("is not sent without MAIL_FROM: the link goes to the log, which says MAIL_FROM is missing", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const { binding, sent } = fakeBinding();
-    await pickSender({ binding, env: {} }).sender.sendMagicLink("ana@example.com", url);
-    expect((sent[0] as { from: unknown }).from).toEqual({ email: "login@awml.io", name: "AWML" });
+    const smtp = fakeSmtp();
+    for (const config of [
+      { binding, env: {} },
+      { env: { SMTP_URL: "smtp://mail.example.com" }, createTransport: smtp.createTransport },
+    ]) {
+      const chosen = pickSender(config);
+      expect(chosen.kind).toBe("console");
+      expect(chosen.problem).toContain("MAIL_FROM is not set");
+      await chosen.sender.sendMagicLink("ana@example.com", url);
+    }
+    expect(sent).toEqual([]);
+    expect(smtp.sent).toEqual([]);
+    expect(log.mock.calls.join(" ")).toContain(url);
   });
 
   it("goes through SMTP from MAIL_FROM, as text and HTML", async () => {

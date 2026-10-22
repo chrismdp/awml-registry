@@ -9,7 +9,7 @@ services:
       BETTER_AUTH_URL: http://localhost:3000
       # At least 32 random characters: openssl rand -base64 32
       BETTER_AUTH_SECRET: change-me
-      # Email for sign-in links. Without SMTP, the links are only printed to the log.
+      # Email for sign-in links. Without MAIL_FROM and SMTP, the links are only printed to the log.
       # MAIL_FROM: "Registry <login@example.com>"
       # SMTP_URL: smtps://user:password@mail.example.com
       # Optional sign-in providers.

@@ -1,6 +1,6 @@
 // Sign-in links go out through one small interface. pickSender chooses how:
-// Cloudflare's EMAIL binding on the hosted Worker, SMTP for a self-hosted
-// registry, or, with neither set up, the server's log.
+// Cloudflare's EMAIL binding on a Worker, SMTP on a server, or, with neither
+// set up or no MAIL_FROM to send them from, the server's log.
 import { mailPlatform } from "@/server/mail-platform";
 
 export interface EmailSender {
@@ -30,8 +30,6 @@ export type MailEnv = Partial<
 export type SmtpOptions =
   | string
   | { host: string; port: number; secure: boolean; auth?: { user: string; pass: string } };
-
-const DEFAULT_FROM = "AWML <login@awml.io>";
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -67,7 +65,7 @@ export const consoleSender: EmailSender = {
   async sendMagicLink(to, url) {
     console.warn(
       "[awml] EMAIL IS NOT SET UP: this sign-in link was NOT SENT, only printed here. " +
-        "Set SMTP_URL (or SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) and MAIL_FROM, or bind EMAIL on Cloudflare.",
+        "Set MAIL_FROM, and SMTP_URL (or SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) or Cloudflare's EMAIL binding.",
     );
     console.log(`[awml] sign-in link for ${to}: ${url}`);
   },
@@ -77,8 +75,16 @@ export function pickSender(config: {
   binding?: EmailBinding;
   env: MailEnv;
   createTransport?: (options: SmtpOptions) => MailTransport;
-}): { kind: "cloudflare" | "smtp" | "console"; sender: EmailSender } {
-  const from = config.env.MAIL_FROM || DEFAULT_FROM;
+}): { kind: "cloudflare" | "smtp" | "console"; sender: EmailSender; problem?: string } {
+  const from = config.env.MAIL_FROM;
+  const options = smtpOptions(config.env);
+  if (!from) {
+    const problem =
+      config.binding || (options && config.createTransport)
+        ? "[awml] MAIL_FROM is not set, so sign-in links are printed to this log, not sent. Set MAIL_FROM to who they come from, such as Registry <login@registry.example.com>."
+        : undefined;
+    return { kind: "console", sender: consoleSender, problem };
+  }
   if (config.binding) {
     const binding = config.binding;
     return {
@@ -90,7 +96,6 @@ export function pickSender(config: {
       },
     };
   }
-  const options = smtpOptions(config.env);
   if (options && config.createTransport) {
     const transport = config.createTransport(options);
     return {
@@ -114,7 +119,7 @@ export async function getEmailSender(): Promise<EmailSender> {
   if (!chosen) {
     const picked = pickSender(await mailPlatform());
     if (picked.kind === "console")
-      console.warn("[awml] EMAIL IS NOT SET UP: sign-in links will be printed to this log, not sent.");
+      console.warn(picked.problem ?? "[awml] EMAIL IS NOT SET UP: sign-in links will be printed to this log, not sent.");
     chosen = picked.sender;
   }
   return chosen;

@@ -76,11 +76,11 @@ On a registry of your own, use its address in place of `https://awml.io`. Every 
 | `DATABASE_PATH` | The SQLite file. Default: `data/registry.db` |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | Optional. Sign-in with GitHub; the callback is `<BETTER_AUTH_URL>/api/auth/callback/github` |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional. Sign-in with Google; the callback is `<BETTER_AUTH_URL>/api/auth/callback/google` |
-| `MAIL_FROM` | Who sign-in emails come from, such as `Registry <login@example.com>`. Default: `AWML <login@awml.io>` |
+| `MAIL_FROM` | Who sign-in emails come from, such as `Registry <login@example.com>`. Without it, no sign-in email is sent |
 | `SMTP_URL` | An SMTP server to send sign-in emails through, such as `smtps://user:password@mail.example.com` |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | The same as `SMTP_URL`, in parts. The port defaults to 587; port 465 uses TLS from the start |
 
-Sign-in by email link always works. With `SMTP_URL` or `SMTP_HOST` set, the links are emailed. With neither, they are only written to the server's log, and the log says so each time.
+Sign-in by email link always works. With `MAIL_FROM` and either `SMTP_URL` or `SMTP_HOST` set, the links are emailed. Without them, they are only written to the server's log, and the log says so each time, naming `MAIL_FROM` when that is what is missing.
 
 ## Host it yourself
 

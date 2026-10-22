@@ -2,7 +2,7 @@
 
 The AWML Registry stores, versions and draws AWML workflow files. Public workflows are free, and a private store for an organisation is paid on the hosted service. The code in this repo is source-available under FSL-1.1-MIT: a company may run it internally, but nobody may offer it as a competing service.
 
-The source of truth for the decisions is the Claude Doc "AWML Registry spec" (https://claude.ai/artifact/BawGPKnfGE2kotu8TCm1Ht). This file is the build copy, revised on 2026-10-21 after Chris's comments on it. AWML itself (spec, CLI, Go package) is MIT at github.com/chrismdp/awml; read its `SPEC.md` for what a workflow file is.
+This file records what the registry does and the decisions behind it. AWML itself (spec, CLI, Go package) is MIT at github.com/chrismdp/awml; read its `SPEC.md` for what a workflow file is.
 
 ## Decisions
 
@@ -25,7 +25,7 @@ The source of truth for the decisions is the Claude Doc "AWML Registry spec" (ht
 - **A page per version.** Both views drawn (Mermaid, drawn in the browser from the text the AWML package produces), the check result, and the summary worked out from the files at push.
 - **A public gallery.** Anyone can browse public workflows and search them by title. Anyone signed in can publish one, free.
 - **Private workflows for an organisation.** Only its members can see them. In this repo's default edition every organisation may keep private workflows; the hosted edition limits that to paying organisations.
-- **An inventory for each organisation.** Every workflow in one table with its summary counts, plus totals across them all. This is the page a CIO or COO buys.
+- **An inventory for each organisation.** Every workflow in one table with its summary counts, plus totals across them all.
 - **An audit log for each organisation.** Who pushed, who viewed a private workflow, who joined or left. Owners can read it; nobody can change it.
 
 ## Data
@@ -142,4 +142,4 @@ Every address the sign-in metadata gives comes from `BETTER_AUTH_URL`, so a self
 
 ## Not in v1
 
-Comments and diffs between versions; live records and red lines sent in from running systems; SAML and Microsoft sign-in; teams inside an organisation; forks and stars; any AI feature of the registry's own; billing (hosted repo); the marketing pages (hosted repo, built with Chris). The MCP server came after v1 (above).
+Comments and diffs between versions; live records and red lines sent in from running systems; SAML and Microsoft sign-in; teams inside an organisation; forks and stars; any AI feature of the registry's own; billing (hosted repo); the marketing pages (hosted repo). The MCP server came after v1 (above).

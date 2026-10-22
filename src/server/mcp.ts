@@ -93,7 +93,7 @@ const page = (owner: string, slug: string) => ownUrl(`/${owner}/${slug}`);
 
 const yamlFile = (view: string) =>
   z.string().optional().describe(`The ${view} file (view: ${view}), as YAML text. Send this file, the other or both.`);
-const owner = z.string().describe("A username or an organisation's slug, as in awml.io/owner/slug");
+const owner = z.string().describe("A username or an organisation's slug, as in <registry>/owner/slug");
 const slug = z.string().describe("The workflow's slug: lowercase letters, digits and single hyphens");
 
 type Listed = { owner: string; slug: string; title: string; visibility?: string; updatedAt: Date };
