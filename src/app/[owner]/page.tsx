@@ -20,12 +20,16 @@ export default async function OwnerPage({ params }: { params: Promise<{ owner: s
         {owner.slug}
         {isOrg ? " · organisation" : ""}
       </p>
-      {isOrg && member && (
-        <nav>
-          <Link href={`/${owner.slug}/inventory`}>Inventory</Link> ·{" "}
-          <Link href={`/${owner.slug}/settings`}>Members and audit log</Link>
-        </nav>
-      )}
+      <nav>
+        <Link href={`/${owner.slug}/platforms`}>Platforms</Link>
+        {isOrg && member && (
+          <>
+            {" · "}
+            <Link href={`/${owner.slug}/inventory`}>Inventory</Link> ·{" "}
+            <Link href={`/${owner.slug}/settings`}>Members and audit log</Link>
+          </>
+        )}
+      </nav>
       <h2>Workflows</h2>
       {workflows.length === 0 ? (
         <p>No workflows yet.</p>

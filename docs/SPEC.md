@@ -52,7 +52,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 | Previous name | A username a person gave up, who gave it up and when. One row per name, the last person to give it up |
 | OAuth clients, consents, access and refresh tokens, resources; JWKS | Better Auth's MCP plugin and JWT plugin keep these for AI clients signing in to `/mcp` |
 
-User slugs and organisation slugs share one namespace. Reserved slugs that no user or organisation may take: `api`, `explore`, `gallery`, `settings`, `login`, `logout`, `signup`, `auth`, `new`, `admin`, `pricing`, `security`, `docs`, `about`, `blog`, `terms`, `privacy`, `help`, `status`, `_next`, `static`, `assets`, `mcp`, `consent`, `platforms`.
+User slugs and organisation slugs share one namespace. Reserved slugs that no user or organisation may take: `api`, `explore`, `gallery`, `settings`, `login`, `logout`, `signup`, `auth`, `new`, `admin`, `pricing`, `security`, `docs`, `about`, `blog`, `terms`, `privacy`, `help`, `status`, `_next`, `static`, `assets`, `mcp`, `consent`, `platforms`. A workflow may not take the slugs of an owner's own pages: `inventory`, `settings` and `platforms`.
 
 Platforms have a namespace of their own, under `/platforms` and `/api/v1/platforms`, so one owner may have a workflow and a platform with the same slug.
 
@@ -68,6 +68,7 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `/{owner}/{slug}/v/{n}` | One version, the same way |
 | `/{owner}/{slug}/v/{n}/{view}.yaml` | One file as YAML |
 | `/{org}/inventory` | The organisation's inventory, for members |
+| `/{owner}/platforms` | A user's or organisation's platforms, each with its label, latest version and links to its files: the public ones to everyone, the private ones to members too. With none, what a platform description is and, to those who may add one there, how. Linked from `/{owner}` and the inventory |
 | `/{org}/settings` | Members and the audit log, for owners (the hosted edition adds billing) |
 | `/settings` | Signing out, the username with Save, the AI apps connected to `/mcp` with a Disconnect for each, and the person's organisations |
 | `/settings/tokens` | Make and revoke API tokens |
@@ -77,6 +78,7 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `POST /api/v1/platforms/{owner}/{slug}/versions` | Push a platform version. Body JSON `{"description": "<yaml>", "recipe": "<markdown>"?, "visibility": "public"\|"private"?}`. The first push makes the platform and sets its visibility (default public). Returns 201 with `{owner, slug, number, url}`, or 422 with `{errors: [...]}` |
 | `GET /api/v1/platforms/{owner}/{slug}` | The platform's latest version: label, visibility, number, who pushed it and when, `description`, `recipe` (or null), and the list of versions |
 | `GET /api/v1/platforms/{owner}/{slug}/v/{n}` | One platform version, the same way, without the list |
+| `/platforms` | The shared platforms: every platform the viewer may see, newest first, searched by label or slug. Linked from an owner's platforms page when it has none |
 | `/platforms/{owner}/{slug}/v/{n}/description.yaml` | A platform version's description as YAML |
 | `/platforms/{owner}/{slug}/v/{n}/recipe.md` | A platform version's install recipe as Markdown; 404 when it has none |
 | `POST /api/v1/fit` | Where a workflow can run (see "Platforms and the fit") |
@@ -141,6 +143,8 @@ Added on 2026-10-22. A person's username starts as the part of their email addre
 | Negative | A taken, reserved or badly formed name is refused with a clear message on all three, and nothing changes; nobody can change another person's username, whatever the request names; a signed-out request gets a 401, and Settings sends them to sign in; a revoked or made-up token gets a 401 from the API and `/mcp` |
 | Cross-tenant | Renaming moves only the person's own pages, never another person's or an organisation's; an old name now held by an organisation never redirects, and its private workflow is the same 404 to the name's former holder and to a stranger; a redirect sends a stranger to the new address, where a private workflow is still a 404 |
 | Redirect lifecycle | The old name redirects with a 308 from pages, files and the API, keeping the query; after two renames both old names lead to the current one; the redirect stops once a person, someone signing up or an organisation takes the old name |
+
+The platform pages, `/{owner}/platforms` and `/platforms`, list a private platform to its organisation's members only, and their tests are under "Private platforms on the platform pages" in `test/platform-pages.test.tsx`: a member sees their organisation's private platforms on both pages; a non-member and a signed-out visitor never see one listed, its files are not found, and an organisation whose platforms are all private looks the same as one with none; a member of one organisation never sees another's private platforms. Listing records nothing in the audit log; opening a private platform's file records the view.
 
 ## The edition hook
 
@@ -234,7 +238,9 @@ The registry gives the engine one platform at a time, so no platform's descripti
 
 This repo seeds no platforms. AWML's example platforms are in `test/fixtures/platforms`, copied by `npm run engine:update` with what the native `awml fit --json` says of them, so the tests compare the registry's fit with the CLI's.
 
-Not yet: judging a placement drawn in a platform view whose blocks name their descriptions; pages for platforms and for where a workflow can run; pulling platforms with `awml pull`.
+**Pages.** `/{owner}/platforms` lists an owner's platforms, and `/platforms` the shared ones (see "Pages, API and CLI"). An owner with no platforms gets a page that says what a platform description is, field by field, and that `awml fit` checks workflows against it; to those who may add one there, it also gives the registry's MCP address with a request to ask their own AI (add a platform, then fit a workflow against it), the API command that pushes the file, and that each change is a new version and the fit uses the latest. Under a list, members get the same help in short. Added on 2026-10-22.
+
+Not yet: judging a placement drawn in a platform view whose blocks name their descriptions; a page for where a workflow can run; pulling platforms with `awml pull`.
 
 ## Not in v1
 

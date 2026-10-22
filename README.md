@@ -48,6 +48,8 @@ A recipe says where each secret goes, but never holds a secret itself. Anyone ca
 
 Read the latest version at `GET /api/v1/platforms/<owner>/<platform>`, one version at `.../v/<n>`, and its files at `/platforms/<owner>/<platform>/v/<n>/description.yaml` and `.../recipe.md`.
 
+On the site, `/<owner>/platforms` lists an owner's platforms with links to their files, and `/platforms` lists and searches every platform you can see.
+
 To find where a workflow can run:
 
 ```sh

@@ -53,6 +53,16 @@ tester.run("access-checked", rule, {
       code: `const saved = await setUsername(await getDb(), viewer.id, body.username);`,
     },
     {
+      name: "an owner's platforms page reads through ownerPlatforms",
+      filename: at("[owner]/platforms/page.tsx"),
+      code: `const { db, viewer } = await pageContext(); const found = await ownerPlatforms(db, viewer, owner);`,
+    },
+    {
+      name: "the shared platforms page reads through visiblePlatforms",
+      filename: at("platforms/page.tsx"),
+      code: `const { db, viewer } = await pageContext(); const rows = await visiblePlatforms(db, viewer, q);`,
+    },
+    {
       name: "a route that is not owner-scoped reads the public gallery",
       filename: at("gallery/page.tsx"),
       code: `const { db } = await pageContext(); const rows = await explore(db, q);`,

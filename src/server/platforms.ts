@@ -224,6 +224,8 @@ const ownerSlugSql = sql<string>`coalesce(
 
 const isLatest = sql`${platformVersion.number} = (select max(v2.number) from platform_version v2 where v2.platform_id = ${platformVersion.platformId})`;
 
+const hasRecipe = sql<number>`${platformVersion.recipe} is not null`;
+
 // Every platform the viewer may see, newest first, with its latest version:
 // the public ones, and the private ones of the organisations they belong to.
 // With a query, only those whose label or slug has it.
@@ -247,6 +249,7 @@ export async function visiblePlatforms(db: Db, viewer: Viewer, query = "") {
       updatedAt: platform.updatedAt,
       number: platformVersion.number,
       description: platformVersion.description,
+      hasRecipe,
     })
     .from(platform)
     .innerJoin(platformVersion, and(eq(platformVersion.platformId, platform.id), isLatest))
@@ -264,4 +267,26 @@ export async function visiblePlatforms(db: Db, viewer: Viewer, query = "") {
 export async function searchPlatforms(db: Db, viewer: Viewer, query = "") {
   const rows = await visiblePlatforms(db, viewer, query);
   return rows.map(({ owner, slug, label, visibility, updatedAt }) => ({ owner, slug, label, visibility, updatedAt }));
+}
+
+// An owner's platforms with their latest version, by slug: the public ones to
+// everyone, the private ones to members too, as an owner's page lists its
+// workflows. The list records nothing; opening a private platform's file does.
+export async function ownerPlatforms(db: Db, viewer: Viewer, ownerSlug: string) {
+  const owner = await findOwner(db, ownerSlug);
+  if (!owner) return null;
+  const member = await isOwnerOrMember(db, owner, viewer?.id);
+  const rows = await db
+    .select({
+      slug: platform.slug,
+      label: platform.label,
+      visibility: platform.visibility,
+      number: platformVersion.number,
+      hasRecipe,
+    })
+    .from(platform)
+    .innerJoin(platformVersion, and(eq(platformVersion.platformId, platform.id), isLatest))
+    .where(and(ownerColumn(owner), member ? undefined : eq(platform.visibility, "public")))
+    .orderBy(platform.slug);
+  return { owner, member, platforms: rows.map((p) => ({ ...p, owner: owner.slug, hasRecipe: Boolean(p.hasRecipe) })) };
 }

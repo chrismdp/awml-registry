@@ -4,6 +4,8 @@
 // anything else. Those functions call isOwnerOrMember (src/server/owners.ts)
 // or organisationToManage (src/server/organisations.ts), which is what makes a
 // private workflow or platform a 404 to anyone outside its organisation.
+// visiblePlatforms, which lists platforms across owners, keeps to the public
+// ones and those of the viewer's own organisations in its query.
 
 // The checked ways in, by file: src/server/registry.ts, src/server/platforms.ts,
 // src/server/fit.ts and src/server/organisations.ts.
@@ -15,6 +17,8 @@ export const ENTRY_POINTS = [
   "inventory",
   "readPlatformVersion",
   "pushPlatformVersion",
+  "ownerPlatforms",
+  "visiblePlatforms",
   "fitWorkflow",
   "organisationToManage",
   "addMember",

@@ -245,7 +245,7 @@ describe("an organisation's inventory", () => {
     const page = await renderPage(InventoryPage, { owner: "acme" }, { as: { cookie: olive.cookie } });
     expect(page.status).toBe(200);
     const shown = text(page.html);
-    expect(shown).toContain("Workflows Inventory Members Audit log");
+    expect(shown).toContain("Workflows Inventory Platforms Members Audit log");
     expect(shown).toContain("acme's AI workflows");
     expect(shown).toContain("Where AI is, where people are, what it can see and where it runs.");
     expect(shown).toContain("1 of 2 use AI somewhere");
@@ -345,12 +345,13 @@ describe("names", () => {
 
   it("refuses a workflow slug the organisation's own pages use", async () => {
     const ana = await person("ana");
-    for (const slug of ["inventory", "settings"]) {
+    for (const slug of ["inventory", "settings", "platforms"]) {
       const res = await request("POST", `/api/v1/${ana.username}/${slug}/versions`, {
         as: { token: ana.token },
         json: { security },
       });
       expect(res.status).toBe(422);
+      expect((await res.json()).errors).toEqual([`"${slug}" is reserved.`]);
     }
   });
 });

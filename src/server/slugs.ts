@@ -10,7 +10,7 @@ export const RESERVED_SLUGS = new Set([
 ]);
 
 // Paths under an owner that no workflow may take.
-export const RESERVED_WORKFLOW_SLUGS = new Set(["inventory", "settings"]);
+export const RESERVED_WORKFLOW_SLUGS = new Set(["inventory", "settings", "platforms"]);
 
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 
