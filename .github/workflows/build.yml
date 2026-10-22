@@ -16,13 +16,13 @@
 # starts the conflict rebase workflow and CI on main, because a merge by the Actions token starts no
 # other workflow.
 #
-# Another workflow can start a build too, by dispatching this one with the issue's number. A build
-# that fails its checks, or whose draft fails or runs out of time, starts itself again by dispatch,
-# up to three tries in all. Each try after the first brings in the last try's result, with the end
-# of the failing check's output, so Claude fixes what failed rather than starting over. After the
-# third try it comments on the issue with the reason instead. A draft in which Claude changed
-# nothing isn't tried again: it comments with Claude's message. The retry job only reads results
-# and calls the GitHub API, and runs nothing from the change.
+# Another workflow can start a build too, by dispatching this one with the issue's number, as CI
+# does when main fails. A build that fails its checks, or whose draft fails or runs out of time,
+# starts itself again by dispatch, up to three tries in all. Each try after the first brings in the
+# last try's result, with the end of the failing check's output, so Claude fixes what failed rather
+# than starting over. After the third try it comments on the issue with the reason instead. A draft
+# in which Claude changed nothing isn't tried again: it comments with Claude's message. The retry
+# job only reads results and calls the GitHub API, and runs nothing from the change.
 #
 # It needs a CLAUDE_CODE_OAUTH_TOKEN secret, made with `claude setup-token`, so the runs come out
 # of the maintainer's subscription rather than a metered API key. The `build` label must exist in
