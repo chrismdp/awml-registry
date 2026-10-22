@@ -82,6 +82,8 @@ export const underOwner = (slug: string, n: string | number, view?: string) =>
 export type PlatformTab = "offers" | "recipe" | "yaml";
 
 // The address of a platform's page: its latest version or version `n`, and
-// one tab, or none for what it offers. Each part is kept inside its own segment.
+// one tab, or none for what it offers. Each part is kept inside its own
+// segment. The address reads as the reference AWML gives a platform,
+// `owner/platforms/slug`.
 export const platformPath = (owner: string, slug: string, n: string | number, tab: PlatformTab = "offers") =>
-  `/platforms/${encodeURIComponent(owner)}${underOwner(slug, n, tab === "offers" ? undefined : tab)}`;
+  `/${encodeURIComponent(owner)}/platforms${underOwner(slug, n, tab === "offers" ? undefined : tab)}`;

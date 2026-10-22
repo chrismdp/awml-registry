@@ -1,7 +1,6 @@
-import { PlatformView } from "@/components/PlatformView";
-import { loadPlatform } from "../../../load";
+import { movedPlatform } from "../../../load";
 
-export default async function PlatformVersionYamlPage({ params }: { params: Promise<{ owner: string; slug: string; n: string }> }) {
+export default async function OldPlatformVersionYamlPage({ params }: { params: Promise<{ owner: string; slug: string; n: string }> }) {
   const { owner, slug, n } = await params;
-  return <PlatformView {...await loadPlatform(owner, slug, n, "yaml")} />;
+  return movedPlatform(owner, slug, n, "yaml");
 }

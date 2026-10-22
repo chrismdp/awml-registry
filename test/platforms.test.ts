@@ -20,7 +20,7 @@ function pushPlatform(owner: string, slug: string, as: Who, body: Record<string,
 }
 
 describe("pushing a platform through the API", () => {
-  it("makes the platform on the first push and returns 201 with where its version lives", async () => {
+  it("makes the platform on the first push and returns 201 with its version's page", async () => {
     const ana = await person("ana");
     const res = await pushPlatform(ana.username, "worker", { token: ana.token }, { description: worker, recipe });
     expect(res.status).toBe(201);
@@ -28,7 +28,7 @@ describe("pushing a platform through the API", () => {
       owner: ana.username,
       slug: "worker",
       number: 1,
-      url: `http://localhost:3000/api/v1/platforms/${ana.username}/worker/v/1`,
+      url: `http://localhost:3000/${ana.username}/platforms/worker/v/1`,
     });
   });
 
@@ -158,20 +158,20 @@ describe("reading a platform through the API", () => {
     const ana = await person("ana");
     await pushPlatform(ana.username, "box", { token: ana.token }, { description: worker, recipe });
     await pushPlatform(ana.username, "box", { token: ana.token }, { description: worker });
-    const yaml = await request("GET", `/platforms/${ana.username}/box/v/1/description.yaml`);
+    const yaml = await request("GET", `/${ana.username}/platforms/box/v/1/description.yaml`);
     expect([yaml.status, yaml.headers.get("content-type"), await yaml.text()]).toEqual([
       200,
       "application/yaml; charset=utf-8",
       worker,
     ]);
-    const md = await request("GET", `/platforms/${ana.username}/box/v/1/recipe.md`);
+    const md = await request("GET", `/${ana.username}/platforms/box/v/1/recipe.md`);
     expect([md.status, md.headers.get("content-type"), await md.text()]).toEqual([
       200,
       "text/markdown; charset=utf-8",
       recipe,
     ]);
-    expect((await request("GET", `/platforms/${ana.username}/box/v/2/recipe.md`)).status).toBe(404);
-    expect((await request("GET", `/platforms/${ana.username}/box/v/1/other.yaml`)).status).toBe(404);
+    expect((await request("GET", `/${ana.username}/platforms/box/v/2/recipe.md`)).status).toBe(404);
+    expect((await request("GET", `/${ana.username}/platforms/box/v/1/other.yaml`)).status).toBe(404);
   });
 });
 

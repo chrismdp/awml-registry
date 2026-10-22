@@ -137,7 +137,7 @@ const listing = (rows: Listed[]) => {
 };
 
 const platformPage = (owner: string, slug: string, number?: number) =>
-  ownUrl(`/platforms/${owner}/${slug}${number === undefined ? "" : `/v/${number}`}`);
+  ownUrl(`/${owner}/platforms/${slug}${number === undefined ? "" : `/v/${number}`}`);
 
 // The AI steps that may use the same companies, as `awml fit` says it:
 // "choose, draft and learn may use anthropic".

@@ -417,7 +417,7 @@ describe("the old address", () => {
       "/api/v1/ana/dinners/v/1?view=security",
       "/api/v1/platforms/ana/worker",
       "/api/v1/platforms/ana/worker/v/1",
-      "/platforms/ana/worker/v/1/description.yaml",
+      "/ana/platforms/worker/v/1/description.yaml",
     ]) {
       const res = await request("GET", path);
       expect([res.status, res.headers.get("location")], path).toEqual([308, BASE + path.replace("/ana/", "/ana-cooks/")]);
@@ -510,7 +510,7 @@ describe("old names on /mcp", () => {
       expect(platformRead.data).toMatchObject({
         owner: "ana-cooks",
         slug: "worker",
-        url: `${BASE}/platforms/ana-cooks/worker`,
+        url: `${BASE}/ana-cooks/platforms/worker`,
       });
       expect(platformRead.text).toContain("platform ana-cooks/worker, version 1 of 1");
       const fitted = await call("fit_workflow", { workflow: "ana/dinners", platforms: ["ana/worker@1"] }, who.token);
@@ -531,7 +531,7 @@ describe("old names on /mcp", () => {
       owner: "ana-cooks",
       slug: "worker",
       number: 2,
-      url: `${BASE}/platforms/ana-cooks/worker`,
+      url: `${BASE}/ana-cooks/platforms/worker`,
     });
     // Someone else's write to the old name is refused as at the current name.
     for (const [tool, args] of [

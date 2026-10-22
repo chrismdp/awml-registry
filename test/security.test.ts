@@ -17,7 +17,7 @@ import OwnerPage from "@/app/[owner]/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import OrgSettingsPage from "@/app/[owner]/settings/page";
 import GalleryPage from "@/app/gallery/page";
-import { example, orgWith, person, request, withEdition, type Who } from "./helpers";
+import { BASE, example, orgWith, person, request, withEdition, type Who } from "./helpers";
 import { renderPage, type Page } from "./pages";
 
 const workflow = example("dinners.yaml");
@@ -459,8 +459,8 @@ async function platformReads(owner: string, slug: string, as: Who) {
   return {
     api: await status(`/api/v1/platforms/${owner}/${slug}`),
     versionApi: await status(`/api/v1/platforms/${owner}/${slug}/v/1`),
-    description: await status(`/platforms/${owner}/${slug}/v/1/description.yaml`),
-    recipe: await status(`/platforms/${owner}/${slug}/v/1/recipe.md`),
+    description: await status(`/${owner}/platforms/${slug}/v/1/description.yaml`),
+    recipe: await status(`/${owner}/platforms/${slug}/v/1/recipe.md`),
   };
 }
 
@@ -512,13 +512,30 @@ describe("Private platforms", () => {
       for (const as of [{ token: nell.token }, undefined]) {
         for (const [hidden, missing] of [
           ["/api/v1/platforms/acme/back-office", "/api/v1/platforms/acme/nothing-here"],
-          ["/platforms/acme/back-office/v/1/description.yaml", "/platforms/acme/nothing-here/v/1/description.yaml"],
+          ["/acme/platforms/back-office/v/1/description.yaml", "/acme/platforms/nothing-here/v/1/description.yaml"],
         ]) {
           const a = await request("GET", hidden, { as });
           const b = await request("GET", missing, { as });
           expect([a.status, await a.text()]).toEqual([b.status, await b.text()]);
         }
       }
+    });
+
+    it("a private platform's old address, /platforms/{owner}/{slug}, answers as a missing one's, and leads to the same 404", async () => {
+      const { nell, mo } = await platforms();
+      for (const as of [{ token: nell.token }, { cookie: nell.cookie }, undefined])
+        for (const file of ["description.yaml", "recipe.md"]) {
+          const a = await request("GET", `/platforms/acme/back-office/v/1/${file}`, { as });
+          const b = await request("GET", `/platforms/acme/nothing-here/v/1/${file}`, { as });
+          expect([a.status, await a.text()]).toEqual([308, await b.text()]);
+          expect(a.headers.get("location")!.replace("back-office", "nothing-here")).toBe(b.headers.get("location"));
+          const hidden = await request("GET", new URL(a.headers.get("location")!).pathname, { as });
+          const missing = await request("GET", new URL(b.headers.get("location")!).pathname, { as });
+          expect([hidden.status, await hidden.text()]).toEqual([404, await missing.text()]);
+        }
+      const moved = await request("GET", "/platforms/acme/back-office/v/1/description.yaml", { as: { token: mo.token } });
+      const read = await request("GET", new URL(moved.headers.get("location")!).pathname, { as: { token: mo.token } });
+      expect([read.status, await read.text()]).toEqual([200, backOffice]);
     });
 
     it("a non-member cannot push to a private platform: 404, and nothing is saved", async () => {
@@ -727,9 +744,20 @@ describe("Private platforms", () => {
         await answer("POST", "/api/v1/fit", { file: clientEmail }),
       ])
         expect(other).toEqual(hidden);
-      const file = await answer("GET", "/platforms/acme/back-office/v/1/description.yaml");
+      const file = await answer("GET", "/acme/platforms/back-office/v/1/description.yaml");
       expect(file.status).toBe(401);
       expect(file.body).toMatch(/token is not valid/);
+      // An old address only redirects, the same for every platform, and the
+      // new one gives the 401.
+      for (const [owner, slug] of [
+        ["acme", "back-office"],
+        ["beta", "open-box"],
+        ["acme", "nothing-here"],
+      ]) {
+        const old = await request("GET", `/platforms/${owner}/${slug}/v/1/description.yaml`, { as: { token: mo.token } });
+        expect([old.status, old.headers.get("location")]).toEqual([308, `${BASE}/${owner}/platforms/${slug}/v/1/description.yaml`]);
+        expect(await answer("GET", `/${owner}/platforms/${slug}/v/1/description.yaml`)).toEqual(file);
+      }
     });
   });
 });

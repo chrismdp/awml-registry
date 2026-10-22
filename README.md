@@ -52,7 +52,7 @@ curl -X POST http://localhost:3000/api/v1/platforms/<you>/<platform>/versions \
 
 A recipe says where each secret goes, but never holds a secret itself. Anyone can read it, unless the platform is private. Only an organisation can keep a private platform: add `"visibility": "private"` to the first push.
 
-Read the latest version at `GET /api/v1/platforms/<owner>/<platform>`, one version at `.../v/<n>`, and its files at `/platforms/<owner>/<platform>/v/<n>/description.yaml` and `.../recipe.md`.
+Read the latest version at `GET /api/v1/platforms/<owner>/<platform>`, one version at `.../v/<n>`, and its files at `/<owner>/platforms/<platform>/v/<n>/description.yaml` and `.../recipe.md`. A platform's page is `/<owner>/platforms/<platform>`, the same as the reference AWML gives it; the old `/platforms/<owner>/<platform>` addresses redirect there.
 
 On the site, `/<owner>/platforms` lists an owner's platforms with links to their files, and `/platforms` lists and searches every platform you can see.
 

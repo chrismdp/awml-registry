@@ -12,8 +12,8 @@ export type PlatformViewProps = {
   label: string;
   visibility: "public" | "private";
   number: number;
-  // The page's address without a tab: /platforms/owner/slug for the latest
-  // version, /platforms/owner/slug/v/n for one version. Each other tab is at
+  // The page's address without a tab: /owner/platforms/slug for the latest
+  // version, /owner/platforms/slug/v/n for one version. Each other tab is at
   // this address/tab.
   address: string;
   tab: PlatformTab;
@@ -33,7 +33,7 @@ const TAB: Record<PlatformTab, string> = {
 const markdown = new MarkdownIt("default", { html: false });
 
 export function PlatformView(p: PlatformViewProps) {
-  const base = `/platforms/${p.owner}/${p.slug}`;
+  const base = `/${p.owner}/platforms/${p.slug}`;
   const latest = p.versions[0]?.number ?? p.number;
   const tablist = (
     <div role="tablist" aria-label="View" className="tabs">

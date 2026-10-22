@@ -7,8 +7,8 @@ import { platformVersion, version } from "@/db/schema";
 import { ukTime } from "@/server/page";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
-import PlatformPage from "@/app/platforms/[owner]/[slug]/page";
-import PlatformVersionPage from "@/app/platforms/[owner]/[slug]/v/[n]/page";
+import PlatformPage from "@/app/[owner]/platforms/[slug]/page";
+import PlatformVersionPage from "@/app/[owner]/platforms/[slug]/v/[n]/page";
 import { example, person, request, storeLegacyVersion } from "./helpers";
 import { renderPage } from "./pages";
 
@@ -104,9 +104,9 @@ describe("a platform's Versions list", () => {
     expect(latest.lines[0]).toMatch(new RegExp(`^#2 · ${o} · Today \\d{1,2}:\\d{2}(am|pm) · 0\\.4$`));
     expect(latest.lines[1]).toBe(`#1 · ${o} · 18 Oct 2026, 9:12am · 0.4`);
     expect(latest.html).toContain("<strong>#2</strong>");
-    expect(latest.html).toContain(`<a href="/platforms/${o}/laptop/v/1">#1</a>`);
+    expect(latest.html).toContain(`<a href="/${o}/platforms/laptop/v/1">#1</a>`);
     expect(latest.html).toContain(`<a href="/${o}">${o}</a>`);
     const old = versionsOf((await renderPage(PlatformVersionPage, { owner: o, slug: "laptop", n: "1" })).html);
-    expect(old.html).toContain(`<a href="/platforms/${o}/laptop">#2</a>`);
+    expect(old.html).toContain(`<a href="/${o}/platforms/laptop">#2</a>`);
   });
 });

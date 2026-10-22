@@ -20,7 +20,7 @@ export async function POST(req: Request, { params }: Params<"owner" | "slug">) {
       owner: pushed.owner,
       slug: pushed.slug,
       number: pushed.number,
-      url: siteUrl(req, `/api/v1/platforms/${pushed.owner}/${pushed.slug}/v/${pushed.number}`),
+      url: siteUrl(req, `/${pushed.owner}/platforms/${pushed.slug}/v/${pushed.number}`),
     },
     201,
   );
