@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isValidElement, type ReactNode } from "react";
+import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { LoginForm } from "@/components/LoginForm";
 import { drawingFont } from "@/components/Mermaid";
 import { getDb } from "@/db/client";
-import { version } from "@/db/schema";
+import { organisation, user, version } from "@/db/schema";
 import { engine } from "@/engine";
 import { createOrganisation } from "@/server/organisations";
 import { listTokens } from "@/server/tokens";
@@ -13,6 +14,7 @@ import { inventory } from "@/server/registry";
 import { getViewer } from "@/server/viewer";
 import HomePage from "@/app/page";
 import GalleryPage from "@/app/gallery/page";
+import OwnerPage from "@/app/[owner]/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import WorkflowSecurityPage from "@/app/[owner]/[slug]/security/page";
@@ -529,6 +531,21 @@ describe("a workflow's Checks view", () => {
     expect(text(page.html)).toContain(
       `${CHECKS_INTRO} security.yaml Checked by AWML v0.4.0 awml check No mistakes ${CHECKS_END}`,
     );
+  });
+});
+
+describe("an owner's page", () => {
+  it("is headed with the owner's name, or their username or slug when the name is empty", async () => {
+    const db = await getDb();
+    const ana = await person("ana");
+    await orgWith("acme", ana);
+    const heading = async (owner: string) => (await renderPage(OwnerPage, { owner })).html.match(/<h1>(.*?)<\/h1>/)?.[1];
+    await db.update(user).set({ name: "Ana Cook" }).where(eq(user.id, ana.id));
+    expect(await heading(ana.username)).toBe("Ana Cook");
+    await db.update(user).set({ name: "" }).where(eq(user.id, ana.id));
+    expect(await heading(ana.username)).toBe(ana.username);
+    await db.update(organisation).set({ name: "" }).where(eq(organisation.slug, "acme"));
+    expect(await heading("acme")).toBe("acme");
   });
 });
 
