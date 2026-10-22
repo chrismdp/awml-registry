@@ -24,8 +24,9 @@ export const ENTRY_POINTS = [
 // Reads that only an organisation's owners may make.
 const OWNERS_ONLY = ["listAudit", "listMembers"];
 
-// Routes under an owner or an organisation, and the platforms' files.
-const OWNER_SCOPED = /\/src\/app\/(\[owner\]|api\/v1|api\/orgs\/\[org\]|platforms)\//;
+// Routes under an owner or an organisation, and the platforms' files. Not
+// /api/v1/me, which is the caller's own account and names no owner.
+const OWNER_SCOPED = /\/src\/app\/(\[owner\]|api\/v1(?!\/me\/)|api\/orgs\/\[org\]|platforms)\//;
 
 const DATA_IMPORTS = /^(@\/db\/schema|drizzle-orm)(\/|$)/;
 

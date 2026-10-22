@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { count } from "@/components/words";
 import type { Summary } from "@/engine";
-import { pageContext } from "@/server/page";
+import { followOldName, pageContext } from "@/server/page";
 import { inventory } from "@/server/registry";
 import { hasPerson, names, stepCount } from "@/server/summary";
 
@@ -10,7 +10,10 @@ export default async function InventoryPage({ params }: { params: Promise<{ owne
   const { owner } = await params;
   const { db, viewer } = await pageContext();
   const inv = await inventory(db, viewer, owner);
-  if (!inv) notFound();
+  if (!inv) {
+    await followOldName(db, owner, "/inventory");
+    notFound();
+  }
   const { organisation, rows } = inv;
   const summaries = rows.flatMap((r) => (r.summary ? [r.summary] : []));
   const n = rows.length;

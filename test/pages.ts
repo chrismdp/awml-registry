@@ -28,8 +28,9 @@ export async function renderPage<P>(
     const digest = (e as { digest?: string }).digest ?? "";
     if (digest.startsWith("NEXT_HTTP_ERROR_FALLBACK;"))
       return { status: Number(digest.split(";")[1]), html: "" };
+    // "NEXT_REDIRECT;replace;/somewhere;308;": a redirect for now (307) or for good (308).
     if (digest.startsWith("NEXT_REDIRECT;"))
-      return { status: 307, html: "", location: digest.split(";")[2] };
+      return { status: Number(digest.split(";")[3]), html: "", location: digest.split(";")[2] };
     throw e;
   }
 }

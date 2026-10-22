@@ -10,6 +10,7 @@ import * as platformVersionsApi from "@/app/api/v1/platforms/[owner]/[slug]/vers
 import * as platformVersionApi from "@/app/api/v1/platforms/[owner]/[slug]/v/[n]/route";
 import * as platformFile from "@/app/platforms/[owner]/[slug]/v/[n]/[file]/route";
 import * as fitApi from "@/app/api/v1/fit/route";
+import * as meApi from "@/app/api/v1/me/route";
 import * as orgs from "@/app/api/orgs/route";
 import * as members from "@/app/api/orgs/[org]/members/route";
 import * as removeMember from "@/app/api/orgs/[org]/members/[userId]/remove/route";
@@ -20,12 +21,13 @@ import * as authorisationServer from "@/app/.well-known/oauth-authorization-serv
 
 // An optional catch-all segment, [[...path]], comes as a list of segments.
 type Handler = (req: Request, ctx: { params: Promise<Record<string, string | string[]>> }) => Promise<Response>;
-type Module = Partial<Record<"GET" | "POST", Handler>>;
+type Module = Partial<Record<"GET" | "POST" | "PATCH", Handler>>;
 
 const routes: [RegExp, Module][] = [
   [/^\/api\/auth\/(?<all>.+)$/, auth as Module],
   // A path's fixed segments come before its placeholders, as in Next.js.
   [/^\/api\/v1\/fit$/, fitApi as Module],
+  [/^\/api\/v1\/me$/, meApi as Module],
   [/^\/api\/v1\/platforms\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/versions$/, platformVersionsApi as Module],
   [/^\/api\/v1\/platforms\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/v\/(?<n>[^/]+)$/, platformVersionApi as Module],
   [/^\/api\/v1\/platforms\/(?<owner>[^/]+)\/(?<slug>[^/]+)$/, platformApi as Module],
@@ -48,7 +50,7 @@ export async function route(req: Request): Promise<Response> {
   for (const [pattern, mod] of routes) {
     const match = pattern.exec(pathname);
     if (!match) continue;
-    const handler = mod[req.method as "GET" | "POST"];
+    const handler = mod[req.method as "GET" | "POST" | "PATCH"];
     if (!handler) return new Response(null, { status: 405 });
     const params = Object.fromEntries(
       Object.entries(match.groups ?? {})

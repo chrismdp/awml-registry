@@ -23,6 +23,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 | Pulling platforms | The API serves every platform version, so a command line can pull them. Pulling platforms with `awml` is a separate change to the CLI. Decided 2026-10-22. |
 | Common platforms | Data, not code. This repo seeds no platforms, so a self-hosted registry starts with none, and nothing in the code knows which platforms are common. Tests use made-up platforms and AWML's example ones. Decided 2026-10-22. |
 | The fit | Only the AWML engine judges where a workflow can run, the same Go package as `awml fit`, so the registry and the CLI give the same answer. Decided 2026-10-22. |
+| Usernames | A person sets their own username, by the rules of an organisation's slug. Workflows and platforms are stored against the account, so they move with the name. A name given up redirects to the new one until a person or an organisation takes it (see "Usernames"). Decided 2026-10-22. |
 | Drawings' font | AWML's drawings ask for Inter. The registry serves Inter itself, as a WOFF2 under the SIL Open Font License, so a drawing looks the same in every browser. Decided 2026-10-22. |
 
 ## What v1 does
@@ -32,7 +33,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 - **A public gallery.** Anyone can browse public workflows and search them by title. Anyone signed in can publish one, free.
 - **Private workflows for an organisation.** Only its members can see them. In this repo's default edition every organisation may keep private workflows; the hosted edition limits that to paying organisations.
 - **An inventory for each organisation.** Every workflow in one table with its summary counts, plus totals across them all.
-- **An audit log for each organisation.** Who pushed, who viewed a private workflow or platform, who joined or left. Owners can read it; nobody can change it.
+- **An audit log for each organisation.** Who pushed, who viewed a private workflow or platform, who joined or left, and which member changed their username. Owners can read it; nobody can change it.
 - **Platforms, and where a workflow can run.** Added after v1 (see "Platforms and the fit").
 
 ## Data
@@ -47,7 +48,8 @@ This file records what the registry does and the decisions behind it. AWML itsel
 | Platform | Owner (a user or an organisation, never both), slug, label (from the latest description), `public` or `private` |
 | Platform version | Platform, number, who pushed it and when, the platform description (YAML text) and the install recipe (Markdown text), if any |
 | Token | User, name, SHA-256 hash of the secret (the secret is shown once), created at, last used at |
-| Audit event | Organisation, actor, action, target, at. Rows are only ever added |
+| Audit event | Organisation, actor, action (`push`, `private_view`, `member_joined`, `member_left`, `member_renamed`), target, at. Rows are only ever added |
+| Previous name | A username a person gave up, who gave it up and when. One row per name, the last person to give it up |
 | OAuth clients, consents, access and refresh tokens, resources; JWKS | Better Auth's MCP plugin and JWT plugin keep these for AI clients signing in to `/mcp` |
 
 User slugs and organisation slugs share one namespace. Reserved slugs that no user or organisation may take: `api`, `explore`, `gallery`, `settings`, `login`, `logout`, `signup`, `auth`, `new`, `admin`, `pricing`, `security`, `docs`, `about`, `blog`, `terms`, `privacy`, `help`, `status`, `_next`, `static`, `assets`, `mcp`, `consent`, `platforms`.
@@ -67,7 +69,7 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `/{owner}/{slug}/v/{n}/{view}.yaml` | One file as YAML |
 | `/{org}/inventory` | The organisation's inventory, for members |
 | `/{org}/settings` | Members and the audit log, for owners (the hosted edition adds billing) |
-| `/settings` | Signing out, the AI apps connected to `/mcp` with a Disconnect for each, and the person's organisations |
+| `/settings` | Signing out, the username with Save, the AI apps connected to `/mcp` with a Disconnect for each, and the person's organisations |
 | `/settings/tokens` | Make and revoke API tokens |
 | `POST /api/v1/{owner}/{slug}/versions` | Push a version. Body JSON `{"security": "<yaml>"?, "platform": "<yaml>"?, "visibility": "public"\|"private"?}`, at least one file. The first push makes the workflow and sets its visibility (default public). Returns 201 with `{owner, slug, number, url}`, or 422 with `{errors: [...]}` |
 | `GET /api/v1/{owner}/{slug}` | The workflow and its list of versions |
@@ -78,6 +80,7 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `/platforms/{owner}/{slug}/v/{n}/description.yaml` | A platform version's description as YAML |
 | `/platforms/{owner}/{slug}/v/{n}/recipe.md` | A platform version's install recipe as Markdown; 404 when it has none |
 | `POST /api/v1/fit` | Where a workflow can run (see "Platforms and the fit") |
+| `PATCH /api/v1/me` | Change the caller's own username. Body JSON `{"username": "<new name>"}`. Returns 200 with `{username, previous, url}`, 422 with `{errors: [...]}` for a name that is taken, reserved or badly formed, or 401 when nobody is signed in (see "Usernames") |
 | `awml login` | Asks for a token made on the website, and saves it in `~/.config/awml/credentials`, readable only by its owner |
 | `awml push owner/slug security.yaml platform.yaml [--private]` | Checks the files locally, then pushes them |
 | `awml pull owner/slug[@n] [-o dir]` | Downloads the files of the latest version, or of version n |
@@ -118,6 +121,27 @@ Private platforms follow exactly these rules, through the same push rules (`src/
 | Roles | An owner and a member both push and read the organisation's private platforms, and a member who leaves cannot; the edition decides whether an organisation may push and keep private platforms |
 | Invalid token | A revoked token gets the same 401 for a private, a public and a missing platform, on a push and on a fit |
 
+## Usernames
+
+Added on 2026-10-22. A person's username starts as the part of their email address before the `@`, made free at their first sign-in. They can change it on Settings, with `PATCH /api/v1/me` (a registry token or a browser session) and with the `set_username` tool on `/mcp`. Each acts only as the signed-in person and names no one else, so nobody can change another person's username. Better Auth's own update-user endpoint refuses a username.
+
+**The rules** are an organisation's slug's: 1 to 40 lowercase letters, digits and single hyphens, starting and ending with a letter or digit, not reserved, and not held by a person or an organisation. A name is trimmed and lowercased first. The refusals say which rule: `Use 1 to 40 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.`, `"settings" is reserved.` or `"bea" is taken.`
+
+**What moves.** Workflows, platforms, versions and memberships are stored against the account, so they all appear under the new name at once, and the versions a person pushed show their new name. Each organisation the person belongs to records a `member_renamed` event, `olive to olive-new`, shown as "renamed" in its audit log.
+
+**Old addresses.** A name a person gave up is kept in the previous names table. While no person or organisation holds it, every address under it answers with a 308 to the same address under the person's current name, query kept: the pages (`/{old}`, `/{old}/{slug}`, its versions, inventory and settings), the YAML and platform downloads, and every `/api/v1/{old}/...` and `/api/v1/platforms/{old}/...` route, pushes included. A 308 keeps the method and body, so a command line that follows redirects keeps reading and pushing. The redirect is the same whether anything is at the address or not, and the address it sends to makes its own access check, so it tells nobody anything about a workflow. After several renames, every old name leads to the current one.
+
+**When the redirect stops.** An old name is free for anyone to take: a person renaming, someone signing up, or a new organisation. Once someone holds it, their page is there and the redirect stops. If a person takes the name and later gives it up, it redirects to them, as the last person to give it up. A person who takes back their own old name has their page there again, and the name they left redirects to it.
+
+**`/mcp`** tools take names as they are now: an old name answers `Not found.`, as a missing owner does.
+
+| Boundary | Test (`test/username.test.ts`) |
+|---|---|
+| Positive | A person changes their own username on Settings, through `PATCH /api/v1/me` with a token or a session, and through `set_username` with a registry token or an OAuth token; their workflows and platforms show under the new name; each of their organisations' audit logs records the rename, and no other organisation's |
+| Negative | A taken, reserved or badly formed name is refused with a clear message on all three, and nothing changes; nobody can change another person's username, whatever the request names; a signed-out request gets a 401, and Settings sends them to sign in; a revoked or made-up token gets a 401 from the API and `/mcp` |
+| Cross-tenant | Renaming moves only the person's own pages, never another person's or an organisation's; an old name now held by an organisation never redirects, and its private workflow is the same 404 to the name's former holder and to a stranger; a redirect sends a stranger to the new address, where a private workflow is still a 404 |
+| Redirect lifecycle | The old name redirects with a 308 from pages, files and the API, keeping the query; after two renames both old names lead to the current one; the redirect stops once a person, someone signing up or an organisation takes the old name |
+
 ## The edition hook
 
 `src/edition.ts` exports one object the hosted repo replaces with its own file. In v1 it carries:
@@ -144,7 +168,7 @@ This repo's `wrangler.jsonc` has placeholders for a self-hoster to fill in, and 
 
 Added after v1, on 2026-10-22. A person connects their own AI (Claude.ai, Claude Desktop, ChatGPT, Claude Code, Codex) to `<registry>/mcp` and asks it to check, read or publish workflows. It runs on their account, not ours; the registry still sends nothing to a model.
 
-**Tools.** Each calls the same functions in `src/server` as the website and the API, so it sees what the person may see and the audit log records the same events (`push` on publish and add_platform, `private_view` on reading a private workflow or platform, or fitting against a private platform).
+**Tools.** Each calls the same functions in `src/server` as the website and the API, so it sees what the person may see and the audit log records the same events (`push` on publish and add_platform, `private_view` on reading a private workflow or platform, or fitting against a private platform, `member_renamed` on set_username).
 
 | Tool | What it does |
 |---|---|
@@ -156,6 +180,7 @@ Added after v1, on 2026-10-22. A person connects their own AI (Claude.ai, Claude
 | `search_platforms` | The platforms the person may see, public ones and their organisations' own, by words in the label or slug |
 | `get_platform` | A platform's description and install recipe, the latest version or a given one |
 | `add_platform` | Saves a new version of a platform, with its recipe, public or private, by the same rules as `POST /api/v1/platforms/{owner}/{slug}/versions` |
+| `set_username` | Changes the person's own username, by the same rules as `PATCH /api/v1/me` (see "Usernames"). Gives the new name, the old one and their page |
 | `fit_workflow` | Runs the fit for a workflow (`owner/slug`, with an optional `@version`, or its security view as YAML) against the platforms named, or every platform the person may see. Gives the same answer as `POST /api/v1/fit` |
 
 The person's own AI reads a platform's recipe and does the installing. The registry neither runs a recipe nor sends anything to a model, and the fit is code.

@@ -48,6 +48,11 @@ tester.run("access-checked", rule, {
       code: `const fitted = await fitWorkflow(await getDb(), viewer, body);`,
     },
     {
+      name: "the caller's own account at /api/v1/me names no owner",
+      filename: at("api/v1/me/route.ts"),
+      code: `const saved = await setUsername(await getDb(), viewer.id, body.username);`,
+    },
+    {
       name: "a route that is not owner-scoped reads the public gallery",
       filename: at("gallery/page.tsx"),
       code: `const { db } = await pageContext(); const rows = await explore(db, q);`,
@@ -65,6 +70,12 @@ tester.run("access-checked", rule, {
       filename: at("platforms/[owner]/[slug]/v/[n]/[file]/route.ts"),
       code: `const db = await getDb(); const v = await findPlatformFile(db, owner, slug, n);`,
       errors: [{ messageId: "unchecked", data: { name: "findPlatformFile" } }],
+    },
+    {
+      name: "an owner-scoped API route reads before any access check, even beside /api/v1/me",
+      filename: at("api/v1/[owner]/me/route.ts"),
+      code: `const db = await getDb(); const v = await findWorkflow(db, owner, "me");`,
+      errors: [{ messageId: "unchecked", data: { name: "findWorkflow" } }],
     },
     {
       name: "an owner-scoped route that queries the database itself",

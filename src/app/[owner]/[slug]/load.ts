@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import type { VersionViewProps } from "@/components/VersionView";
 import { engine } from "@/engine";
-import { pageContext } from "@/server/page";
+import { followOldName, pageContext } from "@/server/page";
 import { readVersion, VIEWS, type View } from "@/server/registry";
 
 // One version for its page, with the asked-for view drawn (the first it has,
@@ -9,7 +9,11 @@ import { readVersion, VIEWS, type View } from "@/server/registry";
 export async function loadVersion(owner: string, slug: string, n: string, asked?: string): Promise<VersionViewProps> {
   const { db, viewer } = await pageContext();
   const v = await readVersion(db, viewer, owner, slug, n === "latest" ? "latest" : n);
-  if (!v) notFound();
+  if (!v) {
+    const rest = `/${encodeURIComponent(slug)}${n === "latest" ? "" : `/v/${encodeURIComponent(n)}`}`;
+    await followOldName(db, owner, rest, { view: asked });
+    notFound();
+  }
   const views = VIEWS.filter((view) => v.files[view] !== undefined);
   const shown: View | "yaml" = asked === "yaml" ? "yaml" : (views.find((view) => view === asked) ?? views[0]);
   return {

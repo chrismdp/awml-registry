@@ -1,13 +1,14 @@
 import { forbidden, notFound } from "next/navigation";
 import { listAudit } from "@/server/audit";
 import { listMembers, organisationToManage } from "@/server/organisations";
-import { dateTime, pageContext } from "@/server/page";
+import { dateTime, followOldName, pageContext } from "@/server/page";
 
 const ACTIONS = {
   push: "push",
   private_view: "private view",
   member_joined: "joined",
   member_left: "left",
+  member_renamed: "renamed",
 } as const;
 
 export default async function OrgSettingsPage({
@@ -21,7 +22,11 @@ export default async function OrgSettingsPage({
   const { error, notice } = await searchParams;
   const { db, viewer } = await pageContext();
   const org = await organisationToManage(db, viewer?.id, owner);
-  if (!org.ok) return org.status === 403 ? forbidden() : notFound();
+  if (!org.ok) {
+    if (org.status === 403) forbidden();
+    await followOldName(db, owner, "/settings");
+    notFound();
+  }
   const { organisation } = org;
   const [members, audit] = await Promise.all([
     listMembers(db, organisation.id),

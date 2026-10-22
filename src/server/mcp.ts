@@ -20,6 +20,7 @@ import { organisationsOf } from "./organisations";
 import { pushPlatformVersion, readPlatformVersion, searchPlatforms } from "./platforms";
 import { checkWorkflow, explore, ownerPage, pushVersion, readVersion } from "./registry";
 import { userIdForSecret } from "./tokens";
+import { savedNotice, setUsername } from "./usernames";
 import { viewerFor, type Viewer } from "./viewer";
 
 type Person = NonNullable<Viewer>;
@@ -145,7 +146,8 @@ function server(person: Person) {
         "mistakes in a workflow's YAML, publish to save a new version of owner/slug, get to read one, list for an " +
         "owner's workflows and search for public ones. Use search_platforms and get_platform to find platforms and " +
         "read their descriptions and install recipes, add_platform to save one, and fit_workflow to find where a " +
-        "workflow can run. Every call acts as the signed-in person.",
+        "workflow can run. Use set_username to change the signed-in person's own username. Every call acts as the " +
+        "signed-in person.",
     },
   );
 
@@ -390,6 +392,24 @@ function server(person: Person) {
       const fitted = await fitWorkflow(await getDb(), person, { workflow, security, platforms });
       if (!fitted.ok) return refused(fitted.errors);
       return answer(fitText(fitted.fit), fitted.fit);
+    },
+  );
+
+  s.registerTool(
+    "set_username",
+    {
+      title: "Set your username",
+      description:
+        "Change your own username, the name in the address of your page and of your workflows and platforms, as in <registry>/username/slug. It follows the rules of an organisation's slug: 1 to 40 lowercase letters, digits and single hyphens, not reserved, and not taken by a person or an organisation. Your workflows and platforms move with you, and links to your old name redirect to the new one until someone else takes it. Gives your new username, the old one and your page.",
+      inputSchema: z.object({
+        username: z.string().describe("The new username: lowercase letters, digits and single hyphens"),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ username }) => {
+      const saved = await setUsername(await getDb(), person.id, username);
+      if (!saved.ok) return refused(saved.errors);
+      return answer(savedNotice(saved), { username: saved.username, previous: saved.previous, url: ownUrl(`/${saved.username}`) });
     },
   );
 

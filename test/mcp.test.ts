@@ -54,7 +54,7 @@ const initialize = {
 };
 
 describe("the MCP server at /mcp", () => {
-  it("answers initialize and lists its nine tools to someone signed in", async () => {
+  it("answers initialize and lists its ten tools to someone signed in", async () => {
     const ana = await person("ana");
     const init = await message(await post("initialize", initialize, ana.token));
     expect(init.result).toMatchObject({ serverInfo: { name: "awml-registry" }, capabilities: { tools: {} } });
@@ -71,6 +71,7 @@ describe("the MCP server at /mcp", () => {
       "publish",
       "search",
       "search_platforms",
+      "set_username",
     ]);
   });
 

@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { listConnectedApps } from "@/server/connected-apps";
 import { organisationsOf } from "@/server/organisations";
 import { dateTime, pageContext } from "@/server/page";
-import { disconnect } from "./actions";
+import { disconnect, saveUsername } from "./actions";
 
 export default async function SettingsPage({
   searchParams,
@@ -28,6 +28,19 @@ export default async function SettingsPage({
       <p>
         <Link href="/settings/tokens">API tokens</Link>
       </p>
+
+      <h2>Username</h2>
+      <p>
+        Your workflows and platforms live at <Link href={`/${viewer.username}`}>{`/${viewer.username}`}</Link>. Change your
+        username and they move with you. Links to your old address will redirect to the new one until someone else
+        takes your old name.
+      </p>
+      <form action={saveUsername}>
+        <label>
+          Username <input name="username" defaultValue={viewer.username} required pattern="[a-z0-9-]+" maxLength={40} />
+        </label>{" "}
+        <button type="submit">Save</button>
+      </form>
 
       <h2>Connected apps</h2>
       <p>

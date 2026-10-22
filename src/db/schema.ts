@@ -370,6 +370,15 @@ export const token = sqliteTable(
   (t) => [index("token_user_idx").on(t.userId)],
 );
 
+// A username a person gave up. Its address redirects to the name they go by
+// now, while no person or organisation holds it. One row per name: the last
+// person to give it up.
+export const previousName = sqliteTable("previous_name", {
+  name: text("name").primaryKey(),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  givenUpAt: integer("given_up_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
+});
+
 export const auditEvent = sqliteTable(
   "audit_event",
   {
@@ -379,7 +388,7 @@ export const auditEvent = sqliteTable(
       .references(() => organisation.id),
     actorId: text("actor_id").notNull().references(() => user.id),
     action: text("action", {
-      enum: ["push", "private_view", "member_joined", "member_left"],
+      enum: ["push", "private_view", "member_joined", "member_left", "member_renamed"],
     }).notNull(),
     target: text("target").notNull(),
     at: integer("at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),

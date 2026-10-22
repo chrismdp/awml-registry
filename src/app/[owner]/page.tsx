@@ -1,13 +1,16 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { dateTime, pageContext } from "@/server/page";
+import { dateTime, followOldName, pageContext } from "@/server/page";
 import { ownerPage } from "@/server/registry";
 
 export default async function OwnerPage({ params }: { params: Promise<{ owner: string }> }) {
   const { owner: slug } = await params;
   const { db, viewer } = await pageContext();
   const page = await ownerPage(db, viewer, slug);
-  if (!page) notFound();
+  if (!page) {
+    await followOldName(db, slug);
+    notFound();
+  }
   const { owner, member, workflows } = page;
   const isOrg = owner.type === "organisation";
   return (

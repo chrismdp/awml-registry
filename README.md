@@ -70,11 +70,23 @@ awml push <you>/<workflow> security.yaml
 
 If the registry says the token is not valid, it was revoked or mistyped. Make a new one and run `awml login` again.
 
+## Your username
+
+Your username is the name in your page's address and in your workflows', `<registry>/<you>/<workflow>`. The registry makes one from your email address when you first sign in. To change it, use the Username field in Settings, ask your AI (the `set_username` tool), or send:
+
+```sh
+curl -X PATCH <registry>/api/v1/me \
+  -H "Authorization: Bearer <token>" -H "content-type: application/json" \
+  -d '{"username": "<new name>"}'
+```
+
+A username follows the same rules as an organisation's: lowercase letters, digits and single hyphens, not reserved, and not taken by a person or an organisation. Your workflows and platforms move with you. Links to your old name redirect to the new one, the API included, until someone else takes the old name. Each organisation you belong to records the change in its audit log.
+
 ## Connect your AI
 
 Your registry is also an MCP server, at `/mcp` on its address. Below, `<registry>` is that address: the `BETTER_AUTH_URL` of your own registry, or `https://awml.io` for the official one. Every address the sign-in gives out comes from `BETTER_AUTH_URL` too.
 
-Connect your AI to it and it can check, read and publish workflows as you, with the tools `check`, `publish`, `get`, `list` and `search`. It can find and add platforms with `search_platforms`, `get_platform` and `add_platform`, and find where a workflow can run with `fit_workflow`. Then it can follow a platform's recipe to install the workflow there. `docs/SPEC.md` says what each tool does. It runs on your account, and the registry sends nothing to a model.
+Connect your AI to it and it can check, read and publish workflows as you, with the tools `check`, `publish`, `get`, `list` and `search`. It can find and add platforms with `search_platforms`, `get_platform` and `add_platform`, find where a workflow can run with `fit_workflow`, and change your username with `set_username`. Then it can follow a platform's recipe to install the workflow there. `docs/SPEC.md` says what each tool does. It runs on your account, and the registry sends nothing to a model.
 
 Every request to `/mcp` needs you signed in, so your AI asks you to sign in when you connect it. Public workflows stay readable without an account on the website, through the API and with `awml pull`.
 

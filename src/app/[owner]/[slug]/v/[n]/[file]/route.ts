@@ -1,12 +1,15 @@
 import { getDb } from "@/db/client";
 import type { Params } from "@/server/http";
 import { readVersion, VIEWS, type View } from "@/server/registry";
+import { oldNameRedirect } from "@/server/usernames";
 import { requestViewer } from "@/server/viewer";
 
 const plain = (status: number, ...lines: string[]) => new Response(`${lines.join("\n")}\n`, { status });
 
 export async function GET(req: Request, { params }: Params<"owner" | "slug" | "n" | "file">) {
   const { owner, slug, n, file } = await params;
+  const moved = await oldNameRedirect(req, owner, "/");
+  if (moved) return moved;
   const asker = await requestViewer(req.headers);
   if (!asker.ok) return plain(asker.status, ...asker.errors);
   const view = file.replace(/\.yaml$/, "") as View;

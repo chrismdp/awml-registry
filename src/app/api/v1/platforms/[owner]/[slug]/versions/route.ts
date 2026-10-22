@@ -1,10 +1,13 @@
 import { getDb } from "@/db/client";
 import { json, jsonObject, refusal, siteUrl, type Params } from "@/server/http";
 import { pushPlatformVersion } from "@/server/platforms";
+import { oldNameRedirect } from "@/server/usernames";
 import { requestViewer } from "@/server/viewer";
 
 export async function POST(req: Request, { params }: Params<"owner" | "slug">) {
   const { owner, slug } = await params;
+  const moved = await oldNameRedirect(req, owner, "/api/v1/platforms/");
+  if (moved) return moved;
   const asker = await requestViewer(req.headers);
   if (!asker.ok) return refusal(asker);
   const read = await jsonObject(req);
