@@ -28,6 +28,43 @@ curl -X POST http://localhost:3000/api/v1/<you>/<workflow>/versions \
 
 Run the tests with `npm test` and the type check with `npm run typecheck`.
 
+## Connect your AI
+
+The registry is also an MCP server, at `https://awml.io/mcp`. Connect your AI to it and it can check, read and publish workflows as you, with the tools `check`, `publish`, `get`, `list` and `search` (`docs/SPEC.md` says what each does). It runs on your account, and the registry sends nothing to a model.
+
+Every request to `/mcp` needs you signed in, so your AI asks you to sign in when you connect it. Public workflows stay readable without an account on the website, through the API and with `awml pull`.
+
+**Claude.ai and Claude Desktop.** In Settings, open Connectors and add a custom connector with the URL `https://awml.io/mcp`. Claude sends you to awml.io to sign in, then asks you to allow it.
+
+**ChatGPT.** Add a connector with the same URL. It signs in the same way.
+
+**Claude Code.**
+
+```sh
+claude mcp add --transport http awml https://awml.io/mcp
+```
+
+Then run `/mcp` in Claude Code and choose awml to sign in.
+
+**Codex**, with a token made at `/settings/tokens`:
+
+```sh
+codex mcp add awml --url https://awml.io/mcp --bearer-token-env-var AWML_TOKEN
+export AWML_TOKEN=awml_...
+```
+
+That writes these lines to `~/.codex/config.toml`, which you can also write yourself:
+
+```toml
+[mcp_servers.awml]
+url = "https://awml.io/mcp"
+bearer_token_env_var = "AWML_TOKEN"
+```
+
+**Any other client** that takes a header: send `Authorization: Bearer <token>` with a token made at `/settings/tokens`.
+
+On a registry of your own, use its address in place of `https://awml.io`. Every address the sign-in gives out comes from `BETTER_AUTH_URL`.
+
 ## Settings
 
 | Variable | What it is |
@@ -62,10 +99,12 @@ The same app runs on Cloudflare Workers through the OpenNext adapter, with its d
 npm run cf:migrate:local
 printf 'BETTER_AUTH_SECRET=<32 random characters>\nBETTER_AUTH_URL=http://localhost:8787\n' > .dev.vars
 npm run cf:build
-npx wrangler dev
+npx wrangler dev --local-upstream localhost:8787 --upstream-protocol http
 ```
 
-`npm run cf:build` swaps the SQLite file driver for the D1 one, so the Worker never carries the SQLite library.
+`npm run cf:build` swaps the SQLite file driver for the D1 one, so the Worker never carries the SQLite library. Without `--local-upstream`, `wrangler dev` makes each request look as if it came to awml.io, the route in `wrangler.jsonc`, and signing in fails with "Invalid origin".
+
+Locally, sign-in emails are written to `.wrangler/tmp/email/`, and the log says where.
 
 On Cloudflare, sign-in emails go through Cloudflare Email Service. `wrangler.jsonc` binds it as `EMAIL` (`"send_email": [{ "name": "EMAIL" }]`) and sets `MAIL_FROM`. The sending domain must be onboarded in the Cloudflare account first, and sending to any address needs the Workers Paid plan. Without the binding, the Worker prints the links to its log.
 

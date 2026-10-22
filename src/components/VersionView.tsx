@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { CheckResult } from "@/db/schema";
 import type { Summary } from "@/engine";
+import { mcpUrl } from "@/server/http";
 import { dateTime } from "@/server/page";
 import type { View } from "@/server/registry";
 import { names, stepCount } from "@/server/summary";
@@ -170,6 +171,11 @@ export function VersionView(p: VersionViewProps) {
                 Every change is checked, then saved as version {latest + 1}. Version {latest} stays as it is.
               </p>
             </div>
+            <section className="own-ai">
+              <h3>Ask your own AI</h3>
+              <p>Connect Claude or ChatGPT to the registry and tell it what to change. It runs on your account, not ours.</p>
+              <pre>{mcpUrl()}</pre>
+            </section>
             <section>
               <h3>Push from your machine</h3>
               <pre>

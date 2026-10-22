@@ -3,11 +3,15 @@ import { redirect } from "next/navigation";
 import { LoginForm } from "@/components/LoginForm";
 import { Logo } from "@/components/Logo";
 import { socialProviderNames } from "@/server/auth";
+import { authorizeAgain, type Search } from "@/server/oauth";
 import { pageContext } from "@/server/page";
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
-  const { next } = await searchParams;
-  const target = next?.startsWith("/") && !next.startsWith("//") ? next : "/settings";
+export default async function LoginPage({ searchParams }: { searchParams: Promise<Search> }) {
+  const search = await searchParams;
+  const next = typeof search.next === "string" ? search.next : undefined;
+  // An AI client signing in to /mcp sends the person here first; after
+  // signing in they go back to finish allowing it.
+  const target = authorizeAgain(search) ?? (next?.startsWith("/") && !next.startsWith("//") ? next : "/settings");
   const { viewer } = await pageContext();
   if (viewer) redirect(target);
   return (

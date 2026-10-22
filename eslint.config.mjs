@@ -16,7 +16,9 @@ export default [
     rules: { "awml/no-billing": "error" },
   },
   {
-    files: ["src/app/**/*.{ts,tsx}"],
+    // The MCP server's tools read through the same checked functions as the
+    // routes, so the rule keeps the schema and drizzle out of it too.
+    files: ["src/app/**/*.{ts,tsx}", "src/server/mcp.ts"],
     rules: { "awml/access-checked": "error" },
   },
 ];

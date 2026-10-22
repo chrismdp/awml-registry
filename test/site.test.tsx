@@ -120,13 +120,16 @@ describe("a workflow's page", () => {
     expect(shown).toContain("Everything in it Triggers 3 Reviews 1 Notes 3 Connectors 3 Surfaces 3 Scopes 3");
   });
 
-  it("gives the command to push the next version, and says the one before stays", async () => {
+  it("says how to change it with your own AI or from your machine, and that the version before stays", async () => {
     const ana = await person("ana");
     await push(ana.username, "dinners", { token: ana.token }, { security, platform });
     const shown = text((await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" })).html);
-    expect(shown).toContain("Change it Every change is checked, then saved as version 2. Version 1 stays as it is.");
-    expect(shown).toContain(`Push from your machine awml push ${ana.username}/dinners security.yaml platform.yaml`);
-    expect(shown).not.toContain("Ask your own AI");
+    expect(shown).toContain(
+      "Change it Every change is checked, then saved as version 2. Version 1 stays as it is. " +
+        "Ask your own AI Connect Claude or ChatGPT to the registry and tell it what to change. " +
+        "It runs on your account, not ours. http://localhost:3000/mcp " +
+        `Push from your machine awml push ${ana.username}/dinners security.yaml platform.yaml`,
+    );
     expect(shown).not.toContain("Edit the YAML here");
   });
 
@@ -223,6 +226,8 @@ describe("names", () => {
     expect((await signIn("ana@example.com")).user.username).toBe("ana");
     expect((await signIn("ana@elsewhere.com")).user.username).toBe("ana-2");
     expect((await signIn("admin@example.com")).user.username).toBe("admin-2");
+    expect((await signIn("mcp@example.com")).user.username).toBe("mcp-2");
+    expect((await signIn("consent@example.com")).user.username).toBe("consent-2");
   });
 
   it("refuses an organisation slug that is reserved, malformed or taken by a user", async () => {

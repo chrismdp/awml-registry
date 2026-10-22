@@ -8,13 +8,13 @@ export const pageRequest = { headers: new Headers() };
 
 type Page<P> = (props: {
   params: Promise<P>;
-  searchParams: Promise<Record<string, string>>;
+  searchParams: Promise<Record<string, string | string[]>>;
 }) => Promise<ReactElement> | ReactElement;
 
 export async function renderPage<P>(
   page: Page<P>,
   params: P,
-  opts: { as?: Who; search?: Record<string, string> } = {},
+  opts: { as?: Who; search?: Record<string, string | string[]> } = {},
 ): Promise<{ status: number; html: string; location?: string }> {
   pageRequest.headers = new Headers();
   if (opts.as?.cookie) pageRequest.headers.set("cookie", opts.as.cookie);

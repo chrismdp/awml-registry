@@ -6,7 +6,7 @@ import { organisation, user } from "@/db/schema";
 export const RESERVED_SLUGS = new Set([
   "api", "explore", "settings", "login", "logout", "signup", "auth", "new", "admin",
   "pricing", "security", "docs", "about", "blog", "terms", "privacy", "help", "status",
-  "_next", "static", "assets",
+  "_next", "static", "assets", "mcp", "consent",
 ]);
 
 // Paths under an owner that no workflow may take.

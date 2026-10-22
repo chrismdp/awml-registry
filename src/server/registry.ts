@@ -80,6 +80,14 @@ async function checkFiles(files: Files) {
   return { errors, check, title };
 }
 
+// The mistakes in a workflow's files, the same a push is refused for. It needs
+// no account and saves nothing.
+export async function checkWorkflow(body: PushBody): Promise<Result<{ mistakes: string[] }>> {
+  const read = filesFrom(body);
+  if (!read.ok) return read;
+  return { ok: true, mistakes: (await checkFiles(read.files)).errors };
+}
+
 async function notePrivateView(db: Db, viewer: Viewer, owner: Owner, w: Workflow, target: string) {
   if (w.visibility === "private" && owner.type === "organisation" && viewer)
     await record(db, owner.id, viewer.id, "private_view", target);

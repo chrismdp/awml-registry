@@ -154,6 +154,8 @@ pre, code { font-family: var(--mono); }
 .change p { margin: 6px 0 0; font-size: 14px; line-height: 1.5; color: var(--on-ink); }
 .change section { border-top: 1px solid #3a3d45; padding-top: 16px; }
 .change pre { margin: 8px 0 0; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; color: #e6e8eb; }
+.change .own-ai p { margin: 6px 0 10px; }
+.change .own-ai pre { margin: 0; background: #26282e; border-radius: 10px; padding: 10px 12px; }
 
 /* An organisation's inventory */
 .inv-head { padding: 44px 0 28px; }

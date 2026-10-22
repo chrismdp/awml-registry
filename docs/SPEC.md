@@ -17,7 +17,7 @@ The source of truth for the decisions is the Claude Doc "AWML Registry spec" (ht
 | Workflow checks | Uploads are checked by the AWML Go package itself, compiled to WebAssembly, so the registry and the CLI give the same verdict. |
 | Files with mistakes | Refused at upload, with the messages `awml check` gives. |
 | Versions | Each push is a new numbered version, 1, 2, 3, never changed afterwards. |
-| AI on customer content | None: the registry never sends a workflow to a model. Customers bring their own AI later through an MCP server (not v1). |
+| AI on customer content | None: the registry never sends a workflow to a model. Customers bring their own AI through the MCP server at `/mcp`, which acts as them (see "The MCP server"). |
 
 ## What v1 does
 
@@ -39,8 +39,9 @@ The source of truth for the decisions is the Claude Doc "AWML Registry spec" (ht
 | Version | Workflow, number, who pushed it and when, at most one security file and one platform file (YAML text), the check result, the summary as JSON |
 | Token | User, name, SHA-256 hash of the secret (the secret is shown once), created at, last used at |
 | Audit event | Organisation, actor, action, target, at. Rows are only ever added |
+| OAuth clients, consents, access and refresh tokens, resources; JWKS | Better Auth's MCP plugin and JWT plugin keep these for AI clients signing in to `/mcp` |
 
-User slugs and organisation slugs share one namespace. Reserved slugs that no user or organisation may take: `api`, `explore`, `settings`, `login`, `logout`, `signup`, `auth`, `new`, `admin`, `pricing`, `security`, `docs`, `about`, `blog`, `terms`, `privacy`, `help`, `status`, `_next`, `static`, `assets`.
+User slugs and organisation slugs share one namespace. Reserved slugs that no user or organisation may take: `api`, `explore`, `settings`, `login`, `logout`, `signup`, `auth`, `new`, `admin`, `pricing`, `security`, `docs`, `about`, `blog`, `terms`, `privacy`, `help`, `status`, `_next`, `static`, `assets`, `mcp`, `consent`.
 
 ## Pages, API and CLI
 
@@ -61,6 +62,10 @@ User slugs and organisation slugs share one namespace. Reserved slugs that no us
 | `awml login` | Asks for a token made on the website, and saves it in `~/.config/awml/credentials`, readable only by its owner |
 | `awml push owner/slug security.yaml platform.yaml [--private]` | Checks the files locally, then pushes them |
 | `awml pull owner/slug[@n] [-o dir]` | Downloads the files of the latest version, or of version n |
+| `/mcp` | The MCP server, streamable HTTP (see "The MCP server") |
+| `/.well-known/oauth-protected-resource[/mcp]` | Where `/mcp` says its sign-in lives (RFC 9728) |
+| `/.well-known/oauth-authorization-server[/api/auth]` | The sign-in server's metadata (RFC 8414): registration, authorisation and token endpoints under `/api/auth/oauth2/` |
+| `/consent` | Where a person lets an AI client act as them, after signing in at `/login` |
 
 The API takes `Authorization: Bearer <token>` or a browser session. The CLI talks to `https://awml.io` unless `--registry` or `AWML_REGISTRY` names another.
 
@@ -70,7 +75,7 @@ A private workflow is visible to its organisation's members and to nobody else.
 
 - **Public workflows** can be read by anyone, signed in or not. Only their owner can push to them: the user, or the organisation's members.
 - **Private workflows** can be read only by members. Anyone else gets a 404, the same as for a workflow that doesn't exist, so a private workflow's name never leaks.
-- **Owners** manage members. **Members** read and push. A token acts as its user and can do nothing more.
+- **Owners** manage members. **Members** read and push. A token acts as its user and can do nothing more. So does an AI client's OAuth token, on `/mcp` only.
 - A user's own workflows (owner is a user) are public only in v1; private workflows belong to organisations.
 
 Each boundary has a test:
@@ -92,6 +97,36 @@ Each boundary has a test:
 
 Nothing else in this repo knows that billing exists.
 
+## The MCP server
+
+Added after v1, on 2026-10-22. A person connects their own AI (Claude.ai, Claude Desktop, ChatGPT, Claude Code, Codex) to `<registry>/mcp` and asks it to check, read or publish workflows. It runs on their account, not ours; the registry still sends nothing to a model.
+
+**Tools.** Each calls the same functions in `src/server` as the website and the API, so it sees what the person may see and the audit log records the same events (`push` on publish, `private_view` on reading a private workflow).
+
+| Tool | What it does |
+|---|---|
+| `check` | Checks a security file, a platform file or both with the AWML engine, and gives the mistakes. Saves nothing |
+| `publish` | Saves a new version of `owner/slug`, by the same rules as `POST /api/v1/{owner}/{slug}/versions`. Gives the page `<registry>/{owner}/{slug}` and the version number |
+| `get` | A workflow's YAML, check result and summary, the latest version or a given one |
+| `list` | An owner's workflows the person may see; with no owner, their own and their organisations' |
+| `search` | The public gallery by title |
+
+**Signing in, two ways, both the same person.**
+
+- OAuth 2.1 through Better Auth's MCP plugin (`@better-auth/mcp`), with dynamic client registration. An AI client finds it from the address alone: `/mcp` answers a request without a token with a 401 whose `WWW-Authenticate` names the protected resource metadata, which names the sign-in server. The person signs in on `/login` as usual and allows the client on `/consent`. The access token is a JWT for `/mcp` only.
+- `Authorization: Bearer <registry token>`, a token from `/settings/tokens`, for clients that take a header.
+
+**Every request to `/mcp` needs one of them, reads of public workflows included.** AI clients decide whether a server needs signing in when they first connect, so a server that answers anonymously never gets signed in to. Anyone can still read public workflows without an account on the website, through `GET /api/v1/...` and with `awml pull`. Decided 2026-10-22, over letting anonymous callers read public workflows through `/mcp`.
+
+Every address the sign-in metadata gives comes from `BETTER_AUTH_URL`, so a self-hosted registry's `/mcp` works the same at its own address.
+
+| Boundary | Test (`test/mcp.test.ts`) |
+|---|---|
+| Positive | A member publishes to and reads their organisation's private workflow through `/mcp`, and the audit log records both |
+| Negative | A signed-out caller gets a 401 for every request; a non-member cannot read or publish a private workflow, which looks not found |
+| Cross-tenant | Organisation A's token and OAuth session cannot list, get or publish organisation B's private workflows |
+| Same access | A person's registry token and their OAuth token answer every tool the same |
+
 ## Not in v1
 
-Comments and diffs between versions; live records and red lines sent in from running systems; SAML and Microsoft sign-in; teams inside an organisation; forks and stars; any AI feature; the MCP server; billing (hosted repo); the marketing pages (hosted repo, built with Chris).
+Comments and diffs between versions; live records and red lines sent in from running systems; SAML and Microsoft sign-in; teams inside an organisation; forks and stars; any AI feature of the registry's own; billing (hosted repo); the marketing pages (hosted repo, built with Chris). The MCP server came after v1 (above).

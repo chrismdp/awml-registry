@@ -18,15 +18,20 @@
     "cf:deploy": "bash scripts/deploy.sh"
   },
   "dependencies": {
+    "@better-auth/mcp": "^1.7.12",
+    "@better-auth/oauth-provider": "^1.7.12",
+    "@modelcontextprotocol/server": "^2.3.1",
     "better-auth": "^1.7.12",
     "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.45.4",
+    "jose": "^6.2.13",
     "mermaid": "^12.2.0",
     "next": "^16.4.2",
     "nodemailer": "^10.1.7",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "yaml": "^2.9.1"
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@opennextjs/cloudflare": "^1.20.12",
