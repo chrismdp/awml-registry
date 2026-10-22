@@ -2,18 +2,17 @@ import { and, desc, eq, inArray, max, sql } from "drizzle-orm";
 import { parse } from "yaml";
 import type { Db } from "@/db/client";
 import { user, version, workflow } from "@/db/schema";
-import { edition } from "@/edition";
 import { engine, type Files } from "@/engine";
 import { record } from "./audit";
 import { measures, total } from "./summary";
 import { findOwner, isOwnerOrMember, type Owner } from "./owners";
+import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH } from "./push";
 import { refuse, type Result } from "./result";
 import { workflowSlugProblem } from "./slugs";
 import type { Viewer } from "./viewer";
 
 export const VIEWS = ["security", "platform"] as const;
 export type View = (typeof VIEWS)[number];
-export type Visibility = "public" | "private";
 
 type Workflow = typeof workflow.$inferSelect;
 
@@ -100,15 +99,12 @@ export async function pushVersion(
   slug: string,
   body: PushBody,
 ): Promise<Result<{ owner: string; slug: string; number: number }>> {
-  if (!viewer) return refuse(401, "Sign in, or send a token as Authorization: Bearer <token>.");
+  if (!viewer) return refuse(401, SIGN_IN_TO_PUSH);
   const owner = await findOwner(db, ownerSlug);
   if (!owner) return refuse(404, "Not found.");
   const existing = await findWorkflow(db, owner, slug);
-  const allowed = await isOwnerOrMember(db, owner, viewer.id);
-  if (!allowed) {
-    if (existing?.visibility === "private") return refuse(404, "Not found.");
-    return refuse(403, `Only ${owner.type === "user" ? owner.slug : `members of ${owner.slug}`} can push here.`);
-  }
+  const allowed = await mayPushTo(db, viewer, owner, existing);
+  if (!allowed.ok) return allowed;
 
   const slugProblem = workflowSlugProblem(slug);
   if (slugProblem) return refuse(422, slugProblem);
@@ -117,24 +113,9 @@ export async function pushVersion(
   if (!read.ok) return read;
   const { files } = read;
 
-  const requested = body.visibility;
-  if (requested !== undefined && requested !== "public" && requested !== "private")
-    return refuse(422, 'visibility is "public" or "private".');
-  if (existing && requested && requested !== existing.visibility)
-    return refuse(
-      422,
-      `This workflow is ${existing.visibility}. Its first push set that, and a later push cannot change it.`,
-    );
-  const visibility: Visibility = existing?.visibility ?? (requested as Visibility | undefined) ?? "public";
-
-  if (owner.type === "user" && visibility === "private")
-    return refuse(422, "Private workflows belong to organisations. Push it to one of yours.");
-  if (owner.type === "organisation") {
-    if (!(await edition.canPush(owner)))
-      return refuse(403, `${owner.slug} cannot push new versions at the moment. Reading still works.`);
-    if (visibility === "private" && !(await edition.canKeepPrivate(owner)))
-      return refuse(403, `${owner.slug} cannot keep private workflows.`);
-  }
+  const pushed = await pushedVisibility(owner, existing, body.visibility, "workflow");
+  if (!pushed.ok) return pushed;
+  const { visibility } = pushed;
 
   const { errors, check, title } = await checkFiles(files);
   if (errors.length) return refuse(422, ...errors);
