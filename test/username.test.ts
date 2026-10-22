@@ -18,6 +18,8 @@ import WorkflowYamlPage from "@/app/[owner]/[slug]/yaml/page";
 import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
 import VersionSecurityPage from "@/app/[owner]/[slug]/v/[n]/security/page";
 import VersionPlatformPage from "@/app/[owner]/[slug]/v/[n]/platform/page";
+import ImplementationPage from "@/app/[owner]/[slug]/platform/[implementation]/page";
+import VersionImplementationPage from "@/app/[owner]/[slug]/v/[n]/platform/[implementation]/page";
 import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
 import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
 import VersionChecksPage from "@/app/[owner]/[slug]/v/[n]/checks/page";
@@ -29,7 +31,7 @@ import { call, connect, post } from "./mcp-client";
 import { pageRequest, renderPage, type Page } from "./pages";
 import { route } from "./router";
 
-const security = example("dinners-security.yaml");
+const dinners = example("dinners.yaml");
 const worker = example("platforms/worker.yaml");
 
 const RULE = "Use 1 to 40 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.";
@@ -76,7 +78,7 @@ async function saveOnSettings(who: { cookie: string } | undefined, username: str
 async function publish(who: Someone, owner: string, slug: string, visibility?: "private") {
   const res = await request("POST", `/api/v1/${owner}/${slug}/versions`, {
     as: { token: who.token },
-    json: { security, ...(visibility ? { visibility } : {}) },
+    json: { workflow: dinners, ...(visibility ? { visibility } : {}) },
   });
   expect(res.status).toBe(201);
 }
@@ -132,7 +134,7 @@ describe("Positive boundary", () => {
     // The next push under the new name is version 2 of the same workflow.
     const again = await request("POST", "/api/v1/ana-cooks/dinners/versions", {
       as: { token: ana.token },
-      json: { security },
+      json: { workflow: dinners },
     });
     expect(await again.json()).toMatchObject({ owner: "ana-cooks", number: 2 });
   });
@@ -300,7 +302,7 @@ describe("Cross-tenant boundary", () => {
     for (const who of [{ token: nell.token }, undefined])
       expect((await request("GET", "/api/v1/acme/payroll", { as: who })).status).toBe(404);
     // Olive is still a member of acme under her new name.
-    const pushed = await request("POST", "/api/v1/acme/payroll/versions", { as: { token: olive.token }, json: { security } });
+    const pushed = await request("POST", "/api/v1/acme/payroll/versions", { as: { token: olive.token }, json: { workflow: dinners } });
     expect(pushed.status).toBe(201);
     const payroll = await (await request("GET", "/api/v1/acme/payroll", { as: { token: bea.token } })).json();
     expect(payroll.versions.map((v: { pushedBy: string }) => v.pushedBy)).toEqual(["olive-new", "olive-new"]);
@@ -316,7 +318,7 @@ describe("Cross-tenant boundary", () => {
     await publish(bea, "olive", "plans", "private");
 
     for (const who of [olive, nell]) {
-      for (const path of ["/api/v1/olive/plans", "/api/v1/olive/plans/v/1", "/olive/plans/v/1/security.yaml"])
+      for (const path of ["/api/v1/olive/plans", "/api/v1/olive/plans/v/1", "/olive/plans/v/1/workflow.yaml"])
         expect((await request("GET", path, { as: { token: who.token } })).status, path).toBe(404);
       expect((await renderPage(WorkflowPage, { owner: "olive", slug: "plans" }, { as: who })).status).toBe(404);
       expect((await renderPage(OwnerPage, { owner: "olive" }, { as: who })).html).not.toContain("plans");
@@ -353,7 +355,7 @@ describe("Cross-tenant boundary", () => {
     }
     for (const who of [{ token: nell.token }, undefined]) {
       expect((await request("GET", "/api/v1/ana-new/diary", { as: who })).status).toBe(404);
-      expect((await request("GET", "/ana-new/diary/v/1/security.yaml", { as: who })).status).toBe(404);
+      expect((await request("GET", "/ana-new/diary/v/1/workflow.yaml", { as: who })).status).toBe(404);
     }
     expect((await renderPage(WorkflowPage, { owner: "ana-new", slug: "diary" }, { as: nell })).status).toBe(404);
     expect((await renderPage(WorkflowYamlPage, { owner: "ana-new", slug: "diary" }, { as: nell })).status).toBe(404);
@@ -396,6 +398,14 @@ describe("the old address", () => {
         location: `/ana-cooks/dinners/v/1/${view}`,
       });
     }
+    // Each implementation's address, kept as it is.
+    expect(await renderPage(ImplementationPage, { owner: "ana", slug: "dinners", implementation: "home" })).toMatchObject({
+      status: 308,
+      location: "/ana-cooks/dinners/platform/home",
+    });
+    expect(
+      await renderPage(VersionImplementationPage, { owner: "ana", slug: "dinners", n: "1", implementation: "home" }),
+    ).toMatchObject({ status: 308, location: "/ana-cooks/dinners/v/1/platform/home" });
     // An old ?view= address goes to its view's own address first, then on from there.
     expect(await renderPage(WorkflowPage, { owner: "ana", slug: "dinners" }, { search: { view: "platform" } })).toMatchObject({
       status: 308,
@@ -416,7 +426,7 @@ describe("the old address", () => {
     }
     // A push to the old name keeps its method through a 308, so it lands under the new name.
     for (const path of ["/api/v1/ana/dinners/versions", "/api/v1/platforms/ana/worker/versions"]) {
-      const res = await request("POST", path, { as: { token: ana.token }, json: { security } });
+      const res = await request("POST", path, { as: { token: ana.token }, json: { workflow: dinners } });
       expect([res.status, res.headers.get("location")], path).toEqual([308, BASE + path.replace("/ana/", "/ana-cooks/")]);
     }
   });

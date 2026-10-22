@@ -12,8 +12,17 @@ import { call, CIMD_CLIENT, connect, MCP, message, post, serveMetadata } from ".
 import { renderPage } from "./pages";
 import { route } from "./router";
 
-const security = example("dinners-security.yaml");
-const platform = example("dinners-platform.yaml");
+const workflow = example("dinners.yaml");
+// The same workflow, at home and away for the summer, placing the parts home
+// does in two blocks.
+const homeParts = [...workflow.matchAll(/parts: \[([^\]]*)\]/g)].map((m) => m[1]);
+const twoPlaces = `${workflow.trimEnd()}
+  away:
+    label: Away for the summer
+    blocks:
+      - { id: cloud, label: "A cloud server", parts: [${homeParts[0]}] }
+      - { id: services, label: "Everyone's services", parts: [${homeParts.slice(1).join(", ")}] }
+`;
 
 const METADATA = `${BASE}/.well-known/oauth-protected-resource/mcp`;
 
@@ -29,13 +38,13 @@ async function twoOrgs() {
   const bea = await person("bea");
   await orgWith("acme", olive, [mo]);
   await orgWith("beta", bea);
-  expect((await publish(olive.token, { owner: "acme", slug: "payroll", security, visibility: "private" })).isError).toBe(
+  expect((await publish(olive.token, { owner: "acme", slug: "payroll", workflow, visibility: "private" })).isError).toBe(
     false,
   );
-  expect((await publish(bea.token, { owner: "beta", slug: "secret-plans", security, visibility: "private" })).isError).toBe(
+  expect((await publish(bea.token, { owner: "beta", slug: "secret-plans", workflow, visibility: "private" })).isError).toBe(
     false,
   );
-  expect((await publish(bea.token, { owner: "beta", slug: "open-plans", security })).isError).toBe(false);
+  expect((await publish(bea.token, { owner: "beta", slug: "open-plans", workflow })).isError).toBe(false);
   return { olive, mo, nell, bea };
 }
 
@@ -77,27 +86,26 @@ describe("the MCP server at /mcp", () => {
 
   it("checks files with the engine and gives the mistakes `awml check` prints, saving nothing", async () => {
     const ana = await person("ana");
-    const printed = example("bad.check.txt").trim().split("\n");
-    const bad = await call("check", { security: example("bad.yaml") }, ana.token);
+    const printed = example("bad-04.check.txt").trim().split("\n");
+    const bad = await call("check", { workflow: example("bad-04.yaml") }, ana.token);
     expect(bad.isError).toBe(false);
-    expect(bad.data.mistakes).toEqual(printed.map((line) => line.replace(/^bad\.yaml: /, "security: ")));
+    expect(bad.data.mistakes).toEqual(printed.map((line) => line.replace(/^bad-04\.yaml: /, "workflow: ")));
 
-    const good = await call("check", { security, platform }, ana.token);
+    const good = await call("check", { workflow }, ana.token);
     expect(good.data.mistakes).toEqual([]);
     expect(good.text).toBe("No mistakes.");
 
-    expect((await call("check", { platform: security }, ana.token)).data.mistakes[0]).toMatch(/^platform: /);
     expect((await call("check", {}, ana.token)).isError).toBe(true);
     expect((await call("search", {}, ana.token)).data.workflows).toEqual([]);
   });
 
   it("publishes a new version and gives back the workflow's page and version number", async () => {
     const ana = await person("ana");
-    const first = await publish(ana.token, { owner: ana.username, slug: "dinners", security, platform });
+    const first = await publish(ana.token, { owner: ana.username, slug: "dinners", workflow });
     expect(first.isError).toBe(false);
     expect(first.data).toEqual({ owner: ana.username, slug: "dinners", number: 1, url: `${BASE}/${ana.username}/dinners` });
     expect(first.text).toContain(`${BASE}/${ana.username}/dinners`);
-    const second = await publish(ana.token, { owner: ana.username, slug: "dinners", security });
+    const second = await publish(ana.token, { owner: ana.username, slug: "dinners", workflow });
     expect(second.data.number).toBe(2);
     const api = await (await request("GET", `/api/v1/${ana.username}/dinners`)).json();
     expect(api.versions.map((v: { number: number }) => v.number)).toEqual([2, 1]);
@@ -105,16 +113,16 @@ describe("the MCP server at /mcp", () => {
 
   it("refuses to publish files with mistakes, giving the messages, and saves nothing", async () => {
     const ana = await person("ana");
-    const res = await publish(ana.token, { owner: ana.username, slug: "broken", security: example("bad.yaml") });
+    const res = await publish(ana.token, { owner: ana.username, slug: "broken", workflow: example("bad-04.yaml") });
     expect(res.isError).toBe(true);
-    expect(res.text).toContain("security: ");
+    expect(res.text).toContain("workflow: ");
     expect((await request("GET", `/api/v1/${ana.username}/broken`)).status).toBe(404);
   });
 
   it("gets the latest version or a given one, with its YAML and summary", async () => {
     const ana = await person("ana");
-    await publish(ana.token, { owner: ana.username, slug: "dinners", security });
-    await publish(ana.token, { owner: ana.username, slug: "dinners", security, platform });
+    await publish(ana.token, { owner: ana.username, slug: "dinners", workflow });
+    await publish(ana.token, { owner: ana.username, slug: "dinners", workflow: twoPlaces });
     const latest = await call("get", { owner: ana.username, slug: "dinners" }, ana.token);
     expect(latest.data).toMatchObject({
       owner: ana.username,
@@ -124,20 +132,23 @@ describe("the MCP server at /mcp", () => {
       number: 2,
       versions: [2, 1],
       url: `${BASE}/${ana.username}/dinners`,
-      files: { security, platform },
-      summary: JSON.parse(example("dinners.summary.json")),
+      files: { workflow: twoPlaces },
     });
-    expect(latest.text).toContain(security);
+    expect(latest.text).toContain(twoPlaces);
     const first = await call("get", { owner: ana.username, slug: "dinners", version: 1 }, ana.token);
-    expect(first.data).toMatchObject({ number: 1, files: { security }, url: `${BASE}/${ana.username}/dinners/v/1` });
-    expect(first.data.files.platform).toBeUndefined();
+    expect(first.data).toMatchObject({
+      number: 1,
+      files: { workflow },
+      summary: JSON.parse(example("dinners.summary.json")),
+      url: `${BASE}/${ana.username}/dinners/v/1`,
+    });
     const missing = await call("get", { owner: ana.username, slug: "dinners", version: 9 }, ana.token);
     expect([missing.isError, missing.text]).toEqual([true, "Not found."]);
   });
 
   it("lists an owner's workflows, and with no owner the caller's own and their organisations'", async () => {
     const { mo } = await twoOrgs();
-    await publish(mo.token, { owner: mo.username, slug: "dinners", security });
+    await publish(mo.token, { owner: mo.username, slug: "dinners", workflow });
     const acme = await call("list", { owner: "acme" }, mo.token);
     expect(acme.data.workflows.map((w: { slug: string }) => w.slug)).toEqual(["payroll"]);
     expect(acme.data.workflows[0]).toMatchObject({ owner: "acme", visibility: "private", url: `${BASE}/acme/payroll` });
@@ -154,7 +165,7 @@ describe("the MCP server at /mcp", () => {
     await publish(bea.token, {
       owner: bea.username,
       slug: "client-email",
-      security: security.replace("title: The family's dinners", "title: Client email"),
+      workflow: workflow.replace("title: The family's dinners", "title: Client email"),
     });
     const found = await call("search", { query: "client" }, bea.token);
     expect(found.data.workflows).toEqual([
@@ -216,7 +227,7 @@ describe("connecting an AI client", () => {
   it("signs in on the sign-in page, allows the client on the consent page and gets a token that works on /mcp", async () => {
     const ana = await person("ana");
     const { accessToken } = await connect(ana);
-    const res = await publish(accessToken, { owner: ana.username, slug: "dinners", security });
+    const res = await publish(accessToken, { owner: ana.username, slug: "dinners", workflow });
     expect(res.data).toMatchObject({ owner: ana.username, number: 1 });
   });
 
@@ -226,7 +237,7 @@ describe("connecting an AI client", () => {
     const { accessToken, clientId } = await connect(ana, { clientId: CIMD_CLIENT });
     expect(clientId).toBe(CIMD_CLIENT);
     expect(asked).toContain(CIMD_CLIENT);
-    const res = await publish(accessToken, { owner: ana.username, slug: "dinners", security });
+    const res = await publish(accessToken, { owner: ana.username, slug: "dinners", workflow });
     expect(res.data).toMatchObject({ owner: ana.username, number: 1 });
   });
 
@@ -251,11 +262,11 @@ describe("connecting an AI client", () => {
 describe("Positive boundary", () => {
   it("a member publishes to and reads their organisation's private workflow through /mcp, and the audit log records both", async () => {
     const { mo } = await twoOrgs();
-    const pushed = await publish(mo.token, { owner: "acme", slug: "payroll", security, platform });
+    const pushed = await publish(mo.token, { owner: "acme", slug: "payroll", workflow: twoPlaces });
     expect(pushed.isError).toBe(false);
     expect(pushed.data).toMatchObject({ owner: "acme", slug: "payroll", number: 2, url: `${BASE}/acme/payroll` });
     const read = await call("get", { owner: "acme", slug: "payroll" }, mo.token);
-    expect(read.data).toMatchObject({ visibility: "private", number: 2, files: { security, platform } });
+    expect(read.data).toMatchObject({ visibility: "private", number: 2, files: { workflow: twoPlaces } });
     expect(await audit("push", mo.id)).toEqual([{ target: "acme/payroll v2" }]);
     expect(await audit("private_view", mo.id)).toEqual([{ target: "acme/payroll v2" }]);
   });
@@ -264,7 +275,7 @@ describe("Positive boundary", () => {
 describe("Negative boundary", () => {
   it("a signed-out caller cannot publish: 401 with WWW-Authenticate pointing at the metadata, and nothing saved", async () => {
     const ana = await person("ana");
-    const res = await post("tools/call", { name: "publish", arguments: { owner: ana.username, slug: "dinners", security } });
+    const res = await post("tools/call", { name: "publish", arguments: { owner: ana.username, slug: "dinners", workflow } });
     expect(res.status).toBe(401);
     expect(res.headers.get("www-authenticate")).toBe(`Bearer resource_metadata="${METADATA}"`);
     const body = await message(res);
@@ -277,7 +288,7 @@ describe("Negative boundary", () => {
     for (const [method, params] of [
       ["initialize", initialize],
       ["tools/list", {}],
-      ["tools/call", { name: "check", arguments: { security } }],
+      ["tools/call", { name: "check", arguments: { workflow } }],
       ["tools/call", { name: "search", arguments: {} }],
       ["tools/call", { name: "get", arguments: { owner: "beta", slug: "open-plans" } }],
       ["tools/call", { name: "get", arguments: { owner: "acme", slug: "payroll" } }],
@@ -298,7 +309,7 @@ describe("Negative boundary", () => {
     expect((await call("list", { owner: "acme" }, nell.token)).data.workflows).toEqual([]);
     const searched = await call("search", { query: "dinners" }, nell.token);
     expect(searched.data.workflows.map((w: { slug: string }) => w.slug)).not.toContain("payroll");
-    const pushed = await publish(nell.token, { owner: "acme", slug: "payroll", security });
+    const pushed = await publish(nell.token, { owner: "acme", slug: "payroll", workflow });
     expect([pushed.isError, pushed.text]).toEqual([true, "Not found."]);
     const versions = await call("get", { owner: "acme", slug: "payroll" }, olive.token);
     expect(versions.data.versions).toEqual([1]);
@@ -315,10 +326,10 @@ describe("Cross-tenant boundary", () => {
       ]);
       expect((await call("list", {}, bearer)).data.workflows.map((w: { owner: string }) => w.owner)).not.toContain("beta");
       expect((await call("get", { owner: "beta", slug: "secret-plans" }, bearer)).text).toBe("Not found.");
-      expect((await publish(bearer, { owner: "beta", slug: "secret-plans", security })).text).toBe("Not found.");
-      const intoPublic = await publish(bearer, { owner: "beta", slug: "open-plans", security });
+      expect((await publish(bearer, { owner: "beta", slug: "secret-plans", workflow })).text).toBe("Not found.");
+      const intoPublic = await publish(bearer, { owner: "beta", slug: "open-plans", workflow });
       expect([intoPublic.isError, intoPublic.text]).toEqual([true, "Only members of beta can push here."]);
-      expect((await publish(bearer, { owner: "beta", slug: "brand-new", security })).isError).toBe(true);
+      expect((await publish(bearer, { owner: "beta", slug: "brand-new", workflow })).isError).toBe(true);
     }
     expect((await call("get", { owner: "beta", slug: "secret-plans" }, bea.token)).data.versions).toEqual([1]);
     expect((await call("get", { owner: "beta", slug: "open-plans" }, bea.token)).data.versions).toEqual([1]);
@@ -338,14 +349,14 @@ describe("Token and OAuth give the same access", () => {
       ["get", { owner: "beta", slug: "secret-plans" }],
       ["get", { owner: "beta", slug: "open-plans", version: 1 }],
       ["search", { query: "dinners" }],
-      ["check", { security }],
-      ["publish", { owner: "beta", slug: "open-plans", security }],
+      ["check", { workflow }],
+      ["publish", { owner: "beta", slug: "open-plans", workflow }],
     ];
     for (const [tool, args] of reads) {
       expect(await call(tool, args, oauth), `${tool} ${JSON.stringify(args)}`).toEqual(await call(tool, args, mo.token));
     }
-    const byToken = await publish(mo.token, { owner: "acme", slug: "payroll", security });
-    const byOAuth = await publish(oauth, { owner: "acme", slug: "payroll", security });
+    const byToken = await publish(mo.token, { owner: "acme", slug: "payroll", workflow });
+    const byOAuth = await publish(oauth, { owner: "acme", slug: "payroll", workflow });
     expect([byToken.data.number, byOAuth.data.number]).toEqual([2, 3]);
   });
 });
@@ -354,7 +365,7 @@ describe("Token and OAuth give the same access", () => {
 // organisation's own, which the client email workflow would fit.
 const worker = example("platforms/worker.yaml");
 const clientEmail = example("client-email.yaml");
-const machine = (id: string, label: string) => `awml: "0.3"
+const machine = (id: string, label: string) => `awml: "0.4"
 platform: { id: ${id}, label: "${label}" }
 off_for_up_to: PT0S
 steps: code
@@ -412,7 +423,7 @@ describe("platforms through /mcp", () => {
 
   it("refuses a description with mistakes, giving the messages `awml check` gives, and saves nothing", async () => {
     const ana = await person("ana");
-    const res = await call("add_platform", { owner: ana.username, slug: "box", description: "awml: \"0.3\"\nplatform: { id: x }\n" }, ana.token);
+    const res = await call("add_platform", { owner: ana.username, slug: "box", description: "awml: \"0.4\"\nplatform: { id: x }\n" }, ana.token);
     expect(res.isError).toBe(true);
     expect(res.text).toContain("description: platform has no label");
     expect((await call("get_platform", { owner: ana.username, slug: "box" }, ana.token)).text).toBe("Not found.");
@@ -437,10 +448,11 @@ describe("platforms through /mcp", () => {
 
   it("fits a workflow against the platforms named, or every platform the caller can see, as the API does", async () => {
     const { mo } = await twoOrgsWithPlatforms();
-    await publish(mo.token, { owner: mo.username, slug: "client-email", security: clientEmail });
+    await publish(mo.token, { owner: mo.username, slug: "client-email", workflow: clientEmail });
     for (const args of [
       { workflow: `${mo.username}/client-email` },
-      { security: clientEmail, platforms: ["beta/open-box", "acme/back-office"] },
+      { file: clientEmail, platforms: ["beta/open-box", "acme/back-office"] },
+      { workflow: `${mo.username}/client-email`, implementation: "office" },
     ]) {
       const fitted = await call("fit_workflow", args, mo.token);
       const api = await request("POST", "/api/v1/fit", { as: { token: mo.token }, json: args });
@@ -452,7 +464,7 @@ describe("platforms through /mcp", () => {
       "beta/open-box v1 doesn't fit: engagements is kept at notes/engagements, which the platform doesn't hold; project is kept at notes/projects, which the platform doesn't hold",
       "acme/back-office v1 fits: choose, draft and learn may use anthropic",
     ]);
-    const gaps = await call("fit_workflow", { security, platforms: ["beta/open-box"] }, mo.token);
+    const gaps = await call("fit_workflow", { file: workflow, platforms: ["beta/open-box"] }, mo.token);
     expect(gaps.text.split("\n")[0]).toBe("The workflow doesn't say all the fit needs:");
     expect((await call("fit_workflow", { workflow: "acme/nothing-here" }, mo.token)).text).toBe("Not found: acme/nothing-here.");
   });
@@ -473,9 +485,9 @@ describe("platforms through /mcp", () => {
     expect([hidden.isError, hidden.text]).toEqual([missing.isError, missing.text]);
     expect((await call("search_platforms", {}, nell.token)).data.platforms.map((p: { slug: string }) => p.slug)).toEqual(["open-box"]);
     expect((await call("add_platform", { owner: "acme", slug: "back-office", description: worker }, nell.token)).text).toBe("Not found.");
-    const named = await call("fit_workflow", { security: clientEmail, platforms: ["acme/back-office"] }, nell.token);
+    const named = await call("fit_workflow", { file: clientEmail, platforms: ["acme/back-office"] }, nell.token);
     expect([named.isError, named.text]).toEqual([true, "Not found: acme/back-office."]);
-    const all = await call("fit_workflow", { security: clientEmail }, nell.token);
+    const all = await call("fit_workflow", { file: clientEmail }, nell.token);
     expect(all.data.results.map((r: { platform: string }) => r.platform)).toEqual(["beta/open-box"]);
     expect((await call("get_platform", { owner: "acme", slug: "back-office" }, olive.token)).data.versions).toEqual([1]);
   });
@@ -490,7 +502,7 @@ describe("platforms through /mcp", () => {
       expect((await call("add_platform", { owner: "beta", slug: "vault", description: worker }, bearer)).text).toBe("Not found.");
       const intoPublic = await call("add_platform", { owner: "beta", slug: "open-box", description: worker }, bearer);
       expect([intoPublic.isError, intoPublic.text]).toEqual([true, "Only members of beta can push here."]);
-      const fitted = await call("fit_workflow", { security: clientEmail }, bearer);
+      const fitted = await call("fit_workflow", { file: clientEmail }, bearer);
       const said = JSON.stringify(fitted);
       for (const secret of ["beta/vault", "beta-vault", "Beta vault server"]) expect(said).not.toContain(secret);
       expect(fitted.data.results.map((r: { platform: string }) => r.platform).sort()).toEqual(["acme/back-office", "beta/open-box"]);
@@ -508,8 +520,8 @@ describe("platforms through /mcp", () => {
       ["get_platform", { owner: "acme", slug: "back-office" }],
       ["get_platform", { owner: "beta", slug: "vault" }],
       ["get_platform", { owner: "beta", slug: "open-box", version: 1 }],
-      ["fit_workflow", { security: clientEmail }],
-      ["fit_workflow", { security: clientEmail, platforms: ["beta/vault"] }],
+      ["fit_workflow", { file: clientEmail }],
+      ["fit_workflow", { file: clientEmail, platforms: ["beta/vault"] }],
       ["add_platform", { owner: "beta", slug: "open-box", description: worker }],
     ];
     for (const [tool, args] of calls) {
@@ -530,7 +542,7 @@ describe("Tokens on /mcp", () => {
     await revokeToken(db, mo.id, t.id);
     for (const [name, args] of [
       ["get", { owner: "acme", slug: "payroll" }],
-      ["publish", { owner: "acme", slug: "payroll", security }],
+      ["publish", { owner: "acme", slug: "payroll", workflow }],
     ] as const) {
       const res = await post("tools/call", { name, arguments: args }, mo.token);
       expect(res.status).toBe(401);

@@ -1,10 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import { and, eq, max } from "drizzle-orm";
+import { parse } from "yaml";
 import { getDb } from "@/db/client";
+import { version, workflow, type CheckResult } from "@/db/schema";
+import { engine } from "@/engine";
 import { edition, type Edition } from "@/edition";
 import { getAuth } from "@/server/auth";
 import { createToken } from "@/server/tokens";
 import { createOrganisation, addMember } from "@/server/organisations";
+import { findOwner } from "@/server/owners";
 import { route } from "./router";
 
 export const sentEmails: { to: string; url: string }[] = [];
@@ -93,4 +98,50 @@ export async function orgWith(
     if (!added.ok) throw new Error(added.errors[0]);
   }
   return org.organisation;
+}
+
+// A version stored before the registry took only AWML 0.4 files: a security
+// file, a platform file or both, written straight to the database, since a
+// push now refuses them. Makes the workflow on its first version.
+export async function storeLegacyVersion(
+  ownerSlug: string,
+  slug: string,
+  by: { id: string },
+  files: { security?: string; platform?: string },
+  visibility: "public" | "private" = "public",
+) {
+  const db = await getDb();
+  const owner = await findOwner(db, ownerSlug);
+  if (!owner) throw new Error(`no owner ${ownerSlug}`);
+  const ownerColumn =
+    owner.type === "user" ? eq(workflow.ownerUserId, owner.id) : eq(workflow.ownerOrganisationId, owner.id);
+  const sources = [files.security, files.platform].filter((f): f is string => f !== undefined);
+  const title = String((parse(sources[0]) as { title: string }).title);
+  let [w] = await db.select().from(workflow).where(and(ownerColumn, eq(workflow.slug, slug)));
+  w ??= (
+    await db
+      .insert(workflow)
+      .values({
+        ownerUserId: owner.type === "user" ? owner.id : null,
+        ownerOrganisationId: owner.type === "organisation" ? owner.id : null,
+        slug,
+        title,
+        visibility,
+      })
+      .returning()
+  )[0];
+  const [{ latest }] = await db.select({ latest: max(version.number) }).from(version).where(eq(version.workflowId, w.id));
+  const check: CheckResult = {};
+  for (const view of ["security", "platform"] as const)
+    if (files[view] !== undefined) check[view] = await engine.check(files[view]);
+  await db.insert(version).values({
+    workflowId: w.id,
+    number: (latest ?? 0) + 1,
+    pushedBy: by.id,
+    security: files.security ?? null,
+    platform: files.platform ?? null,
+    check,
+    summary: await engine.summarise(files),
+  });
+  await db.update(workflow).set({ title, updatedAt: new Date() }).where(eq(workflow.id, w.id));
 }

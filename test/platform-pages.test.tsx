@@ -16,7 +16,7 @@ import { example, orgWith, person, request, type Who } from "./helpers";
 import { call } from "./mcp-client";
 import { renderPage, type Page } from "./pages";
 
-const backOffice = `awml: "0.3"
+const backOffice = `awml: "0.4"
 platform: { id: back-office, label: "Acme's back office" }
 off_for_up_to: PT0S
 steps: code
@@ -201,7 +201,7 @@ describe("the empty state", () => {
 
   it("gives an example request the MCP tools carry out: add_platform, then fit_workflow", async () => {
     const ana = await person("ana");
-    const published = await call("publish", { owner: ana.username, slug: "client-email", security: example("client-email.yaml") }, ana.token);
+    const published = await call("publish", { owner: ana.username, slug: "client-email", workflow: example("client-email.yaml") }, ana.token);
     expect(published.isError).toBe(false);
     const added = await call("add_platform", { owner: ana.username, slug: "laptop", description: laptop }, ana.token);
     expect(added.isError).toBe(false);
@@ -299,7 +299,7 @@ describe("Private platforms on the platform pages", () => {
 const commented = `# Codex on Ana's laptop, which she shuts when she travels.
 # Set up as https://example.com/codex-setup says.
 
-awml: "0.3"
+awml: "0.4"
 platform: { id: codex-laptop, label: "Codex on a laptop" }
 # Shut for up to a fortnight on holiday.
 # See https://example.com/holidays.
@@ -380,7 +380,7 @@ describe("a platform's page", () => {
 
   it("puts the words for an always-on agent platform that calls named companies and holds nothing", async () => {
     const ana = await person("ana");
-    const box = `awml: "0.3"
+    const box = `awml: "0.4"
 platform: { id: box, label: "A box" }
 off_for_up_to: P2DT1H30M
 steps: agent
@@ -451,7 +451,7 @@ holds: []
       `/platforms/${o}/laptop/v/1/recipe`,
       `/platforms/${o}/laptop/v/1/yaml`,
     ]);
-    expect(old.html).toContain(`href="/platforms/${o}/laptop">Version 2</a>`);
+    expect(old.html).toContain(`href="/platforms/${o}/laptop">#2</a>`);
     expect(text((await show(PlatformPage, o, "laptop")).html)).toContain("Off for up to 7 days");
     expect(text((await renderPage(PlatformVersionRecipePage, v1)).html)).toContain("Install on the laptop");
     expect((await renderPage(PlatformVersionYamlPage, v1)).html).toContain(`href="/platforms/${o}/laptop/v/1/description.yaml"`);

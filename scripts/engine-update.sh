@@ -35,22 +35,39 @@ dirty=$(git -C "$src" status --porcelain -- '*.go' go.mod go.sum cmd wasm | grep
 # nearest one and how far past it, and the commit.
 printf '{ "tag": "%s", "commit": "%s" }\n' "$(git -C "$src" describe --tags --always "$commit")$dirty" "$commit" > "$out/version.json"
 
-# What the native CLI says, for the tests to compare against.
-cp "$src/examples/dinners-security.yaml" "$src/examples/dinners-platform.yaml" "$src/wasm/testdata/bad.yaml" "$fixtures/"
-(cd "$fixtures" && "$tmp/awml" summary --json dinners-security.yaml > dinners-security.summary.json)
-(cd "$fixtures" && "$tmp/awml" summary --json dinners-platform.yaml > dinners-platform.summary.json)
-(cd "$fixtures" && "$tmp/awml" summary --json dinners-security.yaml dinners-platform.yaml > dinners.summary.json)
+# What the native CLI says, for the tests to compare against: a 0.4 workflow,
+# drawn as its design and as its home implementation; AWML's own file with
+# mistakes, the registry's 0.4 one, fixtures/bad-04.yaml, and its 0.4 file
+# with a warning, fixtures/warning-04.yaml.
+cp "$src/examples/dinners.yaml" "$src/wasm/testdata/bad.yaml" "$fixtures/"
+(cd "$fixtures" && "$tmp/awml" summary --json dinners.yaml > dinners.summary.json)
 (cd "$fixtures" && { "$tmp/awml" check bad.yaml || true; } > bad.check.txt)
-(cd "$fixtures" && "$tmp/awml" draw dinners-security.yaml > dinners-security.mmd)
+(cd "$fixtures" && { "$tmp/awml" check bad-04.yaml || true; } > bad-04.check.txt)
+(cd "$fixtures" && "$tmp/awml" check warning-04.yaml > warning-04.check.txt)
+(cd "$fixtures" && "$tmp/awml" draw dinners.yaml > dinners.mmd)
+(cd "$fixtures" && "$tmp/awml" draw --implementation home dinners.yaml > dinners-home.mmd)
 
-# The fit: a workflow that says what it needs, AWML's example platforms, and
-# what `awml fit --json` says of them; and the gaps it finds in a workflow
-# that doesn't say.
+# Versions stored before the registry took only 0.4 files: a 0.2 pair and a
+# 0.3 security view, kept in fixtures/legacy, and what this AWML says of them.
+legacy="$fixtures/legacy"
+(cd "$legacy" && "$tmp/awml" summary --json dinners-security.yaml > dinners-security.summary.json)
+(cd "$legacy" && "$tmp/awml" summary --json dinners-platform.yaml > dinners-platform.summary.json)
+(cd "$legacy" && "$tmp/awml" summary --json dinners-security.yaml dinners-platform.yaml > dinners.summary.json)
+(cd "$legacy" && "$tmp/awml" draw dinners-security.yaml > dinners-security.mmd)
+(cd "$legacy" && "$tmp/awml" draw dinners-platform.yaml > dinners-platform.mmd)
+
+# The fit: a workflow that says what it needs, AWML's example platforms
+# marked 0.4, the only platform descriptions the registry takes, and what
+# `awml fit --json` says of them, for the design and for its office
+# implementation; and the gaps it finds in a workflow that doesn't say.
 rm -rf "$fixtures/platforms"
 mkdir -p "$fixtures/platforms"
 cp "$src/examples/client-email.yaml" "$fixtures/"
-cp "$src/examples/platforms/"*.yaml "$fixtures/platforms/"
+for description in "$src/examples/platforms/"*.yaml; do
+  sed 's/^awml: "0\.3"$/awml: "0.4"/' "$description" > "$fixtures/platforms/$(basename "$description")"
+done
 (cd "$fixtures" && "$tmp/awml" fit --json client-email.yaml platforms/*.yaml > client-email.fit.json)
-(cd "$fixtures" && { "$tmp/awml" fit --json dinners-security.yaml platforms/worker.yaml || true; } > dinners.fit.json)
+(cd "$fixtures" && "$tmp/awml" fit --json --implementation office client-email.yaml platforms/*.yaml > client-email-office.fit.json)
+(cd "$fixtures" && { "$tmp/awml" fit --json dinners.yaml platforms/worker.yaml || true; } > dinners.fit.json)
 
 echo "vendor/awml now holds $(head -1 "$out/VERSION")"

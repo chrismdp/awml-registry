@@ -2,7 +2,7 @@
 
 You do not have to host a registry yourself. There is an official one at [awml.io](https://awml.io), free for public workflows.
 
-The AWML Registry stores, versions and draws [AWML](https://github.com/chrismdp/awml) workflow files. You push a workflow's security file, platform file or both, and the registry checks them, numbers each push as a new version, and draws both views. Public workflows are open to anyone. An organisation can also keep private workflows, which only its members see, with an inventory of all its workflows and an audit log.
+The AWML Registry stores, versions and draws [AWML](https://github.com/chrismdp/awml) workflow files. You push a workflow's one AWML 0.4 file, which holds its design and any implementations, and the registry checks it, numbers each push as a new version, and draws its security view and the platform view of each implementation. Public workflows are open to anyone. An organisation can also keep private workflows, which only its members see, with an inventory of all its workflows and an audit log.
 
 The registry also keeps platforms: descriptions of where a workflow can run, each with an optional install recipe. It works out which platforms a workflow fits, with the same AWML code as `awml fit`.
 
@@ -29,10 +29,12 @@ To push from the command line, make a token at `/settings/tokens`, then:
 ```sh
 curl -X POST http://localhost:3000/api/v1/<you>/<workflow>/versions \
   -H "Authorization: Bearer <token>" -H "content-type: application/json" \
-  -d '{"security": "<the YAML of the security file>"}'
+  -d '{"workflow": "<the YAML of the workflow file>"}'
 ```
 
-The workflow's page is then at `/<you>/<workflow>`. Each view has its own address: `/<you>/<workflow>/security`, `/platform`, `/yaml`, which shows the files as text to copy or download, and `/checks`, which says what checking the files found. Older versions are at `/<you>/<workflow>/v/<n>`, with their views at `/v/<n>/security` and so on.
+The registry takes only AWML 0.4 files, marked `awml: "0.4"`. It refuses an older file with a 400 that says how to convert it. To turn a 0.3 or 0.2 pair into one file, run `awml convert security.yaml platform.yaml > workflow.yaml` and push that.
+
+The workflow's page is then at `/<you>/<workflow>`. Each view has its own address: `/<you>/<workflow>/security`, which draws the design; `/platform`, which draws the first implementation, with each at `/platform/<implementation>`; `/yaml`, which shows the file as text to copy or download; and `/checks`, which says what checking the file found. Older versions are at `/<you>/<workflow>/v/<n>`, with their views at `/v/<n>/security` and so on. Versions pushed before the registry took only 0.4 files keep their security and platform files, and their pages still show them.
 
 Run the tests with `npm test` and the type check with `npm run typecheck`.
 
@@ -60,7 +62,9 @@ curl -X POST http://localhost:3000/api/v1/fit \
   -d '{"workflow": "<owner>/<workflow>", "platforms": ["<owner>/<platform>"]}'
 ```
 
-Leave out `platforms` to fit against every platform you can see: the public ones, and your organisations' private ones. Send `"security": "<YAML>"` in place of `workflow` to fit a security view that is not in the registry. For each platform, the answer says whether the workflow fits, and if not, every reason. A new registry has no platforms until someone pushes one.
+Leave out `platforms` to fit against every platform you can see: the public ones, and your organisations' private ones. Send `"file": "<YAML>"` in place of `workflow` to fit a 0.4 file that is not in the registry. For each platform, the answer says whether the workflow's design fits, and if not, every reason. Add `"implementation": "<id>"` to judge where one implementation places each part instead, as `awml fit --implementation` does: each block is judged against the platform whose description it names, found among those platforms by its id. A new registry has no platforms until someone pushes one.
+
+A platform description must be marked `awml: "0.4"`. The registry refuses an older one with a 400 that says to change it.
 
 ## Use the awml command
 
@@ -69,7 +73,7 @@ The `awml` command talks to awml.io unless you tell it otherwise. To use your ow
 ```sh
 export AWML_REGISTRY_URL=http://localhost:3000
 awml login    # asks for a token made at /settings/tokens
-awml push <you>/<workflow> security.yaml
+awml push <you>/<workflow> workflow.yaml
 ```
 
 If the registry says the token is not valid, it was revoked or mistyped. Make a new one and run `awml login` again.
@@ -150,6 +154,8 @@ docker compose up -d
 ```
 
 The container brings the database up to date each time it starts. `docker compose ps` shows it as healthy once it answers.
+
+**Moving to AWML 0.4.** The registry takes only AWML 0.4 files. Versions already stored stay readable as they were. To make each workflow's and platform's latest version 0.4, run `scripts/convert-to-04.sh` with a token in `AWML_TOKEN` and the `awml` command built from the AWML the registry runs (`vendor/awml/VERSION`). It joins each pair with `awml convert` and pushes the result as a new version. Run it with `--dry-run` first: it says what it would push and lists what it cannot convert. `scripts/convert-to-04.sh --help` says the rest.
 
 `BETTER_AUTH_URL` must match the address in the browser, port included. To serve on port 8080, change the port mapping to `"8080:3000"` and `BETTER_AUTH_URL` to `http://localhost:8080`. If you change one without the other, signing in fails with "Invalid origin".
 

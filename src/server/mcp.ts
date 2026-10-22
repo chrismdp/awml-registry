@@ -94,8 +94,17 @@ const NOT_FOUND = refused(["Not found."]);
 
 const page = (owner: string, slug: string) => ownUrl(`/${owner}/${slug}`);
 
-const yamlFile = (view: string) =>
-  z.string().optional().describe(`The ${view} file (view: ${view}), as YAML text. Send this file, the other or both.`);
+const workflowFile = z
+  .string()
+  .optional()
+  .describe('The workflow\'s one AWML 0.4 file (awml: "0.4"), as YAML text: its design and any implementations');
+// The fields of AWML 0.3's pair, kept so a client that still sends them hears
+// how to convert. A 0.4 file sent alone as security is taken as the workflow.
+const legacyFile = (view: string) =>
+  z
+    .string()
+    .optional()
+    .describe(`Not used: AWML 0.3's ${view} view, which the registry no longer takes. Send the 0.4 file as workflow.`);
 const owner = z.string().describe("A username or an organisation's slug, as in <registry>/owner/slug");
 const slug = z.string().describe("The workflow's slug: lowercase letters, digits and single hyphens");
 
@@ -128,10 +137,13 @@ function mayUse(models: Record<string, string[]>) {
 function fitText(fit: Fit) {
   if (fit.gaps.length) return ["The workflow doesn't say all the fit needs:", ...fit.gaps].join("\n");
   const lines = fit.workflow ? [`${fit.workflow.owner}/${fit.workflow.slug} v${fit.workflow.number}:`] : [];
+  if (fit.implementation !== null) lines.push(`The implementation ${fit.implementation}, block by block:`);
   if (!fit.results.length) lines.push("No platforms to fit against.");
   for (const r of fit.results) {
-    const where = `${r.platform} v${r.number}`;
-    if (r.fits) lines.push(`${where} fits${Object.keys(r.models).length ? `: ${mayUse(r.models)}` : ""}`);
+    const where =
+      "block" in r ? (r.platform === null ? r.block : `${r.block} on ${r.platform} v${r.number}`) : `${r.platform} v${r.number}`;
+    if ("block" in r && !r.judged) lines.push(`${r.block} isn't judged: it names no platform`);
+    else if (r.fits) lines.push(`${where} fits${Object.keys(r.models).length ? `: ${mayUse(r.models)}` : ""}`);
     else lines.push(`${where} doesn't fit: ${r.reasons.join("; ")}`);
   }
   return lines.join("\n");
@@ -142,8 +154,9 @@ function server(person: Person) {
     { name: "awml-registry", version: "1.0.0" },
     {
       instructions:
-        "The AWML registry stores and draws AWML workflows, and the platforms they can run on. Use check to find " +
-        "mistakes in a workflow's YAML, publish to save a new version of owner/slug, get to read one, list for an " +
+        "The AWML registry stores and draws AWML 0.4 workflows, each one file holding its design and any " +
+        "implementations, and the platforms they can run on. Use check to find mistakes in a workflow's file, " +
+        "publish to save a new version of owner/slug, get to read one, list for an " +
         "owner's workflows and search for public ones. Use search_platforms and get_platform to find platforms and " +
         "read their descriptions and install recipes, add_platform to save one, and fit_workflow to find where a " +
         "workflow can run. Use set_username to change the signed-in person's own username. Every call acts as the " +
@@ -156,12 +169,12 @@ function server(person: Person) {
     {
       title: "Check a workflow",
       description:
-        "Check an AWML workflow's security file, platform file or both with the registry's AWML engine, the same check `awml check` runs. Gives the mistakes, or none. Saves nothing.",
-      inputSchema: z.object({ security: yamlFile("security"), platform: yamlFile("platform") }),
+        "Check an AWML 0.4 workflow's file with the registry's AWML engine, the same check `awml check` runs. Gives the mistakes, or none. Saves nothing. The registry takes only AWML 0.4: convert a 0.3 pair with `awml convert security.yaml platform.yaml > workflow.yaml` first.",
+      inputSchema: z.object({ workflow: workflowFile, security: legacyFile("security"), platform: legacyFile("platform") }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ security, platform }) => {
-      const checked = await checkWorkflow({ security, platform });
+    async ({ workflow, security, platform }) => {
+      const checked = await checkWorkflow({ workflow, security, platform });
       if (!checked.ok) return refused(checked.errors);
       const { mistakes } = checked;
       const text = mistakes.length
@@ -176,12 +189,13 @@ function server(person: Person) {
     {
       title: "Publish a workflow",
       description:
-        "Save a new version of the workflow owner/slug from its security file, platform file or both. The files are checked first and refused if they have mistakes. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private, and only an organisation can keep a private one. Gives the workflow's page and the new version number.",
+        "Save a new version of the workflow owner/slug from its one AWML 0.4 file. The file is checked first and refused if it has mistakes, and an older AWML is refused: convert a 0.3 pair with `awml convert security.yaml platform.yaml > workflow.yaml` first. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private, and only an organisation can keep a private one. Gives the workflow's page and the new version number.",
       inputSchema: z.object({
         owner,
         slug,
-        security: yamlFile("security"),
-        platform: yamlFile("platform"),
+        workflow: workflowFile,
+        security: legacyFile("security"),
+        platform: legacyFile("platform"),
         visibility: z
           .enum(["public", "private"])
           .optional()
@@ -189,9 +203,9 @@ function server(person: Person) {
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ owner, slug, security, platform, visibility }) => {
+    async ({ owner, slug, workflow, security, platform, visibility }) => {
       const db = await getDb();
-      const pushed = await pushVersion(db, person, owner, slug, { security, platform, visibility });
+      const pushed = await pushVersion(db, person, owner, slug, { workflow, security, platform, visibility });
       if (!pushed.ok) return refused(pushed.errors);
       const url = page(pushed.owner, pushed.slug);
       return answer(`Saved version ${pushed.number} of ${pushed.owner}/${pushed.slug}: ${url}`, {
@@ -352,7 +366,9 @@ function server(person: Person) {
       inputSchema: z.object({
         owner,
         slug: platformSlug,
-        description: z.string().describe("The platform description, as YAML: awml, platform, off_for_up_to, steps, agents, calls, holds"),
+        description: z
+          .string()
+          .describe('The platform description, as YAML: awml (which must be "0.4"), platform, off_for_up_to, steps, agents, calls, holds'),
         recipe: z.string().optional().describe("The install recipe, as Markdown. Never a secret."),
         visibility: z
           .enum(["public", "private"])
@@ -380,16 +396,18 @@ function server(person: Person) {
     {
       title: "Find where a workflow can run",
       description:
-        "Judge a workflow's security view against platforms with the AWML engine, as `awml fit` does: for each platform, whether the workflow fits, every reason it doesn't, and the companies each AI step may use there. Name the workflow as owner/slug or owner/slug@version, or send its security view as YAML. Name the platforms as owner/slug or owner/slug@version, or leave them out to fit against every platform you may see. When the workflow doesn't say all the fit needs, gives the gaps instead.",
+        "Judge a workflow against platforms with the AWML engine, as `awml fit` does: for each platform, whether the workflow's design fits, every reason it doesn't, and the companies each AI step may use there. With an implementation, as `awml fit --implementation` does, judges that implementation's placement instead, each block against the platform whose description it names. Name the workflow as owner/slug or owner/slug@version, or send its AWML 0.4 file as YAML. Name the platforms as owner/slug or owner/slug@version, or leave them out to fit against every platform you may see. When the workflow doesn't say all the fit needs, gives the gaps instead.",
       inputSchema: z.object({
         workflow: z.string().optional().describe("owner/slug or owner/slug@version"),
-        security: z.string().optional().describe("The security view, as YAML, in place of a workflow"),
+        file: z.string().optional().describe("The workflow's AWML 0.4 file, as YAML, in place of a workflow"),
+        security: legacyFile("security"),
+        implementation: z.string().optional().describe("The id of one of the workflow's implementations, to judge its placement"),
         platforms: z.array(z.string()).optional().describe("Platforms as owner/slug or owner/slug@version. Default: every one you may see."),
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ workflow, security, platforms }) => {
-      const fitted = await fitWorkflow(await getDb(), person, { workflow, security, platforms });
+    async ({ workflow, file, security, implementation, platforms }) => {
+      const fitted = await fitWorkflow(await getDb(), person, { workflow, file, security, implementation, platforms });
       if (!fitted.ok) return refused(fitted.errors);
       return answer(fitText(fitted.fit), fitted.fit);
     },

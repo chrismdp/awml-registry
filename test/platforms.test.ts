@@ -5,7 +5,7 @@ import { signIn, example, person, request, type Who } from "./helpers";
 
 const worker = example("platforms/worker.yaml");
 const laptop = example("platforms/codex-laptop.yaml");
-const security = example("dinners-security.yaml");
+const dinners = example("dinners.yaml");
 
 const recipe = `# Install on a code worker
 
@@ -51,12 +51,12 @@ describe("pushing a platform through the API", () => {
     expect((await request("GET", `/api/v1/platforms/${ana.username}/box`)).status).toBe(404);
   });
 
-  it("refuses a workflow's view sent as a platform description", async () => {
+  it("refuses a workflow sent as a platform description", async () => {
     const ana = await person("ana");
-    const res = await pushPlatform(ana.username, "box", { token: ana.token }, { description: security });
+    const res = await pushPlatform(ana.username, "box", { token: ana.token }, { description: dinners });
     expect(res.status).toBe(422);
     expect((await res.json()).errors).toEqual([
-      "description: this is a workflow's security view, not a platform description. Push it as a workflow.",
+      "description: this is a workflow, not a platform description. Push it as a workflow.",
     ]);
   });
 
@@ -64,11 +64,11 @@ describe("pushing a platform through the API", () => {
     const ana = await person("ana");
     const res = await request("POST", `/api/v1/${ana.username}/box/versions`, {
       as: { token: ana.token },
-      json: { security: worker },
+      json: { workflow: worker },
     });
     expect(res.status).toBe(422);
     expect((await res.json()).errors).toEqual([
-      "security: this is a platform description, not a workflow's view. Push it as a platform.",
+      "workflow: this is a platform description, not a workflow. Push it as a platform.",
     ]);
   });
 
@@ -112,7 +112,7 @@ describe("pushing a platform through the API", () => {
     expect((await pushPlatform(ana.username, "dinners", { token: ana.token }, { description: worker })).status).toBe(201);
     const workflow = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
       as: { token: ana.token },
-      json: { security },
+      json: { workflow: dinners },
     });
     expect((await workflow.json()).number).toBe(1);
   });

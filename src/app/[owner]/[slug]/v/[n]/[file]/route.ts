@@ -1,6 +1,6 @@
 import { getDb } from "@/db/client";
 import type { Params } from "@/server/http";
-import { readVersion, VIEWS, type View } from "@/server/registry";
+import { FILES, readVersion, type FileName } from "@/server/registry";
 import { oldNameRedirect } from "@/server/usernames";
 import { requestViewer } from "@/server/viewer";
 
@@ -12,15 +12,15 @@ export async function GET(req: Request, { params }: Params<"owner" | "slug" | "n
   if (moved) return moved;
   const asker = await requestViewer(req.headers);
   if (!asker.ok) return plain(asker.status, ...asker.errors);
-  const view = file.replace(/\.yaml$/, "") as View;
-  if (!file.endsWith(".yaml") || !VIEWS.includes(view)) return plain(404, "Not found.");
+  const name = file.replace(/\.yaml$/, "") as FileName;
+  if (!file.endsWith(".yaml") || !FILES.includes(name)) return plain(404, "Not found.");
   const found = await readVersion(await getDb(), asker.viewer, owner, slug, n);
-  const text = found?.files[view];
+  const text = found?.files[name];
   if (text === undefined) return plain(404, "Not found.");
   return new Response(text, {
     headers: {
       "content-type": "application/yaml; charset=utf-8",
-      "content-disposition": `inline; filename="${slug}-v${found!.number}-${view}.yaml"`,
+      "content-disposition": `inline; filename="${slug}-v${found!.number}-${name}.yaml"`,
     },
   });
 }

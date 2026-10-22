@@ -24,12 +24,13 @@ This file records what the registry does and the decisions behind it. AWML itsel
 | Common platforms | Data, not code. This repo seeds no platforms, so a self-hosted registry starts with none, and nothing in the code knows which platforms are common. Tests use made-up platforms and AWML's example ones. Decided 2026-10-22. |
 | The fit | Only the AWML engine judges where a workflow can run, the same Go package as `awml fit`, so the registry and the CLI give the same answer. Decided 2026-10-22. |
 | Usernames | A person sets their own username, by the rules of an organisation's slug. Workflows and platforms are stored against the account, so they move with the name. A name given up redirects to the new one until a person or an organisation takes it (see "Usernames"). Decided 2026-10-22. |
+| AWML 0.4 only | The registry takes only AWML 0.4 files: one file per workflow version, holding the design and any implementations, and platform descriptions marked `"0.4"`. Anything marked as an older AWML is refused with a 400 that says how to convert it. Versions stored before stay readable as history, and are never rewritten. Decided 2026-10-22, when AWML 0.4 kept each workflow in one file. |
 | Drawings' font | AWML's drawings ask for Inter. The registry serves Inter itself, as a WOFF2 under the SIL Open Font License, so a drawing looks the same in every browser. Decided 2026-10-22. |
 
 ## What v1 does
 
-- **Push and pull.** Push a workflow's security file, platform file or both from the CLI or the API. Every version can be downloaded as YAML or pulled with the CLI.
-- **A page per version.** Each view drawn behind its own tab, at its own address (Mermaid, drawn in the browser from the text the AWML package produces, in the Inter font the registry serves, loaded before Mermaid measures the labels), and the summary worked out from the files at push. A YAML tab shows the files themselves and nothing else, each with a Copy button and a Download link. A Checks tab says what checking the files found (see "Checks").
+- **Push and pull.** Push a workflow's one AWML 0.4 file from the CLI, the API or the MCP tools (see "AWML 0.4 files"). Every version can be downloaded as YAML or pulled with the CLI.
+- **A page per version.** Each view drawn behind its own tab, at its own address (Mermaid, drawn in the browser from the text the AWML package produces, in the Inter font the registry serves, loaded before Mermaid measures the labels), and the summary worked out from the file at push. A YAML tab shows the file itself and nothing else, with a Copy button and a Download link. A Checks tab says what checking the file found (see "Checks").
 - **A public gallery.** Anyone can browse public workflows and search them by title. Anyone signed in can publish one, free.
 - **Private workflows for an organisation.** Only its members can see them. In this repo's default edition every organisation may keep private workflows; the hosted edition limits that to paying organisations.
 - **An inventory for each organisation.** Every workflow in one table with its summary counts, plus totals across them all.
@@ -44,7 +45,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 | Organisation | Slug, name, created at |
 | Membership | A user in an organisation, as `owner` or `member` |
 | Workflow | Owner (a user or an organisation, never both), slug, title, `public` or `private` |
-| Version | Workflow, number, who pushed it and when, at most one security file and one platform file (YAML text), the check result, the summary as JSON |
+| Version | Workflow, number, who pushed it and when, the AWML 0.4 workflow file (YAML text), the check result, the summary as JSON. A version stored before the registry took only 0.4 files has no workflow file, and at most one security file and one platform file instead |
 | Platform | Owner (a user or an organisation, never both), slug, label (from the latest description), `public` or `private` |
 | Platform version | Platform, number, who pushed it and when, the platform description (YAML text) and the install recipe (Markdown text), if any |
 | Token | User, name, SHA-256 hash of the secret (the secret is shown once), created at, last used at |
@@ -64,22 +65,25 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `/gallery` | The gallery of public workflows, newest first, with search by title |
 | `/explore` | Where the gallery was. Redirects permanently (308) to `/gallery`, keeping the search |
 | `/{owner}` | A user's or organisation's workflows: the public ones to everyone, the private ones to members too |
-| `/{owner}/{slug}` | The latest version: its security view drawn (its platform view, when it has no security file), the summary, the list of versions, and the command to push the next one. The header gives the owner / slug, the title, public or private and the version, and nothing more |
-| `/{owner}/{slug}/security`, `/{owner}/{slug}/platform` | The latest version the same way, with that view drawn. 404 when the version has no such file |
-| `/{owner}/{slug}/yaml` | The latest version's files as text, `security.yaml` then `platform.yaml`, each full width with a Copy button and a Download link. The page keeps its header and its tabs, and shows nothing generated: no drawing, no summary, no versions, no Change it box |
-| `/{owner}/{slug}/checks` | The latest version's checks (see "Checks"). Its tab, after YAML, carries a tick when every file passes, or the number of mistakes |
-| `/{owner}/{slug}/v/{n}`, `/{owner}/{slug}/v/{n}/security`, `/platform`, `/yaml`, `/checks` | One version, the same ways |
+| `/{owner}/{slug}` | The latest version: its security view drawn, the summary, the list of versions, and the command to push the next one, `awml push {owner}/{slug} workflow.yaml`. The header gives the owner / slug, the title, public or private and the version, and nothing more |
+| `/{owner}/{slug}/security` | The latest version the same way, the security view drawn from the design |
+| Versions list | On a workflow's page and a platform's page, when there is more than one version: one line each, as `#8 · chrismdp · Today 4:43pm · 0.4`. The number links to that version, or is bold when it is the one shown; who pushed it links to their page; the time is in UK time, "Today" or "Yesterday" for those days and otherwise as `18 Oct 2026, 9:12am`; and last comes the AWML its file's `awml:` field gives, which for a version stored before is its security or platform file's |
+| `/{owner}/{slug}/platform` | The latest version with the platform view of its first implementation drawn, under that implementation's label. With more than one implementation, a choice of them, each linked to its own address. With none, it says "This workflow doesn't say where it runs yet." |
+| `/{owner}/{slug}/platform/{implementation}` | The platform view of that implementation, the same way. 404 when the version has no such implementation |
+| `/{owner}/{slug}/yaml` | The latest version's file as text, `workflow.yaml`, full width with a Copy button and a Download link. The page keeps its header and its tabs, and shows nothing generated: no drawing, no summary, no versions, no Change it box |
+| `/{owner}/{slug}/checks` | The latest version's checks (see "Checks"). Its tab, after YAML, carries a tick when the file passes, or the number of mistakes |
+| `/{owner}/{slug}/v/{n}`, `/{owner}/{slug}/v/{n}/security`, `/platform`, `/platform/{implementation}`, `/yaml`, `/checks` | One version, the same ways |
 | `/{owner}/{slug}?view={view}`, `/{owner}/{slug}/v/{n}?view={view}` | Where the views were. Redirect permanently (308) to the view's own address, such as `/{owner}/{slug}/platform`, whether or not the workflow is there, so the redirect tells nobody anything |
-| `/{owner}/{slug}/v/{n}/{view}.yaml` | One file as YAML |
+| `/{owner}/{slug}/v/{n}/workflow.yaml` | The version's file as YAML |
 | `/{org}/inventory` | The organisation's inventory, for members |
 | `/{owner}/platforms` | A user's or organisation's platforms, each with its label linked to its page, its latest version and links to its page's Install recipe tab: the public ones to everyone, the private ones to members too. With none, what a platform description is and, to those who may add one there, how. Linked from `/{owner}` and the inventory |
 | `/{org}/settings` | Members and the audit log, for owners (the hosted edition adds billing) |
 | `/settings` | Signing out, the username with Save, the AI apps connected to `/mcp` with a Disconnect for each, and the person's organisations |
 | `/settings/tokens` | Make and revoke API tokens |
-| `POST /api/v1/{owner}/{slug}/versions` | Push a version. Body JSON `{"security": "<yaml>"?, "platform": "<yaml>"?, "visibility": "public"\|"private"?}`, at least one file. The first push makes the workflow and sets its visibility (default public). Returns 201 with `{owner, slug, number, url}`, or 422 with `{errors: [...]}` |
+| `POST /api/v1/{owner}/{slug}/versions` | Push a version. Body JSON `{"workflow": "<yaml>", "visibility": "public"\|"private"?}`, one AWML 0.4 file. A 0.4 file sent alone as `security`, as `awml push` 0.4.0 sends it, is taken the same. The first push makes the workflow and sets its visibility (default public). Returns 201 with `{owner, slug, number, url}`, 400 with `{errors: [...]}` for an older AWML (see "AWML 0.4 files"), or 422 with `{errors: [...]}` |
 | `GET /api/v1/{owner}/{slug}` | The workflow and its list of versions |
-| `GET /api/v1/{owner}/{slug}/v/{n}` | One version's files, check result and summary |
-| `POST /api/v1/platforms/{owner}/{slug}/versions` | Push a platform version. Body JSON `{"description": "<yaml>", "recipe": "<markdown>"?, "visibility": "public"\|"private"?}`. The first push makes the platform and sets its visibility (default public). Returns 201 with `{owner, slug, number, url}`, or 422 with `{errors: [...]}` |
+| `GET /api/v1/{owner}/{slug}/v/{n}` | One version's files, check result and summary. `files` is `{workflow}`, or for a version stored before, `{security?, platform?}` |
+| `POST /api/v1/platforms/{owner}/{slug}/versions` | Push a platform version. Body JSON `{"description": "<yaml>", "recipe": "<markdown>"?, "visibility": "public"\|"private"?}`. The description must be marked `awml: "0.4"`. The first push makes the platform and sets its visibility (default public). Returns 201 with `{owner, slug, number, url}`, 400 with `{errors: [...]}` for an older AWML, or 422 with `{errors: [...]}` |
 | `GET /api/v1/platforms/{owner}/{slug}` | The platform's latest version: label, visibility, number, who pushed it and when, `description`, `recipe` (or null), and the list of versions |
 | `GET /api/v1/platforms/{owner}/{slug}/v/{n}` | One platform version, the same way, without the list |
 | `/platforms` | The shared platforms: every platform the viewer may see, newest first, searched by label or slug. Linked from an owner's platforms page when it has none |
@@ -91,8 +95,8 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `POST /api/v1/fit` | Where a workflow can run (see "Platforms and the fit") |
 | `PATCH /api/v1/me` | Change the caller's own username. Body JSON `{"username": "<new name>"}`. Returns 200 with `{username, previous, url}`, 422 with `{errors: [...]}` for a name that is taken, reserved or badly formed, or 401 when nobody is signed in (see "Usernames") |
 | `awml login` | Asks for a token made on the website, and saves it in `~/.config/awml/credentials`, readable only by its owner |
-| `awml push owner/slug security.yaml platform.yaml [--private]` | Checks the files locally, then pushes them |
-| `awml pull owner/slug[@n] [-o dir]` | Downloads the files of the latest version, or of version n |
+| `awml push owner/slug workflow.yaml [--private]` | Checks the file locally, then pushes it |
+| `awml pull owner/slug[@n] [-o dir]` | Downloads the files of the latest version, or of version n. awml 0.4.0 writes only `security.yaml` and `platform.yaml`, so it cannot yet pull a 0.4 version, whose API answer has `files.workflow` |
 | `/mcp` | The MCP server, streamable HTTP (see "The MCP server") |
 | `/.well-known/oauth-protected-resource[/mcp]` | Where `/mcp` says its sign-in lives (RFC 9728) |
 | `/.well-known/oauth-authorization-server[/api/auth]` | The sign-in server's metadata (RFC 8414): registration, authorisation and token endpoints under `/api/auth/oauth2/`, and `client_id_metadata_document_supported` |
@@ -102,9 +106,11 @@ The API takes `Authorization: Bearer <token>` or a browser session. The CLI talk
 
 ## Checks
 
-Added on 2026-10-22. A push with any mistake is refused, so every version passed `awml check` when it was pushed. The Checks tab checks each file again, with the AWML the registry runs, and shows for each file: its name, the AWML that checked it (the release and commit in `vendor/awml/version.json`, which `npm run engine:update` writes beside `vendor/awml/VERSION`), and each check with its result, "No mistakes" or the mistakes it found. A file with mistakes is not drawn: its view says how many it has and links to Checks.
+Added on 2026-10-22. A push with any mistake is refused, so every version passed `awml check` when it was pushed. The Checks tab checks each file again, with the AWML the registry runs, and shows for each file: its name, the AWML that checked it (the release and commit in `vendor/awml/version.json`, which `npm run engine:update` writes beside `vendor/awml/VERSION`), and each check with its result, "No mistakes" or the mistakes it found. A file with mistakes is not drawn: its view says how many it has and links to Checks. A 0.4 version has one file, `workflow.yaml`, which AWML 0.4's check checks with the security rules for its design and the platform rules for each implementation; a version stored before has its security and platform files.
 
-AWML 0.3.0's check gives only the mistakes it finds. It names no rule and does not list the checks it ran, so each file has one row, `awml check` itself, and the page says so, with a link to the part of AWML's spec that says what `awml check` reports. When AWML lists its checks with a result for each, each becomes a row of its own.
+AWML 0.4.0's check also gives warnings, such as a `do` step that AI decides. The Checks tab lists a file's warnings under its mistakes, with their count beside the result, and says they don't fail the check: a file with only warnings passes, is drawn, and its tab still carries the tick. A push is never refused for a warning.
+
+AWML 0.4.0's check gives only the mistakes it finds. It names no rule and does not list the checks it ran, so each file has one row, `awml check` itself, and the page says so, with a link to the part of AWML's spec that says what `awml check` reports. When AWML lists its checks with a result for each, each becomes a row of its own.
 
 ## Access
 
@@ -189,16 +195,16 @@ Added after v1, on 2026-10-22. A person connects their own AI (Claude.ai, Claude
 
 | Tool | What it does |
 |---|---|
-| `check` | Checks a security file, a platform file or both with the AWML engine, and gives the mistakes. Saves nothing |
-| `publish` | Saves a new version of `owner/slug`, by the same rules as `POST /api/v1/{owner}/{slug}/versions`. Gives the page `<registry>/{owner}/{slug}` and the version number |
-| `get` | A workflow's YAML, check result and summary, the latest version or a given one |
+| `check` | Checks a workflow's AWML 0.4 file, sent as `workflow`, with the AWML engine, and gives the mistakes. Refuses an older AWML as a push does. Saves nothing |
+| `publish` | Saves a new version of `owner/slug` from its AWML 0.4 file, sent as `workflow`, by the same rules as `POST /api/v1/{owner}/{slug}/versions`. Gives the page `<registry>/{owner}/{slug}` and the version number |
+| `get` | A workflow's YAML (`workflow.yaml`, or for a version stored before, its security and platform files), check result and summary, the latest version or a given one |
 | `list` | An owner's workflows the person may see; with no owner, their own and their organisations' |
 | `search` | The public gallery by title |
 | `search_platforms` | The platforms the person may see, public ones and their organisations' own, by words in the label or slug |
 | `get_platform` | A platform's description and install recipe, the latest version or a given one |
 | `add_platform` | Saves a new version of a platform, with its recipe, public or private, by the same rules as `POST /api/v1/platforms/{owner}/{slug}/versions` |
 | `set_username` | Changes the person's own username, by the same rules as `PATCH /api/v1/me` (see "Usernames"). Gives the new name, the old one and their page |
-| `fit_workflow` | Runs the fit for a workflow (`owner/slug`, with an optional `@version`, or its security view as YAML) against the platforms named, or every platform the person may see. Gives the same answer as `POST /api/v1/fit` |
+| `fit_workflow` | Runs the fit for a workflow (`owner/slug`, with an optional `@version`, or its AWML 0.4 file as YAML in `file`), or with `implementation` for one implementation's placement, against the platforms named, or every platform the person may see. Gives the same answer as `POST /api/v1/fit` |
 
 The person's own AI reads a platform's recipe and does the installing. The registry neither runs a recipe nor sends anything to a model, and the fit is code.
 
@@ -233,27 +239,49 @@ The platform tools have the same four, under "platforms through /mcp" in `test/m
 
 ## Platforms and the fit
 
-Added after v1, on 2026-10-22, for AWML 0.3, whose spec says where a workflow can run (its section "Placing a workflow: where it can run"). A workflow's security view says what it needs: who may process each scope (`processing`), how long work may wait after each trigger (`wait`) and where each existing context is kept (`at`). A **platform description** says what one platform offers: how long it may be off, whether the workflow's own code carries out its steps or an agent does, whose agents run there, which models its code can call and which folders it holds. The fit matches the two.
+Added after v1, on 2026-10-22, for AWML 0.3, and moved to AWML 0.4 the same day. AWML's spec says where a workflow can run (its section "Placing a workflow: where it can run"). A workflow's design says what it needs: who may process each scope (`processing`), how long work may wait after each trigger (`wait`) and where each existing context is kept (`at`). A **platform description** says what one platform offers: how long it may be off, whether the workflow's own code carries out its steps or an agent does, whose agents run there, which models its code can call and which folders it holds. The fit matches the two.
 
 **A platform** is an item of its own: an owner, a slug, a visibility and numbered versions that never change, the same as a workflow. Each version holds:
 
-- **the description**, AWML's platform description as YAML. It is checked at upload by the AWML engine and refused with `awml check`'s messages, each starting `description: `. A workflow's view sent as a description is refused, and so is a description sent as a workflow's file. The platform's label is the one its latest description gives.
+- **the description**, AWML's platform description as YAML, marked `awml: "0.4"`. An older one is refused with a 400: ``This registry takes AWML 0.4 platform descriptions. Change `awml:` to "0.4" and push again.`` It is checked at upload by the AWML engine and refused with `awml check`'s messages, each starting `description: `. A workflow sent as a description is refused, and so is a description sent as a workflow's file. The platform's label is the one its latest description gives.
 - **an install recipe**, optional: Markdown steps an agent follows to install a workflow on that platform. It says what to create, where each secret goes, how to schedule the triggers and how to check the workflow is running. It never holds a secret itself. The registry stores and serves recipes, and never runs them.
 
 **The fit.** `POST /api/v1/fit` takes a JSON body:
 
-- `workflow`: `owner/slug` or `owner/slug@n`, a stored workflow whose version has a security view; or `security`: a security view as YAML. One of the two, not both.
+- `workflow`: `owner/slug` or `owner/slug@n`, a stored workflow: its 0.4 file, or for a version stored before, its security view; or `file`: a workflow's AWML 0.4 file as YAML (`security` is taken as `file`, for callers of the 0.3 API). One of the two, not both. YAML marked as an older AWML is refused with the push's 400.
+- `implementation`: optional, the id of one of the workflow's implementations, as `awml fit --implementation` takes it. A workflow without it is refused with a 422.
 - `platforms`: optional, a list of `owner/slug` or `owner/slug@n`. Without it, the fit runs against every platform the caller may see: the public ones, and the private ones of the organisations they belong to. Each platform named must be one the caller may read; a private platform of another organisation answers `404 Not found: owner/slug.`, exactly as a missing one does.
 
-It answers 200 with `{workflow, results, gaps}`. `workflow` is `{owner, slug, number}`, or null for YAML. Each result is what `awml fit --json` gives for that platform, `{judged, fits, reasons, models}`, with `platform` as the registry address `owner/slug`, plus the version `number` and the description's `id` and `label`. When the workflow doesn't say what the fit needs, such as a scope without `processing` or a trigger without `wait`, `gaps` lists them and there are no results. The API answers anyone, signed in or not, as it does for reading; a token that is not valid gets the 401.
+Without `implementation`, it judges the design, and answers 200 with `{workflow, implementation: null, results, gaps}`. `workflow` is `{owner, slug, number}`, or null for YAML. Each result is what `awml fit --json` gives for that platform, `{judged, fits, reasons, models}`, with `platform` as the registry address `owner/slug`, plus the version `number` and the description's `id` and `label`. When the workflow doesn't say what the fit needs, such as a scope without `processing` or a trigger without `wait`, `gaps` lists them and there are no results. The API answers anyone, signed in or not, as it does for reading; a token that is not valid gets the 401.
 
-The registry gives the engine one platform at a time, so no platform's description reaches another's answer, and two platforms whose descriptions share an id are both judged. Each private platform judged is recorded in its organisation's audit log as a view.
+The registry gives the engine one platform at a time for the design, so no platform's description reaches another's answer, and two platforms whose descriptions share an id are both judged.
+
+With `implementation`, it judges that implementation's placement: each block that names a platform description by its id is judged against the platform among those the fit runs against whose description has that id, and a block that names none is not judged. The answer has `implementation` and one result per block, as `awml fit --json --implementation` gives it, with `block` as the block's id and `platform`, `number`, `id` and `label` of the platform judged, or null when it names none. A block naming an id no such platform has is a gap, in the engine's words, so a private platform of another organisation is never judged or named. Two such platforms with the same id answer a 422 asking for `platforms` to name one.
+
+Each private platform judged is recorded in its organisation's audit log as a view.
 
 This repo seeds no platforms. AWML's example platforms are in `test/fixtures/platforms`, copied by `npm run engine:update` with what the native `awml fit --json` says of them, so the tests compare the registry's fit with the CLI's.
 
 **Pages.** `/{owner}/platforms` lists an owner's platforms, and `/platforms` the shared ones (see "Pages, API and CLI"). An owner with no platforms gets a page that says what a platform description is, field by field, and that `awml fit` checks workflows against it; to those who may add one there, it also gives the registry's MCP address with a request to ask their own AI (add a platform, then fit a workflow against it), the API command that pushes the file, and that each change is a new version and the fit uses the latest. Under a list, members get the same help in short. Added on 2026-10-22.
 
-Not yet: judging a placement drawn in a platform view whose blocks name their descriptions; a page for where a workflow can run; pulling platforms with `awml pull`.
+Not yet: a page for where a workflow can run; pulling platforms with `awml pull`.
+
+## AWML 0.4 files
+
+Added on 2026-10-22. AWML 0.4 keeps each workflow in one file: the design (scopes, parts and lines), plus `implementations`, each a named running system that places the parts in blocks, a block being a platform. The registry takes only these.
+
+**Pushing.** A push sends one file, as `workflow`, through the API, `awml push` or the MCP `publish` tool, and the MCP `check` tool checks one the same way. A file marked as any other AWML, in any field, is refused with a 400: ``This registry takes AWML 0.4 files. Convert a 0.3 pair with `awml convert security.yaml platform.yaml > workflow.yaml` and push that.`` A file that names no AWML at all, or isn't YAML, is left to `awml check`, whose 422 says what is wrong. More than one file, or a platform description, is refused with a 422.
+
+**Versions stored before** hold their security file, their platform file or both, as they were pushed, and are never rewritten. Their pages, YAML, Checks and file downloads work as before; they have no implementations, so `/platform/{implementation}` is a 404 for them. A stored security view can still be fitted by name.
+
+**Moving awml.io.** `scripts/convert-to-04.sh` makes each workflow's and platform's latest version 0.4 through the public API and the MCP tools, with a token from `AWML_TOKEN`: it joins each pair with `awml convert`, turns a lone security view into a design, marks each platform description `"0.4"` and pushes each with its recipe, checking every file with `awml check` first. `awml convert` refuses a pair whose views differ in their parts or lines; the script lists those, or with `--keep-design` pushes the design alone. A version with only a platform view has no design and is listed. `--dry-run` pushes nothing.
+
+| Boundary | Test (`test/one-file.test.tsx`, and "An implementation's fit" in `test/security.test.ts`) |
+|---|---|
+| Positive | The owner and a member of the organisation see a private 0.4 workflow's implementations at `/platform/{implementation}` and `/v/{n}/platform/{implementation}`, its file, and fit an implementation; a member's implementation fit judges a block against their organisation's private platform and records the view |
+| Negative | A stranger and a signed-out visitor get 404 on each of those, and a missing implementation looks the same as a missing workflow |
+| Cross-tenant | A member of another organisation gets the same 404s; an implementation fit never judges a block against another organisation's private platform, nor names it |
+| Old names | Each implementation's address under a name its person gave up redirects to the same address under their new name (`test/username.test.ts`) |
 
 ## Not in v1
 

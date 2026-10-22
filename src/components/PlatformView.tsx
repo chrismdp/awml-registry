@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { Fragment } from "react";
 import MarkdownIt from "markdown-it";
-import { dateTime, type PlatformTab } from "@/server/page";
+import type { PlatformTab } from "@/server/page";
 import type { OfferRow } from "@/server/platform-description";
 import { CopyButton } from "./CopyButton";
+import { VersionList, type ListedVersion } from "./VersionList";
 
 export type PlatformViewProps = {
   owner: string;
@@ -19,7 +20,7 @@ export type PlatformViewProps = {
   description: string;
   described: { intro: string; rows: OfferRow[] };
   recipe: string | null;
-  versions: { number: number; pushedAt: Date; pushedBy: string | null }[];
+  versions: ListedVersion[];
 };
 
 const TAB: Record<PlatformTab, string> = {
@@ -117,20 +118,11 @@ export function PlatformView(p: PlatformViewProps) {
             {p.versions.length > 1 && (
               <section className="side">
                 <h2>Versions</h2>
-                <ol className="versions">
-                  {p.versions.map((v) => (
-                    <li key={v.number}>
-                      {v.number === p.number ? (
-                        <strong>Version {v.number}</strong>
-                      ) : (
-                        <Link href={v.number === latest ? base : `${base}/v/${v.number}`}>Version {v.number}</Link>
-                      )}{" "}
-                      <small>
-                        {v.pushedBy} · {dateTime(v.pushedAt)}
-                      </small>
-                    </li>
-                  ))}
-                </ol>
+                <VersionList
+                  versions={p.versions}
+                  shown={p.number}
+                  href={(n) => (n === latest ? base : `${base}/v/${n}`)}
+                />
               </section>
             )}
           </aside>

@@ -1,11 +1,12 @@
 import Link from "next/link";
 import type { Summary } from "@/engine";
 import { mcpUrl } from "@/server/http";
-import { dateTime, type PageView } from "@/server/page";
-import type { View } from "@/server/registry";
+import type { PageView } from "@/server/page";
+import type { FileName, View } from "@/server/registry";
 import { names, stepCount } from "@/server/summary";
 import { Checks, mistakesIn, Tick, type CheckedFile } from "./Checks";
 import { CopyButton } from "./CopyButton";
+import { VersionList, type ListedVersion } from "./VersionList";
 import { Mermaid } from "./Mermaid";
 import { count } from "./words";
 
@@ -20,14 +21,21 @@ export type VersionViewProps = {
   address: string;
   views: View[];
   shown: PageView;
-  files: { view: View; text: string }[];
+  // The file the shown view is drawn from.
+  drawnFrom: FileName;
+  // A 0.4 workflow's implementations, each with the address of its platform
+  // view and whether it is the one drawn. None for a version stored before.
+  implementations: { id: string; label: string; href: string; shown: boolean }[];
+  // A 0.4 workflow's platform view when it has no implementations.
+  nowhere: boolean;
+  files: { name: FileName; text: string }[];
   // What checking each file found, and the AWML that checked them.
   checks: CheckedFile[];
   checkedBy: { tag: string; commit: string };
   // The shown file drawn, or "" when it is not a drawing view or the file has mistakes.
   mermaid: string;
   summary: Summary;
-  versions: { number: number; pushedAt: Date; pushedBy: string | null }[];
+  versions: ListedVersion[];
 };
 
 const TAB: Record<PageView, string> = {
@@ -91,17 +99,17 @@ export function VersionView(p: VersionViewProps) {
           {tablist}
           <div className="files" role="tabpanel" aria-label={`${p.title}, yaml`}>
             {p.files.map((f) => (
-              <section key={f.view}>
+              <section key={f.name}>
                 <div className="yaml-head">
-                  <h2>{f.view}.yaml</h2>
+                  <h2>{f.name}.yaml</h2>
                   <div className="file-actions">
-                    <CopyButton target={`${f.view}-yaml`} />
-                    <a href={`${base}/v/${p.number}/${f.view}.yaml`} className="button outline" download>
+                    <CopyButton target={`${f.name}-yaml`} />
+                    <a href={`${base}/v/${p.number}/${f.name}.yaml`} className="button outline" download>
                       Download
                     </a>
                   </div>
                 </div>
-                <pre id={`${f.view}-yaml`}>{f.text}</pre>
+                <pre id={`${f.name}-yaml`}>{f.text}</pre>
               </section>
             ))}
           </div>
@@ -110,11 +118,14 @@ export function VersionView(p: VersionViewProps) {
         <div className="wf-body">
           <main>
             {tablist}
+            {p.shown === "platform" && <Implementations implementations={p.implementations} />}
             <figure className="figure" role="tabpanel" aria-label={`${p.title}, ${TAB[p.shown].toLowerCase()}`}>
-              {p.mermaid ? (
+              {p.nowhere ? (
+                <p className="cannot-draw">This workflow doesn&apos;t say where it runs yet.</p>
+              ) : p.mermaid ? (
                 <Mermaid text={p.mermaid} />
               ) : (
-                <CannotDraw file={p.checks.find((f) => f.view === p.shown)!} checks={`${p.address}/checks`} />
+                <CannotDraw file={p.checks.find((f) => f.name === p.drawnFrom)!} checks={`${p.address}/checks`} />
               )}
             </figure>
           </main>
@@ -172,7 +183,7 @@ export function VersionView(p: VersionViewProps) {
               <section>
                 <h3>Push from your machine</h3>
                 <pre>
-                  awml push {p.owner}/{p.slug} {p.views.map((v) => `${v}.yaml`).join(" ")}
+                  awml push {p.owner}/{p.slug} workflow.yaml
                   {p.visibility === "private" ? " --private" : ""}
                 </pre>
               </section>
@@ -202,20 +213,11 @@ export function VersionView(p: VersionViewProps) {
             {p.versions.length > 1 && (
               <section className="side">
                 <h2>Versions</h2>
-                <ol className="versions">
-                  {p.versions.map((v) => (
-                    <li key={v.number}>
-                      {v.number === p.number ? (
-                        <strong>Version {v.number}</strong>
-                      ) : (
-                        <Link href={v.number === latest ? base : `${base}/v/${v.number}`}>Version {v.number}</Link>
-                      )}{" "}
-                      <small>
-                        {v.pushedBy} · {dateTime(v.pushedAt)}
-                      </small>
-                    </li>
-                  ))}
-                </ol>
+                <VersionList
+                  versions={p.versions}
+                  shown={p.number}
+                  href={(n) => (n === latest ? base : `${base}/v/${n}`)}
+                />
               </section>
             )}
           </aside>
@@ -225,11 +227,27 @@ export function VersionView(p: VersionViewProps) {
   );
 }
 
+// Which implementation the platform view draws: a choice when there is more
+// than one, or the name of the only one.
+function Implementations({ implementations }: { implementations: VersionViewProps["implementations"] }) {
+  if (implementations.length === 0) return null;
+  if (implementations.length === 1) return <p className="implementations">{implementations[0].label}</p>;
+  return (
+    <nav className="implementations" aria-label="Implementation">
+      {implementations.map((i) => (
+        <a key={i.id} href={i.href} className="implementation" aria-current={i.shown ? "page" : undefined}>
+          {i.label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
 // In place of a drawing of a file that has mistakes, which AWML will not draw.
 function CannotDraw({ file, checks }: { file: CheckedFile; checks: string }) {
   return (
     <p className="cannot-draw">
-      {file.view}.yaml has {count(mistakesIn([file]), "mistake", "mistakes")}, so it cannot be drawn.{" "}
+      {file.name}.yaml has {count(mistakesIn([file]), "mistake", "mistakes")}, so it cannot be drawn.{" "}
       <a href={checks}>See Checks.</a>
     </p>
   );

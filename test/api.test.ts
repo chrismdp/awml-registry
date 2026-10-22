@@ -1,15 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { example, person, request } from "./helpers";
 
-const security = example("dinners-security.yaml");
-const platform = example("dinners-platform.yaml");
+const workflow = example("dinners.yaml");
 
 describe("pushing a workflow through the API", () => {
   it("makes the workflow on the first push and returns 201 with where it lives", async () => {
     const ana = await person("ana");
     const res = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
       as: { token: ana.token },
-      json: { security, platform },
+      json: { workflow },
     });
     expect(res.status).toBe(201);
     expect(await res.json()).toEqual({
@@ -25,7 +24,7 @@ describe("pushing a workflow through the API", () => {
     const push = () =>
       request("POST", `/api/v1/${ana.username}/dinners/versions`, {
         as: { token: ana.token },
-        json: { security },
+        json: { workflow },
       });
     await push();
     const second = await push();
@@ -36,7 +35,7 @@ describe("pushing a workflow through the API", () => {
     const ana = await person("ana");
     const res = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
       as: { token: ana.token },
-      json: { security: "this: is not a workflow\n" },
+      json: { workflow: "this: is not a workflow\n" },
     });
     expect(res.status).toBe(422);
     const body = await res.json();
@@ -45,32 +44,25 @@ describe("pushing a workflow through the API", () => {
 
   it("refuses an invalid file with 422 and the messages `awml check` prints for it", async () => {
     const ana = await person("ana");
-    const printed = example("bad.check.txt").trim().split("\n");
+    const printed = example("bad-04.check.txt").trim().split("\n");
     expect(printed.length).toBeGreaterThan(0);
     const res = await request("POST", `/api/v1/${ana.username}/broken/versions`, {
       as: { token: ana.token },
-      json: { security: example("bad.yaml") },
+      json: { workflow: example("bad-04.yaml") },
     });
     expect(res.status).toBe(422);
-    expect((await res.json()).errors).toEqual(printed.map((line) => line.replace(/^bad\.yaml: /, "security: ")));
+    expect((await res.json()).errors).toEqual(printed.map((line) => line.replace(/^bad-04\.yaml: /, "workflow: ")));
   });
 
-  it("stores the summary `awml summary --json` gives, for one file or both", async () => {
+  it("stores the summary `awml summary --json` gives", async () => {
     const ana = await person("ana");
-    const cases = [
-      [{ security }, "dinners-security.summary.json"],
-      [{ platform }, "dinners-platform.summary.json"],
-      [{ security, platform }, "dinners.summary.json"],
-    ] as const;
-    for (const [i, [files, expected]] of cases.entries()) {
-      const res = await request("POST", `/api/v1/${ana.username}/w${i}/versions`, {
-        as: { token: ana.token },
-        json: files,
-      });
-      expect(res.status).toBe(201);
-      const stored = await (await request("GET", `/api/v1/${ana.username}/w${i}/v/1`)).json();
-      expect(stored.summary).toEqual(JSON.parse(example(expected)));
-    }
+    const res = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
+      as: { token: ana.token },
+      json: { workflow },
+    });
+    expect(res.status).toBe(201);
+    const stored = await (await request("GET", `/api/v1/${ana.username}/dinners/v/1`)).json();
+    expect(stored.summary).toEqual(JSON.parse(example("dinners.summary.json")));
   });
 
   it("refuses a push with no files", async () => {
@@ -82,20 +74,10 @@ describe("pushing a workflow through the API", () => {
     expect(res.status).toBe(422);
   });
 
-  it("refuses a security file sent as the platform file", async () => {
-    const ana = await person("ana");
-    const res = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
-      as: { token: ana.token },
-      json: { platform: security },
-    });
-    expect(res.status).toBe(422);
-    expect((await res.json()).errors[0]).toMatch(/platform/);
-  });
-
   it("refuses a push from nobody with 401", async () => {
     const ana = await person("ana");
     const res = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
-      json: { security },
+      json: { workflow },
     });
     expect(res.status).toBe(401);
   });
@@ -105,7 +87,7 @@ describe("pushing a workflow through the API", () => {
     const ben = await person("ben");
     const res = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
       as: { token: ben.token },
-      json: { security },
+      json: { workflow },
     });
     expect(res.status).toBe(403);
   });
@@ -114,7 +96,7 @@ describe("pushing a workflow through the API", () => {
     const ana = await person("ana");
     const res = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
       as: { token: ana.token },
-      json: { security, visibility: "private" },
+      json: { workflow, visibility: "private" },
     });
     expect(res.status).toBe(422);
   });
@@ -123,7 +105,7 @@ describe("pushing a workflow through the API", () => {
     const ana = await person("ana");
     const res = await request("POST", `/api/v1/nobody-here/dinners/versions`, {
       as: { token: ana.token },
-      json: { security },
+      json: { workflow },
     });
     expect(res.status).toBe(404);
   });
@@ -132,7 +114,7 @@ describe("pushing a workflow through the API", () => {
     const ana = await person("ana");
     const res = await request("POST", `/api/v1/${ana.username}/Not%20A%20Slug/versions`, {
       as: { token: ana.token },
-      json: { security },
+      json: { workflow },
     });
     expect(res.status).toBe(422);
   });
@@ -141,7 +123,7 @@ describe("pushing a workflow through the API", () => {
     const ana = await person("ana");
     const res = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
       as: { cookie: ana.cookie },
-      json: { security },
+      json: { workflow },
     });
     expect(res.status).toBe(201);
   });
@@ -153,7 +135,7 @@ describe("reading a workflow through the API", () => {
     for (let i = 0; i < 2; i++) {
       await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
         as: { token: ana.token },
-        json: { security },
+        json: { workflow },
       });
     }
     const res = await request("GET", `/api/v1/${ana.username}/dinners`);
@@ -173,14 +155,14 @@ describe("reading a workflow through the API", () => {
     const ana = await person("ana");
     await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
       as: { token: ana.token },
-      json: { security, platform },
+      json: { workflow },
     });
     const res = await request("GET", `/api/v1/${ana.username}/dinners/v/1`);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.number).toBe(1);
-    expect(body.files).toEqual({ security, platform });
-    expect(body.check).toEqual({ security: [], platform: [] });
+    expect(body.files).toEqual({ workflow });
+    expect(body.check).toEqual({ workflow: [] });
     expect(body.summary).toEqual(JSON.parse(example("dinners.summary.json")));
   });
 
@@ -188,7 +170,7 @@ describe("reading a workflow through the API", () => {
     const ana = await person("ana");
     await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
       as: { token: ana.token },
-      json: { security },
+      json: { workflow },
     });
     expect((await request("GET", `/api/v1/${ana.username}/dinners/v/9`)).status).toBe(404);
     expect((await request("GET", `/api/v1/${ana.username}/dinners/v/x`)).status).toBe(404);
@@ -199,13 +181,13 @@ describe("reading a workflow through the API", () => {
     const ana = await person("ana");
     await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
       as: { token: ana.token },
-      json: { security },
+      json: { workflow },
     });
-    const res = await request("GET", `/${ana.username}/dinners/v/1/security.yaml`);
+    const res = await request("GET", `/${ana.username}/dinners/v/1/workflow.yaml`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/yaml/);
-    expect(await res.text()).toBe(security);
-    expect((await request("GET", `/${ana.username}/dinners/v/1/platform.yaml`)).status).toBe(404);
+    expect(await res.text()).toBe(workflow);
+    expect((await request("GET", `/${ana.username}/dinners/v/1/security.yaml`)).status).toBe(404);
     expect((await request("GET", `/${ana.username}/dinners/v/1/other.yaml`)).status).toBe(404);
   });
 });

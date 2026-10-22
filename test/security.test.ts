@@ -20,14 +20,13 @@ import GalleryPage from "@/app/gallery/page";
 import { example, orgWith, person, request, withEdition, type Who } from "./helpers";
 import { renderPage, type Page } from "./pages";
 
-const security = example("dinners-security.yaml");
-const platform = example("dinners-platform.yaml");
+const workflow = example("dinners.yaml");
 
 // Pushes both files, so every view of the workflow has something to show.
 async function push(org: string, slug: string, as: Who, visibility?: "public" | "private") {
   return request("POST", `/api/v1/${org}/${slug}/versions`, {
     as,
-    json: { security, platform, ...(visibility ? { visibility } : {}) },
+    json: { workflow, ...(visibility ? { visibility } : {}) },
   });
 }
 
@@ -66,7 +65,7 @@ async function everyRead(who: Who, owner = "acme", slug = "payroll") {
     reads[name] = (await renderPage(page, { owner, slug }, { as: who })).status;
   for (const [name, page] of Object.entries(versionPages))
     reads[name] = (await renderPage(page, { owner, slug, n: "1" }, { as: who })).status;
-  reads.yaml = (await request("GET", `/${owner}/${slug}/v/1/security.yaml`, { as: who })).status;
+  reads.yaml = (await request("GET", `/${owner}/${slug}/v/1/workflow.yaml`, { as: who })).status;
   reads.api = (await request("GET", `/api/v1/${owner}/${slug}`, { as: who })).status;
   reads.versionApi = (await request("GET", `/api/v1/${owner}/${slug}/v/1`, { as: who })).status;
   return reads;
@@ -173,7 +172,7 @@ describe("Cross-tenant boundary", () => {
     expect((await request("GET", "/api/v1/beta/secret-plans", { as: { token: mo.token } })).status).toBe(404);
     expect((await request("GET", "/api/v1/beta/secret-plans/v/1", { as: { token: mo.token } })).status).toBe(404);
     expect(
-      (await request("GET", "/beta/secret-plans/v/1/security.yaml", { as: { token: mo.token } })).status,
+      (await request("GET", "/beta/secret-plans/v/1/workflow.yaml", { as: { token: mo.token } })).status,
     ).toBe(404);
   });
 
@@ -317,7 +316,7 @@ async function tokenReads(owner: string, slug: string, token: string) {
   return {
     api: await read(`/api/v1/${owner}/${slug}`),
     versionApi: await read(`/api/v1/${owner}/${slug}/v/1`),
-    yaml: await read(`/${owner}/${slug}/v/1/security.yaml`),
+    yaml: await read(`/${owner}/${slug}/v/1/workflow.yaml`),
   };
 }
 
@@ -329,7 +328,7 @@ describe("A token that is not valid", () => {
     const { mo } = await acme();
     const reads = await tokenReads("acme", "payroll", mo.token);
     expect([reads.api.status, reads.versionApi.status, reads.yaml.status]).toEqual([200, 200, 200]);
-    expect(reads.yaml.body).toBe(security);
+    expect(reads.yaml.body).toBe(workflow);
   });
 
   it("negative: a revoked token gets 401 on every read and on a push, saying to log in again", async () => {
@@ -387,9 +386,9 @@ describe("A token that is not valid", () => {
     const read = async (path: string) => (await request("GET", path)).status;
     expect(await read("/api/v1/acme/handbook")).toBe(200);
     expect(await read("/api/v1/acme/handbook/v/1")).toBe(200);
-    expect(await read("/acme/handbook/v/1/security.yaml")).toBe(200);
+    expect(await read("/acme/handbook/v/1/workflow.yaml")).toBe(200);
     expect(await read("/api/v1/acme/payroll")).toBe(404);
-    expect(await read("/acme/payroll/v/1/security.yaml")).toBe(404);
+    expect(await read("/acme/payroll/v/1/workflow.yaml")).toBe(404);
   });
 });
 
@@ -419,7 +418,7 @@ describe("The edition hook", () => {
 // Private platforms follow the private workflow rules. Org "acme" keeps a
 // private platform, its back office, and org "beta" keeps one of its own,
 // which every workflow here would fit, so a fit that used it would show it.
-const backOffice = `awml: "0.3"
+const backOffice = `awml: "0.4"
 platform: { id: back-office, label: "Acme's back office" }
 off_for_up_to: PT0S
 steps: code
@@ -492,7 +491,7 @@ describe("Private platforms", () => {
 
     it("a member's fit uses their organisation's private platforms, and records the view", async () => {
       const { mo } = await platforms();
-      const res = await request("POST", "/api/v1/fit", { as: { token: mo.token }, json: { security: clientEmail } });
+      const res = await request("POST", "/api/v1/fit", { as: { token: mo.token }, json: { file: clientEmail } });
       const { results } = await res.json();
       expect(results.map((r: { platform: string }) => r.platform).sort()).toEqual(["acme/back-office", "beta/open-box"]);
       expect(results.find((r: { platform: string }) => r.platform === "acme/back-office")).toMatchObject({ fits: true });
@@ -551,14 +550,14 @@ describe("Private platforms", () => {
       const ana = await person("ana");
       const workflow = await request("POST", `/api/v1/${ana.username}/client-email/versions`, {
         as: { token: ana.token },
-        json: { security: clientEmail },
+        json: { workflow: clientEmail },
       });
       expect(workflow.status).toBe(201);
       for (const [who, seen] of [
         [mo, ["acme/back-office", "beta/open-box"]],
         [nell, ["beta/open-box"]],
       ] as const) {
-        for (const body of [{ security: clientEmail }, { workflow: `${ana.username}/client-email` }]) {
+        for (const body of [{ file: clientEmail }, { workflow: `${ana.username}/client-email` }]) {
           const res = await request("POST", "/api/v1/fit", { as: { token: who.token }, json: body });
           const text = await res.text();
           expect(res.status).toBe(200);
@@ -569,15 +568,56 @@ describe("Private platforms", () => {
       }
       const named = await request("POST", "/api/v1/fit", {
         as: { token: mo.token },
-        json: { security: clientEmail, platforms: ["beta/vault"] },
+        json: { file: clientEmail, platforms: ["beta/vault"] },
       });
       const missing = await request("POST", "/api/v1/fit", {
         as: { token: mo.token },
-        json: { security: clientEmail, platforms: ["beta/nothing-here"] },
+        json: { file: clientEmail, platforms: ["beta/nothing-here"] },
       });
       expect(named.status).toBe(404);
       expect((await named.text()).replace("vault", "nothing-here")).toBe(await missing.text());
       expect(await auditRows("private_view")).toEqual(["platforms/acme/back-office v1", "platforms/acme/back-office v1"]);
+    });
+  });
+
+  describe("An implementation's fit", () => {
+    // The client email with its Mac mini block placed on a description id:
+    // Acme's private back office, or Beta's private vault.
+    const placedOn = (id: string) =>
+      clientEmail.replace(
+        '{ id: cowork, label: "Claude Cowork, Mac mini", parts',
+        `{ id: cowork, label: "Claude Cowork, Mac mini", platform: ${id}, parts`,
+      );
+
+    it("judges a block against the organisation's private platform for a member, and records the view", async () => {
+      const { mo } = await platforms();
+      const res = await request("POST", "/api/v1/fit", {
+        as: { token: mo.token },
+        json: { file: placedOn("back-office"), implementation: "office" },
+      });
+      expect(res.status).toBe(200);
+      expect((await res.json()).results[0]).toMatchObject({ block: "cowork", platform: "acme/back-office", judged: true });
+      expect(await auditRows("private_view")).toEqual(["platforms/acme/back-office v1"]);
+    });
+
+    it("never judges a block against another organisation's private platform, nor reveals it", async () => {
+      const { mo, nell } = await platforms();
+      for (const [who, id] of [
+        [mo, "beta-vault"],
+        [nell, "back-office"],
+      ] as const) {
+        const res = await request("POST", "/api/v1/fit", {
+          as: { token: who.token },
+          json: { file: placedOn(id), implementation: "office" },
+        });
+        const body = await res.json();
+        expect(res.status).toBe(200);
+        expect(body.results).toEqual([]);
+        expect(body.gaps).toEqual([`group "cowork" names platform "${id}", but its description wasn't given`]);
+        for (const secret of ["beta/vault", "acme/back-office", "Beta's vault server", "Acme's back office"])
+          expect(JSON.stringify(body)).not.toContain(secret);
+      }
+      expect(await auditRows("private_view")).toEqual([]);
     });
   });
 
@@ -625,7 +665,7 @@ describe("Private platforms", () => {
         await answer("GET", "/api/v1/platforms/acme/nothing-here"),
         await answer("GET", "/api/v1/platforms/acme/back-office/v/1"),
         await answer("POST", "/api/v1/platforms/acme/back-office/versions", { description: backOffice }),
-        await answer("POST", "/api/v1/fit", { security: clientEmail }),
+        await answer("POST", "/api/v1/fit", { file: clientEmail }),
       ])
         expect(other).toEqual(hidden);
       const file = await answer("GET", "/platforms/acme/back-office/v/1/description.yaml");

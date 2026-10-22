@@ -7,6 +7,7 @@ import type { Db } from "@/db/client";
 import { membership, platform, platformVersion, user } from "@/db/schema";
 import { engine } from "@/engine";
 import { record } from "./audit";
+import { awmlOf, isOlderAwml, PLATFORM_IS_NOT_04, readYaml } from "./awml-file";
 import { findOwner, isOwnerOrMember, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH } from "./push";
 import { refuse, type Result } from "./result";
@@ -42,16 +43,13 @@ async function findPlatform(db: Db, owner: Owner, slug: string) {
 }
 
 // The mistakes in a platform description, each as "description: ...", and its
-// label. `awml check` finds most; a workflow's view sent as a description is
-// refused here.
+// label. `awml check` finds most; a workflow sent as a description is refused
+// here.
 async function checkDescription(text: string) {
   const found = await engine.check(text);
   if (found.length) return { errors: found.map((e) => `description: ${e}`) };
-  const doc = parse(text) as { view?: string; platform?: { label?: string } };
-  if (doc.view !== undefined)
-    return {
-      errors: [`description: this is a workflow's ${doc.view} view, not a platform description. Push it as a workflow.`],
-    };
+  if (readYaml(text)?.platform === undefined)
+    return { errors: ["description: this is a workflow, not a platform description. Push it as a workflow."] };
   return { errors: [], label: labelOf(text) };
 }
 
@@ -76,6 +74,8 @@ export async function pushPlatformVersion(
   if (typeof description !== "string") return refuse(422, "Send the platform's description as YAML.");
   if (recipe !== undefined && recipe !== null && typeof recipe !== "string")
     return refuse(422, "Send the recipe as Markdown text.");
+
+  if (isOlderAwml(description)) return refuse(400, PLATFORM_IS_NOT_04);
 
   const pushed = await pushedVisibility(owner, existing, body.visibility, "platform");
   if (!pushed.ok) return pushed;
@@ -123,13 +123,21 @@ export async function pushPlatformVersion(
   return { ok: true, owner: owner.slug, slug, number };
 }
 
+// A platform's versions, newest first: who pushed each and when, and the
+// AWML its description says it is.
 async function versionList(db: Db, platformId: string) {
-  return db
-    .select({ number: platformVersion.number, pushedAt: platformVersion.pushedAt, pushedBy: user.username })
+  const rows = await db
+    .select({
+      number: platformVersion.number,
+      pushedAt: platformVersion.pushedAt,
+      pushedBy: user.username,
+      description: platformVersion.description,
+    })
     .from(platformVersion)
     .innerJoin(user, eq(user.id, platformVersion.pushedBy))
     .where(eq(platformVersion.platformId, platformId))
     .orderBy(desc(platformVersion.number));
+  return rows.map(({ description, ...v }) => ({ ...v, awml: awmlOf(description) }));
 }
 
 // A platform version the viewer may read, or null: a private platform is the

@@ -19,14 +19,17 @@ export const wasmEngine: Engine = {
   async check(yaml) {
     return (await awml()).check(yaml);
   },
+  async warnings(yaml) {
+    return (await awml()).warnings(yaml);
+  },
   async summarise(files: Files) {
-    const sources = [files.security, files.platform].filter((f): f is string => f !== undefined);
+    const sources = [files.workflow, files.security, files.platform].filter((f): f is string => f !== undefined);
     return (await awml()).summary(sources) as Summary;
   },
-  async draw(yaml) {
-    return (await awml()).draw(yaml);
+  async draw(yaml, implementation = "") {
+    return (await awml()).draw(yaml, implementation);
   },
-  async fit(security, descriptions) {
-    return JSON.parse((await awml()).fitJSON([security, ...descriptions])) as FitReport;
+  async fit(workflow, descriptions, implementation = "") {
+    return JSON.parse((await awml()).fitJSON([workflow, ...descriptions], implementation)) as FitReport;
   },
 };

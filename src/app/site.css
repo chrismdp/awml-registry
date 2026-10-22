@@ -125,6 +125,7 @@ pre, code { font-family: var(--mono); }
 .badge { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; border-radius: 999px; padding: 5px 12px; }
 .badge.good { box-shadow: inset 0 0 0 1.5px var(--code-line); }
 .badge.bad { box-shadow: inset 0 0 0 1.5px var(--ink); }
+.badge.warn { box-shadow: inset 0 0 0 1.5px var(--ink-faint); color: var(--ink-soft); }
 .wf-body { display: flex; flex-wrap: wrap; gap: 28px; padding-bottom: 80px; align-items: start; }
 .wf-body > main { flex: 999 1 640px; min-width: 0; }
 .wf-body > aside { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
@@ -166,8 +167,17 @@ pre, code { font-family: var(--mono); }
 .check-row code { font-size: 14px; }
 .check-mistakes { margin: 12px 0 4px; padding-left: 20px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .check-mistakes li + li { margin-top: 6px; }
+/* Warnings: listed under the mistakes, and quieter, since they fail nothing. */
+.check-warnings { margin: 12px 0 4px; font-size: 14px; line-height: 1.5; color: var(--ink-soft); overflow-wrap: anywhere; }
+.check-warnings p { margin: 0 0 6px; }
+.check-warnings ul { margin: 0; padding-left: 20px; }
+.check-warnings li + li { margin-top: 6px; }
 @media (max-width: 600px) { .checks section { padding: 16px; border-radius: 22px; } }
 .cannot-draw { margin: 0; font-size: 15px; }
+/* A 0.4 workflow's platform view: which implementation is drawn. */
+.implementations { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; font-size: 15px; font-weight: 600; color: var(--ink-soft); }
+.implementations a { color: var(--ink-soft); padding: 8px 14px; min-height: 40px; display: inline-flex; align-items: center; border-radius: 999px; box-shadow: inset 0 0 0 1.5px var(--wash); text-decoration: none; }
+.implementations a[aria-current="page"] { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--ink); font-weight: 700; }
 .side { border-radius: 22px; background: var(--wash); padding: 24px; }
 .side h2 { margin: 0 0 12px; font-size: 18px; font-weight: 700; }
 .deciders { display: flex; gap: 4px; height: 34px; }
@@ -187,7 +197,7 @@ pre, code { font-family: var(--mono); }
 .counts div { display: flex; justify-content: space-between; }
 .counts dd { margin: 0; font-weight: 700; }
 .versions { margin: 0; padding: 0; list-style: none; font-size: 15px; display: flex; flex-direction: column; gap: 4px; }
-.versions small { color: var(--ink-faint); }
+.versions .sep { color: var(--ink-faint); }
 .change { border-radius: 22px; background: var(--ink); color: var(--paper); padding: 24px; display: flex; flex-direction: column; gap: 18px; }
 .change h2 { font-size: 18px; font-weight: 700; }
 .change h3 { font-size: 16px; font-weight: 700; }

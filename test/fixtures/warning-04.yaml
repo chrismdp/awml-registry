@@ -1,0 +1,10 @@
+# An AWML 0.4 workflow with no mistakes and one warning: AI decides a do step.
+awml: "0.4"
+title: Fill the basket
+scopes:
+  - { id: family, label: "family: parents", processing: any }
+parts:
+  - { id: sat, kind: trigger, label: "Saturday 09:00", wait: PT1H }
+  - { id: fill, kind: ai, op: do, label: "Fill the basket", in: family }
+lines:
+  - { from: sat, to: fill, kind: start }

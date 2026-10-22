@@ -31,7 +31,7 @@ export default async function InventoryPage({ params }: { params: Promise<{ owne
       {n === 0 ? (
         <p className="empty">
           {organisation.name} has no workflows yet. Push the first one with{" "}
-          <code>awml push {organisation.slug}/&lt;name&gt; security.yaml</code>
+          <code>awml push {organisation.slug}/&lt;name&gt; workflow.yaml</code>
         </p>
       ) : (
         <>

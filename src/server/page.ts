@@ -13,6 +13,41 @@ export async function pageContext() {
 
 export const dateTime = (d: Date) => d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// A moment's day and time in UK time, as numbers.
+function inLondon(d: Date) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/London",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      hourCycle: "h23",
+    })
+      .formatToParts(d)
+      .map((p) => [p.type, Number(p.value)]),
+  );
+  return { year: parts.year, month: parts.month, day: parts.day, hour: parts.hour, minute: parts.minute };
+}
+
+// When a version was pushed, in UK time: "Today 4:43pm", "Yesterday 9:12am",
+// or "18 Oct 2026, 9:12am".
+export function whenPushed(at: Date, now = new Date()) {
+  const t = inLondon(at);
+  const clock = `${t.hour % 12 || 12}:${String(t.minute).padStart(2, "0")}${t.hour < 12 ? "am" : "pm"}`;
+  const today = inLondon(now);
+  // The calendar day before today's, worked out on the calendar, not by
+  // taking 24 hours away, so a change of the clocks doesn't move it.
+  const before = new Date(Date.UTC(today.year, today.month - 1, today.day - 1));
+  const sameDay = (y: number, m: number, d: number) => t.year === y && t.month === m && t.day === d;
+  if (sameDay(today.year, today.month, today.day)) return `Today ${clock}`;
+  if (sameDay(before.getUTCFullYear(), before.getUTCMonth() + 1, before.getUTCDate())) return `Yesterday ${clock}`;
+  return `${t.day} ${MONTHS[t.month - 1]} ${t.year}, ${clock}`;
+}
+
 // For a page under an owner that found nothing: when the owner is a name its
 // person gave up, sends the visitor for good (308) to the same page, `before`
 // the owner and `rest` after it, under the name they go by now. The page

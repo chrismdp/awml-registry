@@ -1,7 +1,9 @@
 // What the registry needs from the AWML package, which runs here as the Go
 // package compiled to WebAssembly (see ./wasm.ts).
 
-export type Files = { security?: string; platform?: string };
+// A version's files: one AWML 0.4 workflow, or, for versions stored before
+// the registry took only 0.4 files, a security view, a platform view or both.
+export type Files = { workflow?: string; security?: string; platform?: string };
 
 // What `awml summary --json` gives for a workflow: the things an inventory
 // counts, and the names of its AI steps, people, scopes and platforms. The Go
@@ -46,11 +48,17 @@ export interface Engine {
   version: { tag: string; commit: string };
   // The messages `awml check` gives for one file; empty when it has no mistakes.
   check(yaml: string): Promise<string[]>;
-  // One workflow's summary from either view or both. The files must pass check.
+  // The warnings `awml check` gives for one file, such as a do step AI
+  // decides. A warning is not a mistake and fails nothing.
+  warnings(yaml: string): Promise<string[]>;
+  // One workflow's summary from its files. The files must pass check.
   summarise(files: Files): Promise<Summary>;
-  // Mermaid text for one file that passes check, drawn in the browser.
-  draw(yaml: string): Promise<string>;
-  // Where a workflow can run: its security view judged against platform
-  // descriptions, each named by its own id. Every file must pass check.
-  fit(security: string, descriptions: string[]): Promise<FitReport>;
+  // Mermaid text for one file that passes check, drawn in the browser: its
+  // security view, or a 0.4 workflow's platform view of one implementation.
+  draw(yaml: string, implementation?: string): Promise<string>;
+  // Where a workflow can run: its design, a 0.4 workflow or a legacy
+  // security view, judged against platform descriptions, each named by its
+  // own id. With an implementation, its placement is judged instead, each
+  // block against the description it names. Every file must pass check.
+  fit(workflow: string, descriptions: string[], implementation?: string): Promise<FitReport>;
 }

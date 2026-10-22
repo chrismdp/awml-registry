@@ -1,13 +1,14 @@
-import type { View } from "@/server/registry";
+import type { FileName } from "@/server/registry";
 import { count } from "./words";
 
-// One check AWML ran on a file, and the mistakes it found, none when it passed.
-export type CheckRow = { name: string; mistakes: string[] };
+// One check AWML ran on a file, the mistakes it found, none when it passed,
+// and its warnings, which fail nothing.
+export type CheckRow = { name: string; mistakes: string[]; warnings: string[] };
 
 // A file and the checks run on it. AWML's check gives only the mistakes it
 // finds, not each rule it ran, so today each file has one row, `awml check`
 // itself. When AWML lists its checks, each takes a row of its own here.
-export type CheckedFile = { view: View; rows: CheckRow[] };
+export type CheckedFile = { name: FileName; rows: CheckRow[] };
 
 export const mistakesIn = (files: CheckedFile[]) =>
   files.reduce((sum, f) => sum + f.rows.reduce((n, row) => n + row.mistakes.length, 0), 0);
@@ -29,9 +30,9 @@ export function Checks({ title, files, checkedBy }: { title: string; files: Chec
         checked again here, by the AWML this registry runs.
       </p>
       {files.map((f) => (
-        <section key={f.view}>
+        <section key={f.name}>
           <div className="check-head">
-            <h2>{f.view}.yaml</h2>
+            <h2>{f.name}.yaml</h2>
             <p>Checked by AWML {checkedBy.tag}</p>
           </div>
           <ul className="check-rows">
@@ -47,6 +48,9 @@ export function Checks({ title, files, checkedBy }: { title: string; files: Chec
                   ) : (
                     <span className="badge bad">{count(row.mistakes.length, "mistake", "mistakes")}</span>
                   )}
+                  {row.warnings.length > 0 && (
+                    <span className="badge warn">{count(row.warnings.length, "warning", "warnings")}</span>
+                  )}
                 </div>
                 {row.mistakes.length > 0 && (
                   <ul className="check-mistakes">
@@ -54,6 +58,16 @@ export function Checks({ title, files, checkedBy }: { title: string; files: Chec
                       <li key={m}>{m}</li>
                     ))}
                   </ul>
+                )}
+                {row.warnings.length > 0 && (
+                  <div className="check-warnings">
+                    <p>Warnings don&apos;t fail the check.</p>
+                    <ul>
+                      {row.warnings.map((w) => (
+                        <li key={w}>{w}</li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </li>
             ))}

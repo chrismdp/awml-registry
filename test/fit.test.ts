@@ -2,11 +2,12 @@
 // against the platforms in the registry.
 import { describe, expect, it } from "vitest";
 import { engine } from "@/engine";
-import { example, person, request, type Who } from "./helpers";
+import { WORKFLOW_IS_NOT_04 } from "@/server/awml-file";
+import { example, person, request, storeLegacyVersion, type Who } from "./helpers";
 
 const clientEmail = example("client-email.yaml");
-const dinners = example("dinners-security.yaml");
-const dinnersPlatform = example("dinners-platform.yaml");
+const dinners = example("dinners.yaml");
+const dinnersPlatform = example("legacy/dinners-platform.yaml");
 
 // AWML's example platforms, in the order the native fit was given them.
 const ids = ["codex-laptop", "cowork-mac-mini", "scripts-mac-mini", "worker"];
@@ -38,7 +39,7 @@ async function ana() {
   }
   const pushed = await request("POST", `/api/v1/${ana.username}/client-email/versions`, {
     as: { token: ana.token },
-    json: { security: clientEmail },
+    json: { workflow: clientEmail },
   });
   expect(pushed.status).toBe(201);
   return ana;
@@ -58,6 +59,7 @@ describe("fitting a workflow through the API", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       workflow: { owner: username, slug: "client-email", number: 1 },
+      implementation: null,
       results: [
         { platform: `${username}/worker`, number: 1, id: "worker", label: "A code worker", ...nativeFor("worker") },
         {
@@ -72,9 +74,9 @@ describe("fitting a workflow through the API", () => {
     });
   });
 
-  it("fits the YAML of a security view sent with the request", async () => {
+  it("fits the YAML of a workflow's file sent with the request", async () => {
     const { username } = await ana();
-    const res = await fit({ security: clientEmail, platforms: [`${username}/codex-laptop`] });
+    const res = await fit({ file: clientEmail, platforms: [`${username}/codex-laptop`] });
     expect(res.status).toBe(200);
     expect(res.body.workflow).toBeNull();
     expect(res.body.results).toEqual([
@@ -96,7 +98,7 @@ describe("fitting a workflow through the API", () => {
   it("fits a given version of the workflow and of each platform", async () => {
     const { username, token } = await ana();
     const patient = clientEmail.replace("wait: PT2H", "wait: P30D");
-    await request("POST", `/api/v1/${username}/client-email/versions`, { as: { token }, json: { security: patient } });
+    await request("POST", `/api/v1/${username}/client-email/versions`, { as: { token }, json: { workflow: patient } });
     await request("POST", `/api/v1/platforms/${username}/codex-laptop/versions`, {
       as: { token },
       json: { description: descriptions.worker },
@@ -113,34 +115,38 @@ describe("fitting a workflow through the API", () => {
 
   it("gives the gaps, and no results, when the workflow doesn't say what it needs", async () => {
     const { username } = await ana();
-    const res = await fit({ security: dinners, platforms: [`${username}/worker`] });
+    const res = await fit({ file: dinners, platforms: [`${username}/worker`] });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ workflow: null, ...JSON.parse(example("dinners.fit.json")) });
+    expect(res.body).toEqual({ workflow: null, implementation: null, ...JSON.parse(example("dinners.fit.json")) });
   });
 
   it("gives no results when there are no platforms to fit against", async () => {
     const nell = await person("nell");
-    expect(await fit({ security: clientEmail }, { token: nell.token })).toEqual({
+    expect(await fit({ file: clientEmail }, { token: nell.token })).toEqual({
       status: 200,
-      body: { workflow: null, results: [], gaps: [] },
+      body: { workflow: null, implementation: null, results: [], gaps: [] },
     });
   });
 
   it("refuses a request it cannot fit, saying why", async () => {
-    const { username, token } = await ana();
-    await request("POST", `/api/v1/${username}/drawn/versions`, { as: { token }, json: { platform: dinnersPlatform } });
+    const a = await ana();
+    const { username } = a;
+    // A version stored before the registry took only 0.4 files, with only a platform view.
+    await storeLegacyVersion(username, "drawn", a, { platform: dinnersPlatform });
     const cases: [unknown, number, string[]][] = [
-      [{}, 422, ["Send a workflow as owner/slug, or the YAML of its security view."]],
-      [{ workflow: `${username}/client-email`, security: clientEmail }, 422, ["Send a workflow or the YAML of its security view, not both."]],
+      [{}, 422, ["Send a workflow as owner/slug, or its AWML 0.4 file as file."]],
+      [{ workflow: `${username}/client-email`, file: clientEmail }, 422, ["Send a workflow or the YAML of its file, not both."]],
       [{ workflow: "client-email" }, 422, ["Name the workflow as owner/slug or owner/slug@version."]],
       [{ workflow: `${username}/nothing-here` }, 404, [`Not found: ${username}/nothing-here.`]],
       [{ workflow: `${username}/client-email@9` }, 404, [`Not found: ${username}/client-email@9.`]],
       [{ workflow: `${username}/drawn` }, 422, [`${username}/drawn v1 has no security view, which the fit needs.`]],
-      [{ security: dinnersPlatform }, 422, ["security: this is a platform view; the fit needs the security view."]],
-      [{ security: descriptions.worker }, 422, ["security: this is a platform description; the fit needs the security view."]],
-      [{ security: "awml: nonsense\n" }, 422, (await engine.check("awml: nonsense\n")).map((e) => `security: ${e}`)],
-      [{ security: clientEmail, platforms: "all" }, 422, ["platforms is a list of owner/slug or owner/slug@version."]],
-      [{ security: clientEmail, platforms: [`${username}/nothing-here`] }, 404, [`Not found: ${username}/nothing-here.`]],
+      [{ file: dinnersPlatform }, 400, [WORKFLOW_IS_NOT_04]],
+      [{ file: descriptions.worker }, 422, ["file: this is a platform description; the fit needs a workflow."]],
+      [{ file: "title: nonsense\n" }, 422, (await engine.check("title: nonsense\n")).map((e) => `file: ${e}`)],
+      [{ file: clientEmail, implementation: 7 }, 422, ["implementation is the id of one of the workflow's implementations."]],
+      [{ file: clientEmail, implementation: "home" }, 422, ['This workflow has no implementation "home".']],
+      [{ file: clientEmail, platforms: "all" }, 422, ["platforms is a list of owner/slug or owner/slug@version."]],
+      [{ file: clientEmail, platforms: [`${username}/nothing-here`] }, 404, [`Not found: ${username}/nothing-here.`]],
     ];
     for (const [body, status, errors] of cases) {
       const res = await fit(body);
