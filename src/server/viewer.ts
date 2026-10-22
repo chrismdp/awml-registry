@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb, type Db } from "@/db/client";
-import { user } from "@/db/schema";
+import { account, user } from "@/db/schema";
 import { getAuth } from "./auth";
 import { ownUrl } from "./http";
 import { refuse, type Result } from "./result";
@@ -32,6 +32,22 @@ export async function requestViewer(headers: Headers): Promise<Result<{ viewer: 
 export async function getViewer(headers: Headers): Promise<Viewer> {
   const asked = await requestViewer(headers);
   return asked.ok ? asked.viewer : null;
+}
+
+const PROVIDERS: Record<string, string> = { google: "Google", github: "GitHub" };
+
+// What a person signs in with, for Settings: the Google or GitHub account
+// they last signed in with, or an email link when they have neither. Better
+// Auth records no provider on a session, and touches the account each time it
+// signs in, so the most recently touched one is the latest.
+export async function signedInWith(db: Db, userId: string): Promise<string> {
+  const rows = await db
+    .select({ providerId: account.providerId })
+    .from(account)
+    .where(and(eq(account.userId, userId), inArray(account.providerId, Object.keys(PROVIDERS))))
+    .orderBy(desc(account.updatedAt))
+    .limit(1);
+  return rows[0] ? PROVIDERS[rows[0].providerId] : "an email link";
 }
 
 // The viewer a user id stands for, or null when there is no such user.

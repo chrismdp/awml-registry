@@ -54,7 +54,7 @@ describe("Connected apps on the settings page", () => {
     expect(await renews(app)).not.toBeNull();
 
     const section = await connectedApps(ana);
-    expect(section).toContain("Access stops within an hour.");
+    expect(section).toContain("Disconnect one and its access stops within an hour.");
     expect(section).toContain("Test AI");
     expect(section).toContain("Claude test");
     expect(section).toContain(dateTime(allowedAt));

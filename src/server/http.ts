@@ -29,6 +29,13 @@ export function siteUrl(req: Request, path: string) {
 export const ownUrl = (path: string) =>
   new URL(path, process.env.BETTER_AUTH_URL ?? "http://localhost:3000").toString();
 
+// An address on this registry as a person reads it, without the scheme:
+// "awml.io/acme".
+export const ownAddress = (path: string) => {
+  const url = new URL(path, ownUrl("/"));
+  return url.host + url.pathname;
+};
+
 // The MCP server: the resource an AI client's OAuth token is for.
 export const mcpUrl = () => ownUrl("/mcp");
 
