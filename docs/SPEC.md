@@ -201,10 +201,12 @@ Added after v1, on 2026-10-22. A person connects their own AI (Claude.ai, Claude
 | `list` | An owner's workflows the person may see; with no owner, their own and their organisations' |
 | `search` | The public gallery by title |
 | `search_platforms` | The platforms the person may see, public ones and their organisations' own, by words in the label or slug |
-| `get_platform` | A platform's description and install recipe, the latest version or a given one |
-| `add_platform` | Saves a new version of a platform, with its recipe, public or private, by the same rules as `POST /api/v1/platforms/{owner}/{slug}/versions` |
+| `get_platform` | A platform's description and install recipe, the latest version or a given one. Its `url` is the platform's page, `<registry>/platforms/{owner}/{slug}`, or `/platforms/{owner}/{slug}/v/{n}` when a version was asked for |
+| `add_platform` | Saves a new version of a platform, with its recipe, public or private, by the same rules as `POST /api/v1/platforms/{owner}/{slug}/versions`. Gives the platform's page `<registry>/platforms/{owner}/{slug}` as `url` and the version number |
 | `set_username` | Changes the person's own username, by the same rules as `PATCH /api/v1/me` (see "Usernames"). Gives the new name, the old one and their page |
 | `fit_workflow` | Runs the fit for a workflow (`owner/slug`, with an optional `@version`, or its AWML 0.4 file as YAML in `file`), or with `implementation` for one implementation's placement, against the platforms named, or every platform the person may see. Gives the same answer as `POST /api/v1/fit` |
+
+Every `url` a tool gives is a page a person can open, never an API address, so an AI app can show it to its person. The platform tools gave the API's address until 2026-10-22, when they were changed to give the platform's page.
 
 The person's own AI reads a platform's recipe and does the installing. The registry neither runs a recipe nor sends anything to a model, and the fit is code.
 

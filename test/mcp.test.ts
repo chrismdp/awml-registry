@@ -398,8 +398,9 @@ describe("platforms through /mcp", () => {
       owner: ana.username,
       slug: "box",
       number: 1,
-      url: `${BASE}/api/v1/platforms/${ana.username}/box/v/1`,
+      url: `${BASE}/platforms/${ana.username}/box`,
     });
+    expect(added.text).toBe(`Saved version 1 of the platform ${ana.username}/box: ${BASE}/platforms/${ana.username}/box`);
     await call("add_platform", { owner: ana.username, slug: "box", description: machine("box", "A box") }, ana.token);
     const latest = await call("get_platform", { owner: ana.username, slug: "box" }, ana.token);
     expect(latest.data).toMatchObject({
@@ -409,10 +410,17 @@ describe("platforms through /mcp", () => {
       visibility: "public",
       number: 2,
       versions: [2, 1],
+      url: `${BASE}/platforms/${ana.username}/box`,
       recipe: null,
     });
     const first = await call("get_platform", { owner: ana.username, slug: "box", version: 1 }, ana.token);
-    expect(first.data).toMatchObject({ number: 1, label: "A code worker", description: worker, recipe });
+    expect(first.data).toMatchObject({
+      number: 1,
+      label: "A code worker",
+      url: `${BASE}/platforms/${ana.username}/box/v/1`,
+      description: worker,
+      recipe,
+    });
     expect(first.text).toContain(worker);
     expect(first.text).toContain(recipe);
     expect(await call("get_platform", { owner: ana.username, slug: "box", version: 9 }, ana.token)).toMatchObject({

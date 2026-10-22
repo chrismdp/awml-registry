@@ -119,8 +119,8 @@ const listing = (rows: Listed[]) => {
   return answer(text, { workflows });
 };
 
-const platformUrl = (owner: string, slug: string, number?: number) =>
-  ownUrl(`/api/v1/platforms/${owner}/${slug}${number === undefined ? "" : `/v/${number}`}`);
+const platformPage = (owner: string, slug: string, number?: number) =>
+  ownUrl(`/platforms/${owner}/${slug}${number === undefined ? "" : `/v/${number}`}`);
 
 // The AI steps that may use the same companies, as `awml fit` says it:
 // "choose, draft and learn may use anthropic".
@@ -348,7 +348,7 @@ function server(person: Person) {
         visibility: p.visibility,
         number: p.number,
         versions,
-        url: platformUrl(p.owner, p.slug, version === undefined ? undefined : p.number),
+        url: platformPage(p.owner, p.slug, version === undefined ? undefined : p.number),
         pushedAt: p.pushedAt.toISOString(),
         pushedBy: p.pushedBy,
         description: p.description,
@@ -362,7 +362,7 @@ function server(person: Person) {
     {
       title: "Add a platform",
       description:
-        "Save a new version of the platform owner/slug from its description, and its install recipe if it has one. The description is checked first and refused if it has mistakes. A recipe says what to create, where each secret goes, how to schedule the triggers and how to check the workflow runs; it must never hold a secret itself. The owner is your own username or an organisation you belong to. The first version sets whether the platform is public or private, and only an organisation can keep a private one.",
+        "Save a new version of the platform owner/slug from its description, and its install recipe if it has one. The description is checked first and refused if it has mistakes. A recipe says what to create, where each secret goes, how to schedule the triggers and how to check the workflow runs; it must never hold a secret itself. The owner is your own username or an organisation you belong to. The first version sets whether the platform is public or private, and only an organisation can keep a private one. Gives the platform's page and the new version number.",
       inputSchema: z.object({
         owner,
         slug: platformSlug,
@@ -381,7 +381,7 @@ function server(person: Person) {
       const db = await getDb();
       const pushed = await pushPlatformVersion(db, person, owner, slug, { description, recipe, visibility });
       if (!pushed.ok) return refused(pushed.errors);
-      const url = platformUrl(pushed.owner, pushed.slug, pushed.number);
+      const url = platformPage(pushed.owner, pushed.slug);
       return answer(`Saved version ${pushed.number} of the platform ${pushed.owner}/${pushed.slug}: ${url}`, {
         owner: pushed.owner,
         slug: pushed.slug,
