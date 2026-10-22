@@ -4,20 +4,28 @@ import { auditEvent, token } from "@/db/schema";
 import { edition } from "@/edition";
 import { hashSecret, revokeToken, listTokens } from "@/server/tokens";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
+import WorkflowSecurityPage from "@/app/[owner]/[slug]/security/page";
+import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
+import WorkflowYamlPage from "@/app/[owner]/[slug]/yaml/page";
 import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
+import VersionSecurityPage from "@/app/[owner]/[slug]/v/[n]/security/page";
+import VersionPlatformPage from "@/app/[owner]/[slug]/v/[n]/platform/page";
+import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
 import OwnerPage from "@/app/[owner]/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import OrgSettingsPage from "@/app/[owner]/settings/page";
 import GalleryPage from "@/app/gallery/page";
 import { example, orgWith, person, request, withEdition, type Who } from "./helpers";
-import { renderPage } from "./pages";
+import { renderPage, type Page } from "./pages";
 
 const security = example("dinners-security.yaml");
+const platform = example("dinners-platform.yaml");
 
+// Pushes both files, so every view of the workflow has something to show.
 async function push(org: string, slug: string, as: Who, visibility?: "public" | "private") {
   return request("POST", `/api/v1/${org}/${slug}/versions`, {
     as,
-    json: { security, ...(visibility ? { visibility } : {}) },
+    json: { security, platform, ...(visibility ? { visibility } : {}) },
   });
 }
 
@@ -33,18 +41,37 @@ async function acme() {
   return { olive, mo, nell };
 }
 
-async function everyRead(who: Who) {
-  return {
-    page: (await renderPage(WorkflowPage, { owner: "acme", slug: "payroll" }, { as: who })).status,
-    versionPage: (await renderPage(VersionPage, { owner: "acme", slug: "payroll", n: "1" }, { as: who }))
-      .status,
-    yaml: (await request("GET", "/acme/payroll/v/1/security.yaml", { as: who })).status,
-    api: (await request("GET", "/api/v1/acme/payroll", { as: who })).status,
-    versionApi: (await request("GET", "/api/v1/acme/payroll/v/1", { as: who })).status,
-  };
+// A workflow's pages: the latest version and version 1, each at its own
+// address and at each view's.
+const latestPages: Record<string, Page<{ owner: string; slug: string }>> = {
+  page: WorkflowPage,
+  securityView: WorkflowSecurityPage,
+  platformView: WorkflowPlatformPage,
+  yamlView: WorkflowYamlPage,
+};
+const versionPages: Record<string, Page<{ owner: string; slug: string; n: string }>> = {
+  versionPage: VersionPage,
+  versionSecurityView: VersionSecurityPage,
+  versionPlatformView: VersionPlatformPage,
+  versionYamlView: VersionYamlPage,
+};
+
+async function everyRead(who: Who, owner = "acme", slug = "payroll") {
+  const reads: Record<string, number> = {};
+  for (const [name, page] of Object.entries(latestPages))
+    reads[name] = (await renderPage(page, { owner, slug }, { as: who })).status;
+  for (const [name, page] of Object.entries(versionPages))
+    reads[name] = (await renderPage(page, { owner, slug, n: "1" }, { as: who })).status;
+  reads.yaml = (await request("GET", `/${owner}/${slug}/v/1/security.yaml`, { as: who })).status;
+  reads.api = (await request("GET", `/api/v1/${owner}/${slug}`, { as: who })).status;
+  reads.versionApi = (await request("GET", `/api/v1/${owner}/${slug}/v/1`, { as: who })).status;
+  return reads;
 }
 
-const all = (status: number) => ({ page: status, versionPage: status, yaml: status, api: status, versionApi: status });
+const all = (status: number) =>
+  Object.fromEntries(
+    [...Object.keys(latestPages), ...Object.keys(versionPages), "yaml", "api", "versionApi"].map((read) => [read, status]),
+  );
 
 describe("Positive boundary", () => {
   it("a member can read and push a private workflow", async () => {
@@ -67,15 +94,36 @@ describe("Positive boundary", () => {
 });
 
 describe("Negative boundary", () => {
-  it("a non-member gets 404 on a private workflow's page, version page, YAML file and API", async () => {
+  it("a non-member gets 404 on a private workflow's page, each of its views, version page, YAML file and API", async () => {
     const { nell } = await acme();
     expect(await everyRead({ cookie: nell.cookie })).toEqual(all(404));
     expect(await everyRead({ token: nell.token })).toMatchObject({ yaml: 404, api: 404, versionApi: 404 });
   });
 
-  it("a signed-out visitor gets 404 on a private workflow's page, version page, YAML file and API", async () => {
+  it("a signed-out visitor gets 404 on a private workflow's page, each of its views, version page, YAML file and API", async () => {
     await acme();
     expect(await everyRead(undefined)).toEqual(all(404));
+  });
+
+  it("an old ?view= address of a private workflow sends a non-member on exactly as a missing workflow's does, to a 404", async () => {
+    const { nell } = await acme();
+    for (const who of [{ cookie: nell.cookie }, undefined]) {
+      for (const view of ["security", "platform", "yaml"]) {
+        for (const slug of ["payroll", "nothing-here"]) {
+          const search = { view };
+          expect(await renderPage(WorkflowPage, { owner: "acme", slug }, { as: who, search })).toEqual({
+            status: 308,
+            html: "",
+            location: `/acme/${slug}/${view}`,
+          });
+          expect(await renderPage(VersionPage, { owner: "acme", slug, n: "1" }, { as: who, search })).toEqual({
+            status: 308,
+            html: "",
+            location: `/acme/${slug}/v/1/${view}`,
+          });
+        }
+      }
+    }
   });
 
   it("a private workflow answers exactly as a missing one does", async () => {
@@ -109,6 +157,12 @@ describe("Cross-tenant boundary", () => {
     await push("beta", "open-plans", { token: bea.token }, "public");
     return { olive, mo, nell, bea };
   }
+
+  it("a member of one organisation gets 404 on another organisation's private workflow's pages and each of their views, which its own members see", async () => {
+    const { mo, bea } = await twoOrgs();
+    expect(await everyRead({ cookie: mo.cookie }, "beta", "secret-plans")).toEqual(all(404));
+    expect(await everyRead({ cookie: bea.cookie }, "beta", "secret-plans")).toEqual(all(200));
+  });
 
   it("a token from a member of one organisation cannot read another organisation's private workflows", async () => {
     const { mo } = await twoOrgs();

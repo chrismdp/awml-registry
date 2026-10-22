@@ -2,9 +2,10 @@ import Link from "next/link";
 import type { CheckResult } from "@/db/schema";
 import type { Summary } from "@/engine";
 import { mcpUrl } from "@/server/http";
-import { dateTime } from "@/server/page";
+import { dateTime, type PageView } from "@/server/page";
 import type { View } from "@/server/registry";
 import { names, stepCount } from "@/server/summary";
+import { CopyButton } from "./CopyButton";
 import { Mermaid } from "./Mermaid";
 import { count } from "./words";
 
@@ -14,8 +15,11 @@ export type VersionViewProps = {
   title: string;
   visibility: "public" | "private";
   number: number;
+  // The page's address without a view: /owner/slug for the latest version,
+  // /owner/slug/v/n for one version. Each view is at this address/view.
+  address: string;
   views: View[];
-  shown: View | "yaml";
+  shown: PageView;
   files: { view: View; text: string }[];
   mermaid: string;
   check: CheckResult;
@@ -23,7 +27,7 @@ export type VersionViewProps = {
   versions: { number: number; pushedAt: Date; pushedBy: string | null }[];
 };
 
-const TAB: Record<View | "yaml", string> = { security: "Who may see each part", platform: "Where each part runs", yaml: "YAML" };
+const TAB: Record<PageView, string> = { security: "Who may see each part", platform: "Where each part runs", yaml: "YAML" };
 
 export function VersionView(p: VersionViewProps) {
   const base = `/${p.owner}/${p.slug}`;
@@ -31,8 +35,16 @@ export function VersionView(p: VersionViewProps) {
   const latest = p.versions[0]?.number ?? p.number;
   const s = p.summary;
   const { publishingLabels } = names(s);
-  const download = p.shown === "yaml" ? p.views[0] : p.shown;
-  const tabs: (View | "yaml")[] = [...p.views, "yaml"];
+  const tabs: PageView[] = [...p.views, "yaml"];
+  const tablist = (
+    <div role="tablist" aria-label="View" className="tabs">
+      {tabs.map((view) => (
+        <a key={view} role="tab" href={`${p.address}/${view}`} aria-selected={view === p.shown}>
+          {TAB[view]}
+        </a>
+      ))}
+    </div>
+  );
   return (
     <article>
       <section className="wf-head">
@@ -57,14 +69,16 @@ export function VersionView(p: VersionViewProps) {
             </span>
           </div>
         </div>
-        <div className="actions">
-          <a href="#change" className="button">
-            Change this workflow
-          </a>
-          <a href={`${base}/v/${p.number}/${download}.yaml`} className="button outline">
-            Download YAML
-          </a>
-        </div>
+        {p.shown !== "yaml" && (
+          <div className="actions">
+            <a href="#change" className="button">
+              Change this workflow
+            </a>
+            <a href={`${base}/v/${p.number}/${p.shown}.yaml`} className="button outline">
+              Download YAML
+            </a>
+          </div>
+        )}
       </section>
 
       {problems.length > 0 && (
@@ -75,136 +89,136 @@ export function VersionView(p: VersionViewProps) {
         </ul>
       )}
 
-      <div className="wf-body">
-        <main>
-          <div role="tablist" aria-label="View" className="tabs">
-            {tabs.map((view) => (
-              <a key={view} role="tab" href={`?view=${view}`} aria-selected={view === p.shown}>
-                {TAB[view]}
-              </a>
-            ))}
-          </div>
-          {p.shown === "yaml" ? (
-            <div className="yaml" role="tabpanel" aria-label={`${p.title}, yaml`}>
-              {p.files.map((f) => (
-                <section key={f.view}>
-                  <div className="yaml-head">
-                    <h2>{f.view}.yaml</h2>
-                    <a href={`${base}/v/${p.number}/${f.view}.yaml`} className="button outline">
+      {p.shown === "yaml" ? (
+        <div className="yaml">
+          {tablist}
+          <div className="files" role="tabpanel" aria-label={`${p.title}, yaml`}>
+            {p.files.map((f) => (
+              <section key={f.view}>
+                <div className="yaml-head">
+                  <h2>{f.view}.yaml</h2>
+                  <div className="file-actions">
+                    <CopyButton target={`${f.view}-yaml`} />
+                    <a href={`${base}/v/${p.number}/${f.view}.yaml`} className="button outline" download>
                       Download
                     </a>
                   </div>
-                  <pre>{f.text}</pre>
-                </section>
-              ))}
-            </div>
-          ) : (
+                </div>
+                <pre id={`${f.view}-yaml`}>{f.text}</pre>
+              </section>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="wf-body">
+          <main>
+            {tablist}
             <figure className="figure" role="tabpanel" aria-label={`${p.title}, ${TAB[p.shown].toLowerCase()}`}>
               <Mermaid text={p.mermaid} />
             </figure>
-          )}
-        </main>
+          </main>
 
-        <aside>
-          <section className="side">
-            <h2>Who decides</h2>
-            <Deciders summary={s} />
-          </section>
-
-          <section className="side">
-            <h2>Outside actions</h2>
-            <dl className="tiers">
-              <div>
-                <dt>Allow</dt>
-                <dd>{s.outsideActions.allow}</dd>
-              </div>
-              <div>
-                <dt>Ask</dt>
-                <dd>{s.outsideActions.ask}</dd>
-              </div>
-              <div>
-                <dt>Block</dt>
-                <dd>{s.outsideActions.block}</dd>
-              </div>
-            </dl>
-          </section>
-
-          <section className="side">
-            <h2>Leaves its scope</h2>
-            {publishingLabels.length === 0 ? (
-              <p className="plain">Nothing leaves its scope.</p>
-            ) : (
-              <ul className="leaves">
-                {publishingLabels.map((l, i) => (
-                  <li key={i}>{l}</li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          <section className="side">
-            <h2>Everything in it</h2>
-            <dl className="counts">
-              {(
-                [
-                  ["Triggers", s.triggers],
-                  ["Reviews", s.reviews],
-                  ["Notes", s.contexts],
-                  ["Connectors", s.connectors],
-                  ["Surfaces", s.surfaces],
-                  ["Scopes", s.scopes],
-                ] as const
-              ).map(([label, n]) => (
-                <div key={label}>
-                  <dt>{label}</dt>
-                  <dd>{n}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-
-          {p.versions.length > 1 && (
+          <aside>
             <section className="side">
-              <h2>Versions</h2>
-              <ol className="versions">
-                {p.versions.map((v) => (
-                  <li key={v.number}>
-                    {v.number === p.number ? (
-                      <strong>Version {v.number}</strong>
-                    ) : (
-                      <Link href={v.number === latest ? base : `${base}/v/${v.number}`}>Version {v.number}</Link>
-                    )}{" "}
-                    <small>
-                      {v.pushedBy} · {dateTime(v.pushedAt)}
-                    </small>
-                  </li>
-                ))}
-              </ol>
+              <h2>Who decides</h2>
+              <Deciders summary={s} />
             </section>
-          )}
 
-          <section id="change" className="change">
-            <div>
-              <h2>Change it</h2>
-              <p>
-                Every change is checked, then saved as version {latest + 1}. Version {latest} stays as it is.
-              </p>
-            </div>
-            <section className="own-ai">
-              <h3>Ask your own AI</h3>
-              <p>Connect Claude or ChatGPT to the registry and tell it what to change. It runs on your account, not ours.</p>
-              <pre>{mcpUrl()}</pre>
+            <section className="side">
+              <h2>Outside actions</h2>
+              <dl className="tiers">
+                <div>
+                  <dt>Allow</dt>
+                  <dd>{s.outsideActions.allow}</dd>
+                </div>
+                <div>
+                  <dt>Ask</dt>
+                  <dd>{s.outsideActions.ask}</dd>
+                </div>
+                <div>
+                  <dt>Block</dt>
+                  <dd>{s.outsideActions.block}</dd>
+                </div>
+              </dl>
             </section>
-            <section>
-              <h3>Push from your machine</h3>
-              <pre>
-                awml push {p.owner}/{p.slug} {p.views.map((v) => `${v}.yaml`).join(" ")}
-                {p.visibility === "private" ? " --private" : ""}
-              </pre>
+
+            <section className="side">
+              <h2>Leaves its scope</h2>
+              {publishingLabels.length === 0 ? (
+                <p className="plain">Nothing leaves its scope.</p>
+              ) : (
+                <ul className="leaves">
+                  {publishingLabels.map((l, i) => (
+                    <li key={i}>{l}</li>
+                  ))}
+                </ul>
+              )}
             </section>
-          </section>
-        </aside>
-      </div>
+
+            <section className="side">
+              <h2>Everything in it</h2>
+              <dl className="counts">
+                {(
+                  [
+                    ["Triggers", s.triggers],
+                    ["Reviews", s.reviews],
+                    ["Notes", s.contexts],
+                    ["Connectors", s.connectors],
+                    ["Surfaces", s.surfaces],
+                    ["Scopes", s.scopes],
+                  ] as const
+                ).map(([label, n]) => (
+                  <div key={label}>
+                    <dt>{label}</dt>
+                    <dd>{n}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+
+            {p.versions.length > 1 && (
+              <section className="side">
+                <h2>Versions</h2>
+                <ol className="versions">
+                  {p.versions.map((v) => (
+                    <li key={v.number}>
+                      {v.number === p.number ? (
+                        <strong>Version {v.number}</strong>
+                      ) : (
+                        <Link href={v.number === latest ? base : `${base}/v/${v.number}`}>Version {v.number}</Link>
+                      )}{" "}
+                      <small>
+                        {v.pushedBy} · {dateTime(v.pushedAt)}
+                      </small>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            )}
+
+            <section id="change" className="change">
+              <div>
+                <h2>Change it</h2>
+                <p>
+                  Every change is checked, then saved as version {latest + 1}. Version {latest} stays as it is.
+                </p>
+              </div>
+              <section className="own-ai">
+                <h3>Ask your own AI</h3>
+                <p>Connect Claude or ChatGPT to the registry and tell it what to change. It runs on your account, not ours.</p>
+                <pre>{mcpUrl()}</pre>
+              </section>
+              <section>
+                <h3>Push from your machine</h3>
+                <pre>
+                  awml push {p.owner}/{p.slug} {p.views.map((v) => `${v}.yaml`).join(" ")}
+                  {p.visibility === "private" ? " --private" : ""}
+                </pre>
+              </section>
+            </section>
+          </aside>
+        </div>
+      )}
     </article>
   );
 }

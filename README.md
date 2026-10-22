@@ -32,6 +32,8 @@ curl -X POST http://localhost:3000/api/v1/<you>/<workflow>/versions \
   -d '{"security": "<the YAML of the security file>"}'
 ```
 
+The workflow's page is then at `/<you>/<workflow>`. Each view has its own address, `/<you>/<workflow>/security`, `/platform` and `/yaml`, which shows the files as text to copy or download. Older versions are at `/<you>/<workflow>/v/<n>`, with their views at `/v/<n>/security` and so on.
+
 Run the tests with `npm test` and the type check with `npm run typecheck`.
 
 ## Platforms and where a workflow can run

@@ -29,7 +29,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 ## What v1 does
 
 - **Push and pull.** Push a workflow's security file, platform file or both from the CLI or the API. Every version can be downloaded as YAML or pulled with the CLI.
-- **A page per version.** Both views drawn (Mermaid, drawn in the browser from the text the AWML package produces, in the Inter font the registry serves, loaded before Mermaid measures the labels), the check result, and the summary worked out from the files at push.
+- **A page per version.** Each view drawn behind its own tab, at its own address (Mermaid, drawn in the browser from the text the AWML package produces, in the Inter font the registry serves, loaded before Mermaid measures the labels), the check result, and the summary worked out from the files at push. A YAML tab shows the files themselves and nothing else, each with a Copy button and a Download link.
 - **A public gallery.** Anyone can browse public workflows and search them by title. Anyone signed in can publish one, free.
 - **Private workflows for an organisation.** Only its members can see them. In this repo's default edition every organisation may keep private workflows; the hosted edition limits that to paying organisations.
 - **An inventory for each organisation.** Every workflow in one table with its summary counts, plus totals across them all.
@@ -64,8 +64,11 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `/gallery` | The gallery of public workflows, newest first, with search by title |
 | `/explore` | Where the gallery was. Redirects permanently (308) to `/gallery`, keeping the search |
 | `/{owner}` | A user's or organisation's workflows: the public ones to everyone, the private ones to members too |
-| `/{owner}/{slug}` | The latest version: both views drawn, the summary, the check result, the list of versions, and the command to push the next one |
-| `/{owner}/{slug}/v/{n}` | One version, the same way |
+| `/{owner}/{slug}` | The latest version: its security view drawn (its platform view, when it has no security file), the summary, the check result, the list of versions, and the command to push the next one |
+| `/{owner}/{slug}/security`, `/{owner}/{slug}/platform` | The latest version the same way, with that view drawn. 404 when the version has no such file |
+| `/{owner}/{slug}/yaml` | The latest version's files as text, `security.yaml` then `platform.yaml`, each full width with a Copy button and a Download link. The page keeps its header (owner / slug, title, check result, version) and its tabs, and shows nothing generated: no drawing, no summary, no versions, no Change it box |
+| `/{owner}/{slug}/v/{n}`, `/{owner}/{slug}/v/{n}/security`, `/platform`, `/yaml` | One version, the same ways |
+| `/{owner}/{slug}?view={view}`, `/{owner}/{slug}/v/{n}?view={view}` | Where the views were. Redirect permanently (308) to the view's own address, such as `/{owner}/{slug}/platform`, whether or not the workflow is there, so the redirect tells nobody anything |
 | `/{owner}/{slug}/v/{n}/{view}.yaml` | One file as YAML |
 | `/{org}/inventory` | The organisation's inventory, for members |
 | `/{owner}/platforms` | A user's or organisation's platforms, each with its label, latest version and links to its files: the public ones to everyone, the private ones to members too. With none, what a platform description is and, to those who may add one there, how. Linked from `/{owner}` and the inventory |
@@ -107,9 +110,9 @@ Each boundary has a test:
 
 | Boundary | Test |
 |---|---|
-| Positive | A member can read and push a private workflow |
-| Negative | A non-member and a signed-out visitor both get 404 on a private workflow, its files, its version pages and its API |
-| Cross-tenant | A token from a member of organisation A can neither read nor push organisation B's workflows, public pushes included |
+| Positive | A member can read and push a private workflow, and see its pages at every view's address |
+| Negative | A non-member and a signed-out visitor both get 404 on a private workflow, its files, its version pages, every view of each page, and its API. An old `?view=` address of a private workflow redirects exactly as a missing one's does |
+| Cross-tenant | A token from a member of organisation A can neither read nor push organisation B's workflows, public pushes included. A member of A gets 404 on B's private workflow's pages and every view of them, which B's members see |
 | Invalid token | A revoked or made-up token gets the same 401 for a private, a public and a missing workflow; a valid token still reads as before |
 | Roles | An owner can do everything a member can, and manage members. A member cannot manage members or read the audit log |
 
@@ -131,7 +134,7 @@ Added on 2026-10-22. A person's username starts as the part of their email addre
 
 **What moves.** Workflows, platforms, versions and memberships are stored against the account, so they all appear under the new name at once, and the versions a person pushed show their new name. Each organisation the person belongs to records a `member_renamed` event, `olive to olive-new`, shown as "renamed" in its audit log.
 
-**Old addresses.** A name a person gave up is kept in the previous names table. While no person or organisation holds it, every address under it answers with a 308 to the same address under the person's current name, query kept: the pages (`/{old}`, `/{old}/{slug}`, its versions, inventory and settings), the YAML and platform downloads, and every `/api/v1/{old}/...` and `/api/v1/platforms/{old}/...` route, pushes included. A 308 keeps the method and body, so a command line that follows redirects keeps reading and pushing. The redirect is the same whether anything is at the address or not, and the address it sends to makes its own access check, so it tells nobody anything about a workflow. After several renames, every old name leads to the current one.
+**Old addresses.** A name a person gave up is kept in the previous names table. While no person or organisation holds it, every address under it answers with a 308 to the same address under the person's current name: the pages (`/{old}`, `/{old}/{slug}`, its versions, every view of each, inventory and settings), and, query kept, the YAML and platform downloads and every `/api/v1/{old}/...` and `/api/v1/platforms/{old}/...` route, pushes included. An old `?view=` address goes first to its view's own address, and from there to the new name. A 308 keeps the method and body, so a command line that follows redirects keeps reading and pushing. The redirect is the same whether anything is at the address or not, and the address it sends to makes its own access check, so it tells nobody anything about a workflow. After several renames, every old name leads to the current one.
 
 **When the redirect stops.** An old name is free for anyone to take: a person renaming, someone signing up, or a new organisation. Once someone holds it, their page is there and the redirect stops. If a person takes the name and later gives it up, it redirects to them, as the last person to give it up. A person who takes back their own old name has their page there again, and the name they left redirects to it.
 

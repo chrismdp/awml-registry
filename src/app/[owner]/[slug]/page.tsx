@@ -1,14 +1,14 @@
 import { VersionView } from "@/components/VersionView";
-import { loadVersion } from "./load";
+import { followOldView, loadVersion } from "./load";
 
 export default async function WorkflowPage({
   params,
   searchParams,
 }: {
   params: Promise<{ owner: string; slug: string }>;
-  searchParams: Promise<{ view?: string }>;
+  searchParams: Promise<{ view?: string | string[] }>;
 }) {
   const { owner, slug } = await params;
-  const { view } = await searchParams;
-  return <VersionView {...await loadVersion(owner, slug, "latest", view)} />;
+  followOldView(owner, slug, "latest", (await searchParams).view);
+  return <VersionView {...await loadVersion(owner, slug, "latest")} />;
 }

@@ -14,7 +14,14 @@ import HomePage from "@/app/page";
 import GalleryPage from "@/app/gallery/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
+import WorkflowSecurityPage from "@/app/[owner]/[slug]/security/page";
+import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
+import WorkflowYamlPage from "@/app/[owner]/[slug]/yaml/page";
 import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
+import VersionSecurityPage from "@/app/[owner]/[slug]/v/[n]/security/page";
+import VersionPlatformPage from "@/app/[owner]/[slug]/v/[n]/platform/page";
+import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
+import { copyText } from "@/components/CopyButton";
 import TokensPage from "@/app/settings/tokens/page";
 import LoginPage from "@/app/login/page";
 import { makeToken } from "@/app/settings/tokens/actions";
@@ -50,6 +57,23 @@ const text = (html: string) =>
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ");
+
+// The page's view tabs: where each goes, what it says, and whether it is the one on show.
+const tabs = (html: string) =>
+  [...html.matchAll(/<a role="tab" href="([^"]*)" aria-selected="(true|false)">([^<]*)<\/a>/g)].map(([, href, selected, label]) => ({
+    href,
+    label,
+    selected: selected === "true",
+  }));
+
+// The text of each file a page shows, by the id of its box.
+const files = (html: string) =>
+  Object.fromEntries(
+    [...html.matchAll(/<pre id="([^"]+)">([^]*?)<\/pre>/g)].map(([, id, body]) => [
+      id,
+      body.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&"),
+    ]),
+  );
 
 async function push(owner: string, slug: string, as: Who, body: Record<string, unknown>) {
   const res = await request("POST", `/api/v1/${owner}/${slug}/versions`, { as, json: body });
@@ -103,20 +127,99 @@ describe("the public gallery", () => {
 });
 
 describe("a workflow's page", () => {
-  it("draws one view at a time behind a tab for each, and downloads the file on show", async () => {
+  it("draws one view at a time behind a tab for each, each tab its own address, and downloads the file on show", async () => {
     const ana = await person("ana");
-    await push(ana.username, "dinners", { token: ana.token }, { security, platform });
-    const page = await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" });
+    const o = ana.username;
+    await push(o, "dinners", { token: ana.token }, { security, platform });
+    const page = await renderPage(WorkflowPage, { owner: o, slug: "dinners" });
     const shown = text(page.html);
-    expect(shown).toContain("ana / dinners The family's dinners No mistakes Public · Version 1 of 1");
-    expect(shown).toContain("Who may see each part Where each part runs");
+    expect(shown).toContain(`${o} / dinners The family's dinners No mistakes Public · Version 1 of 1`);
     expect(page.html).toContain(await engine.draw(security).then((m) => m.split("\n")[0]));
-    expect(page.html).toContain(`href="/${ana.username}/dinners/v/1/security.yaml"`);
-    expect(page.html).toContain(`href="?view=platform"`);
+    expect(page.html).toContain(`href="/${o}/dinners/v/1/security.yaml"`);
+    expect(tabs(page.html)).toEqual([
+      { href: `/${o}/dinners/security`, label: "Who may see each part", selected: true },
+      { href: `/${o}/dinners/platform`, label: "Where each part runs", selected: false },
+      { href: `/${o}/dinners/yaml`, label: "YAML", selected: false },
+    ]);
+    expect(page.html).not.toContain("?view=");
 
-    const other = await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" }, { search: { view: "platform" } });
+    // The security view's own address is the same page.
+    expect((await renderPage(WorkflowSecurityPage, { owner: o, slug: "dinners" })).html).toBe(page.html);
+
+    const other = await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" });
+    expect(other.status).toBe(200);
     expect(other.html).toContain(await engine.draw(platform).then((m) => m.split("\n")[1]));
-    expect(other.html).toContain(`href="/${ana.username}/dinners/v/1/platform.yaml"`);
+    expect(other.html).toContain(`href="/${o}/dinners/v/1/platform.yaml"`);
+    expect(tabs(other.html).filter((t) => t.selected).map((t) => t.href)).toEqual([`/${o}/dinners/platform`]);
+  });
+
+  it("gives an older version's views their own addresses, and its tabs keep to that version", async () => {
+    const ana = await person("ana");
+    const o = ana.username;
+    await push(o, "dinners", { token: ana.token }, { security, platform });
+    await push(o, "dinners", { token: ana.token }, { security: withTitle("Dinners for two"), platform });
+    const v1 = { owner: o, slug: "dinners", n: "1" };
+
+    const drawn = await renderPage(VersionPlatformPage, v1);
+    expect(drawn.status).toBe(200);
+    expect(text(drawn.html)).toContain("No mistakes Public · Version 1 of 2");
+    expect(drawn.html).toContain(await engine.draw(platform).then((m) => m.split("\n")[1]));
+    expect(tabs(drawn.html)).toEqual([
+      { href: `/${o}/dinners/v/1/security`, label: "Who may see each part", selected: false },
+      { href: `/${o}/dinners/v/1/platform`, label: "Where each part runs", selected: true },
+      { href: `/${o}/dinners/v/1/yaml`, label: "YAML", selected: false },
+    ]);
+    expect((await renderPage(VersionSecurityPage, v1)).html).toBe((await renderPage(VersionPage, v1)).html);
+    expect(files((await renderPage(VersionYamlPage, v1)).html)["security-yaml"]).toBe(security);
+  });
+
+  it("sends the old ?view= addresses for good (308) to the view's own address, on the latest version and on older ones", async () => {
+    const ana = await person("ana");
+    const o = ana.username;
+    await push(o, "dinners", { token: ana.token }, { security, platform });
+    for (const view of ["security", "platform", "yaml"]) {
+      expect(await renderPage(WorkflowPage, { owner: o, slug: "dinners" }, { search: { view } })).toEqual({
+        status: 308,
+        html: "",
+        location: `/${o}/dinners/${view}`,
+      });
+      expect(await renderPage(VersionPage, { owner: o, slug: "dinners", n: "1" }, { search: { view } })).toEqual({
+        status: 308,
+        html: "",
+        location: `/${o}/dinners/v/1/${view}`,
+      });
+    }
+    // A view it does not know leaves the page as it is.
+    expect((await renderPage(WorkflowPage, { owner: o, slug: "dinners" }, { search: { view: "other" } })).status).toBe(200);
+    // Each part of the address it sends to stays inside its own segment.
+    expect(await renderPage(WorkflowPage, { owner: "/evil.example", slug: "a b" }, { search: { view: "yaml" } })).toMatchObject({
+      status: 308,
+      location: "/%2Fevil.example/a%20b/yaml",
+    });
+  });
+
+  it("is not found at /platform when the workflow has no platform file, on the latest version or an older one", async () => {
+    const ana = await person("ana");
+    const o = ana.username;
+    await push(o, "bins", { token: ana.token }, { security: binDay });
+    expect((await renderPage(WorkflowPlatformPage, { owner: o, slug: "bins" })).status).toBe(404);
+    expect((await renderPage(VersionPlatformPage, { owner: o, slug: "bins", n: "1" })).status).toBe(404);
+    const page = await renderPage(WorkflowSecurityPage, { owner: o, slug: "bins" });
+    expect(page.status).toBe(200);
+    expect(tabs(page.html).map((t) => t.href)).toEqual([`/${o}/bins/security`, `/${o}/bins/yaml`]);
+  });
+
+  it("keeps each file's raw download at /v/{n}/{view}.yaml", async () => {
+    const ana = await person("ana");
+    const o = ana.username;
+    await push(o, "dinners", { token: ana.token }, { security, platform });
+    for (const [view, body] of [["security", security], ["platform", platform]]) {
+      const res = await request("GET", `/${o}/dinners/v/1/${view}.yaml`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("application/yaml; charset=utf-8");
+      expect(await res.text()).toBe(body);
+    }
+    expect((await request("GET", `/${o}/dinners/v/1/yaml.yaml`)).status).toBe(404);
   });
 
   it("says who decides, what reaches outside, what leaves its scope and everything in it", async () => {
@@ -153,49 +256,80 @@ describe("a workflow's page", () => {
   });
 });
 
-describe("a workflow's YAML tab", () => {
+describe("a workflow's YAML view", () => {
   const tricky = binDay.replace("title: Bin day", "title: Bin <day> & co");
 
-  it("is a third tab that shows the security file then the platform file as escaped text, with a download for each", async () => {
+  it("shows only the raw files under the header: no drawing, no summary panels and no Change it box", async () => {
     const ana = await person("ana");
-    await push(ana.username, "dinners", { token: ana.token }, { security: withTitle("Dinners <b>&</b>"), platform });
-    const page = await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" }, { search: { view: "yaml" } });
+    const o = ana.username;
+    const titled = withTitle("Dinners <b>&</b>");
+    await push(o, "dinners", { token: ana.token }, { security: titled, platform });
+    const page = await renderPage(WorkflowYamlPage, { owner: o, slug: "dinners" });
     expect(page.status).toBe(200);
-    expect(text(page.html)).toContain("Who may see each part Where each part runs YAML");
-    expect(page.html).toContain(`href="?view=yaml"`);
+    const shown = text(page.html);
+    expect(shown).toContain(
+      `${o} / dinners Dinners <b>&</b> No mistakes Public · Version 1 of 1 ` +
+        "Who may see each part Where each part runs YAML security.yaml Copy Download # The family's dinners",
+    );
+    expect(tabs(page.html).filter((t) => t.selected).map((t) => t.href)).toEqual([`/${o}/dinners/yaml`]);
     expect(page.html).not.toContain("<figure");
     expect(page.html).not.toContain("flowchart");
-    expect(page.html).toContain("title: Dinners &lt;b&gt;&amp;&lt;/b&gt;");
+    for (const gone of [
+      "Who decides",
+      "Outside actions",
+      "Leaves its scope",
+      "Everything in it",
+      "Versions",
+      "Change it",
+      "Change this workflow",
+      "Download YAML",
+      "awml push",
+    ])
+      expect(shown, gone).not.toContain(gone);
+
+    expect(files(page.html)).toEqual({ "security-yaml": titled, "platform-yaml": platform });
     expect(page.html).not.toContain("<b>&</b>");
-    expect(page.html).toContain(platform.split("\n")[1].replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;"));
-    const shown = text(page.html);
-    expect(shown.indexOf("security.yaml")).toBeGreaterThan(-1);
     expect(shown.indexOf("security.yaml")).toBeLessThan(shown.indexOf("platform.yaml"));
-    expect(page.html).toContain(`href="/${ana.username}/dinners/v/1/security.yaml"`);
-    expect(page.html).toContain(`href="/${ana.username}/dinners/v/1/platform.yaml"`);
-    expect(page.html).toContain("Download YAML");
-    expect(shown).toContain("Who decides");
+    for (const view of ["security", "platform"]) {
+      expect(page.html).toContain(`<button type="button" class="button outline" aria-controls="${view}-yaml">Copy</button>`);
+      expect(page.html).toContain(`<a href="/${o}/dinners/v/1/${view}.yaml" class="button outline" download="">Download</a>`);
+    }
   });
 
   it("shows only the security file when there is no platform file", async () => {
     const ana = await person("ana");
     await push(ana.username, "bins", { token: ana.token }, { security: tricky });
-    const page = await renderPage(WorkflowPage, { owner: ana.username, slug: "bins" }, { search: { view: "yaml" } });
-    const shown = text(page.html);
-    expect(shown).toContain("security.yaml");
-    expect(shown).toContain("title: Bin <day> & co");
-    expect(shown).not.toContain("platform.yaml");
+    const page = await renderPage(WorkflowYamlPage, { owner: ana.username, slug: "bins" });
+    expect(files(page.html)).toEqual({ "security-yaml": tricky });
+    expect(text(page.html)).not.toContain("platform.yaml");
   });
 
   it("works on an older version", async () => {
     const ana = await person("ana");
-    await push(ana.username, "bins", { token: ana.token }, { security: binDay });
-    await push(ana.username, "bins", { token: ana.token }, { security: tricky });
-    const page = await renderPage(VersionPage, { owner: ana.username, slug: "bins", n: "1" }, { search: { view: "yaml" } });
+    const o = ana.username;
+    await push(o, "bins", { token: ana.token }, { security: binDay });
+    await push(o, "bins", { token: ana.token }, { security: tricky });
+    const page = await renderPage(VersionYamlPage, { owner: o, slug: "bins", n: "1" });
     expect(page.status).toBe(200);
-    expect(text(page.html)).toContain("title: Bin day");
-    expect(text(page.html)).not.toContain("title: Bin <day>");
-    expect(page.html).toContain(`href="/${ana.username}/bins/v/1/security.yaml"`);
+    expect(files(page.html)).toEqual({ "security-yaml": binDay });
+    expect(page.html).toContain(`href="/${o}/bins/v/1/security.yaml"`);
+    expect(tabs(page.html).filter((t) => t.selected).map((t) => t.href)).toEqual([`/${o}/bins/v/1/yaml`]);
+  });
+
+  it("copies a file with the clipboard, and selects its text for the person to copy where the browser will not", async () => {
+    const written: string[] = [];
+    let selected = 0;
+    const select = () => {
+      selected++;
+    };
+    expect(await copyText("a: 1\n", { writeText: async (t: string) => void written.push(t) }, select)).toBe("Copied");
+    expect([written, selected]).toEqual([["a: 1\n"], 0]);
+
+    const refused = { writeText: () => Promise.reject(new Error("Write permission denied.")) };
+    for (const clipboard of [undefined, refused]) {
+      expect(await copyText("a: 1\n", clipboard, select)).toBe("Selected: press Ctrl+C or ⌘C to copy");
+    }
+    expect(selected).toBe(2);
   });
 
   it("is not found for someone outside a private workflow's organisation, and shown to a member", async () => {
@@ -204,13 +338,12 @@ describe("a workflow's YAML tab", () => {
     await orgWith("cares", ana);
     await push("cares", "secret", { token: ana.token }, { security: binDay, visibility: "private" });
     const params = { owner: "cares", slug: "secret" };
-    const search = { view: "yaml" };
-    expect((await renderPage(WorkflowPage, params, { search })).status).toBe(404);
-    expect((await renderPage(WorkflowPage, params, { as: bo, search })).status).toBe(404);
-    expect((await renderPage(VersionPage, { ...params, n: "1" }, { as: bo, search })).status).toBe(404);
-    const member = await renderPage(WorkflowPage, params, { as: ana, search });
+    expect((await renderPage(WorkflowYamlPage, params)).status).toBe(404);
+    expect((await renderPage(WorkflowYamlPage, params, { as: bo })).status).toBe(404);
+    expect((await renderPage(VersionYamlPage, { ...params, n: "1" }, { as: bo })).status).toBe(404);
+    const member = await renderPage(WorkflowYamlPage, params, { as: ana });
     expect(member.status).toBe(200);
-    expect(text(member.html)).toContain("title: Bin day");
+    expect(files(member.html)).toEqual({ "security-yaml": binDay });
   });
 });
 

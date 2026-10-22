@@ -12,13 +12,19 @@ import SettingsPage from "@/app/settings/page";
 import { saveUsername } from "@/app/settings/actions";
 import OwnerPage from "@/app/[owner]/page";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
+import WorkflowSecurityPage from "@/app/[owner]/[slug]/security/page";
+import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
+import WorkflowYamlPage from "@/app/[owner]/[slug]/yaml/page";
 import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
+import VersionSecurityPage from "@/app/[owner]/[slug]/v/[n]/security/page";
+import VersionPlatformPage from "@/app/[owner]/[slug]/v/[n]/platform/page";
+import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import OrgSettingsPage from "@/app/[owner]/settings/page";
 import GalleryPage from "@/app/gallery/page";
 import { BASE, example, orgWith, person, request, signIn, type Who } from "./helpers";
 import { call, connect, post } from "./mcp-client";
-import { pageRequest, renderPage } from "./pages";
+import { pageRequest, renderPage, type Page } from "./pages";
 import { route } from "./router";
 
 const security = example("dinners-security.yaml");
@@ -334,31 +340,63 @@ describe("Cross-tenant boundary", () => {
         status: 308,
         location: `/ana-new/${slug}`,
       });
+      expect(await renderPage(WorkflowYamlPage, { owner: "ana", slug }, { as: nell })).toMatchObject({
+        status: 308,
+        location: `/ana-new/${slug}/yaml`,
+      });
+      expect(await renderPage(VersionSecurityPage, { owner: "ana", slug, n: "1" }, { as: nell })).toMatchObject({
+        status: 308,
+        location: `/ana-new/${slug}/v/1/security`,
+      });
     }
     for (const who of [{ token: nell.token }, undefined]) {
       expect((await request("GET", "/api/v1/ana-new/diary", { as: who })).status).toBe(404);
       expect((await request("GET", "/ana-new/diary/v/1/security.yaml", { as: who })).status).toBe(404);
     }
     expect((await renderPage(WorkflowPage, { owner: "ana-new", slug: "diary" }, { as: nell })).status).toBe(404);
+    expect((await renderPage(WorkflowYamlPage, { owner: "ana-new", slug: "diary" }, { as: nell })).status).toBe(404);
+    expect((await renderPage(VersionSecurityPage, { owner: "ana-new", slug: "diary", n: "1" }, { as: nell })).status).toBe(404);
     expect((await request("GET", "/api/v1/ana-new/diary", { as: { token: ana.token } })).status).toBe(200);
   });
 });
 
 describe("the old address", () => {
-  it("redirects for good (308) to the same address under the new name: pages, files and the API, keeping the query", async () => {
+  it("redirects for good (308) to the same address under the new name: pages and each of their views, files and the API, keeping the query", async () => {
     const ana = await person("ana");
     await publish(ana, "ana", "dinners");
     await addPlatform(ana, "ana", "worker");
     await patchMe({ token: ana.token }, { username: "ana-cooks" });
 
     expect(await renderPage(OwnerPage, { owner: "ana" })).toMatchObject({ status: 308, location: "/ana-cooks" });
-    expect(await renderPage(WorkflowPage, { owner: "ana", slug: "dinners" }, { search: { view: "platform" } })).toMatchObject({
+    expect(await renderPage(WorkflowPage, { owner: "ana", slug: "dinners" })).toMatchObject({
       status: 308,
-      location: "/ana-cooks/dinners?view=platform",
+      location: "/ana-cooks/dinners",
     });
     expect(await renderPage(VersionPage, { owner: "ana", slug: "dinners", n: "1" })).toMatchObject({
       status: 308,
       location: "/ana-cooks/dinners/v/1",
+    });
+    // Each view's own address, even one the workflow has no file for: the
+    // address it sends to makes that check.
+    const views: Record<string, [Page<{ owner: string; slug: string }>, Page<{ owner: string; slug: string; n: string }>]> = {
+      security: [WorkflowSecurityPage, VersionSecurityPage],
+      platform: [WorkflowPlatformPage, VersionPlatformPage],
+      yaml: [WorkflowYamlPage, VersionYamlPage],
+    };
+    for (const [view, [latest, older]] of Object.entries(views)) {
+      expect(await renderPage(latest, { owner: "ana", slug: "dinners" })).toMatchObject({
+        status: 308,
+        location: `/ana-cooks/dinners/${view}`,
+      });
+      expect(await renderPage(older, { owner: "ana", slug: "dinners", n: "1" })).toMatchObject({
+        status: 308,
+        location: `/ana-cooks/dinners/v/1/${view}`,
+      });
+    }
+    // An old ?view= address goes to its view's own address first, then on from there.
+    expect(await renderPage(WorkflowPage, { owner: "ana", slug: "dinners" }, { search: { view: "platform" } })).toMatchObject({
+      status: 308,
+      location: "/ana/dinners/platform",
     });
     expect(await renderPage(InventoryPage, { owner: "ana" })).toMatchObject({ status: 308, location: "/ana-cooks/inventory" });
     expect(await renderPage(OrgSettingsPage, { owner: "ana" })).toMatchObject({ status: 308, location: "/ana-cooks/settings" });

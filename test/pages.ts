@@ -6,7 +6,7 @@ import type { Who } from "./helpers";
 
 export const pageRequest = { headers: new Headers() };
 
-type Page<P> = (props: {
+export type Page<P> = (props: {
   params: Promise<P>;
   searchParams: Promise<Record<string, string | string[]>>;
 }) => Promise<ReactElement> | ReactElement;
