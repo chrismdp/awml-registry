@@ -45,6 +45,41 @@ async function readable(db: Db, viewer: Viewer, ownerSlug: string, slug: string)
   return { owner, workflow: w };
 }
 
+// The files sent in a push, each a string of YAML, at least one of them.
+function filesFrom(body: PushBody): Result<{ files: Files }> {
+  const files: Files = {};
+  for (const view of VIEWS) {
+    const text = body[view];
+    if (text === undefined || text === null) continue;
+    if (typeof text !== "string") return refuse(422, `${view}: send the file as a string of YAML.`);
+    files[view] = text;
+  }
+  if (!files.security && !files.platform)
+    return refuse(422, "Send at least one file: security, platform or both.");
+  return { ok: true, files };
+}
+
+// The mistakes `awml check` finds in each file, each with its view in front,
+// and the title the files give.
+async function checkFiles(files: Files) {
+  const errors: string[] = [];
+  const check: Partial<Record<View, string[]>> = {};
+  let title: string | undefined;
+  for (const view of VIEWS) {
+    const text = files[view];
+    if (text === undefined) continue;
+    const found = await engine.check(text);
+    check[view] = found;
+    errors.push(...found.map((e) => `${view}: ${e}`));
+    if (found.length) continue;
+    const doc = parse(text) as { view?: string; title?: string };
+    if (doc.view !== view)
+      errors.push(`${view}: this file says view: ${doc.view}, so send it as the ${doc.view} file.`);
+    title ??= doc.title;
+  }
+  return { errors, check, title };
+}
+
 async function notePrivateView(db: Db, viewer: Viewer, owner: Owner, w: Workflow, target: string) {
   if (w.visibility === "private" && owner.type === "organisation" && viewer)
     await record(db, owner.id, viewer.id, "private_view", target);
@@ -70,15 +105,9 @@ export async function pushVersion(
   const slugProblem = workflowSlugProblem(slug);
   if (slugProblem) return refuse(422, slugProblem);
 
-  const files: Files = {};
-  for (const view of VIEWS) {
-    const text = body[view];
-    if (text === undefined || text === null) continue;
-    if (typeof text !== "string") return refuse(422, `${view}: send the file as a string of YAML.`);
-    files[view] = text;
-  }
-  if (!files.security && !files.platform)
-    return refuse(422, "Send at least one file: security, platform or both.");
+  const read = filesFrom(body);
+  if (!read.ok) return read;
+  const { files } = read;
 
   const requested = body.visibility;
   if (requested !== undefined && requested !== "public" && requested !== "private")
@@ -99,21 +128,7 @@ export async function pushVersion(
       return refuse(403, `${owner.slug} cannot keep private workflows.`);
   }
 
-  const errors: string[] = [];
-  const check: Partial<Record<View, string[]>> = {};
-  let title: string | undefined;
-  for (const view of VIEWS) {
-    const text = files[view];
-    if (text === undefined) continue;
-    const found = await engine.check(text);
-    check[view] = found;
-    errors.push(...found.map((e) => `${view}: ${e}`));
-    if (found.length) continue;
-    const doc = parse(text) as { view?: string; title?: string };
-    if (doc.view !== view)
-      errors.push(`${view}: this file says view: ${doc.view}, so send it as the ${doc.view} file.`);
-    title ??= doc.title;
-  }
+  const { errors, check, title } = await checkFiles(files);
   if (errors.length) return refuse(422, ...errors);
 
   const summary = await engine.summarise(files);

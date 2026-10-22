@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { getDb } from "@/db/client";
+import { getDb, type Db } from "@/db/client";
 import { user } from "@/db/schema";
 import { getAuth } from "./auth";
 import { userIdForSecret } from "./tokens";
@@ -17,7 +17,11 @@ export async function getViewer(headers: Headers): Promise<Viewer> {
     const session = await (await getAuth()).api.getSession({ headers });
     userId = session?.user.id ?? null;
   }
-  if (!userId) return null;
+  return userId ? viewerFor(db, userId) : null;
+}
+
+// The viewer a user id stands for, or null when there is no such user.
+export async function viewerFor(db: Db, userId: string): Promise<Viewer> {
   const [row] = await db
     .select({ id: user.id, username: user.username, name: user.name, email: user.email })
     .from(user)
