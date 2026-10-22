@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { getDb } from "@/db/client";
-import { edition } from "@/edition";
 import { engine } from "@/engine";
 import { createOrganisation } from "@/server/organisations";
 import { listTokens } from "@/server/tokens";
@@ -13,7 +12,7 @@ import WorkflowPage from "@/app/[owner]/[slug]/page";
 import TokensPage from "@/app/settings/tokens/page";
 import LoginPage from "@/app/login/page";
 import { makeToken } from "@/app/settings/tokens/actions";
-import { example, orgWith, person, request, signIn, type Who } from "./helpers";
+import { example, orgWith, person, request, signIn, withEdition, type Who } from "./helpers";
 import { pageRequest, renderPage } from "./pages";
 
 const security = example("dinners-security.yaml");
@@ -81,14 +80,12 @@ describe("the public gallery", () => {
   it("is the home page unless the edition gives one", async () => {
     const ana = await person("ana");
     await push(ana.username, "dinners", { token: ana.token }, { security });
-    expect((await renderPage(HomePage, {})).html).toContain("The family&#x27;s dinners");
-    const original = edition.homePage;
-    edition.homePage = () => <p>Hosted home</p>;
-    try {
+    await withEdition({ homePage: undefined }, async () => {
+      expect((await renderPage(HomePage, {})).html).toContain("The family&#x27;s dinners");
+    });
+    await withEdition({ homePage: () => <p>Hosted home</p> }, async () => {
       expect((await renderPage(HomePage, {})).html).toBe("<p>Hosted home</p>");
-    } finally {
-      edition.homePage = original;
-    }
+    });
   });
 
   it("moved from /explore, which sends old links and searches to /gallery for good", async () => {
@@ -299,20 +296,18 @@ describe("the engine", () => {
 
 describe("the terms and privacy policy", () => {
   it("are linked from the sign-in page only when the edition gives them", async () => {
-    const plain = await renderPage(LoginPage, {});
-    expect(plain.html).not.toContain('href="/terms"');
-    expect(text(plain.html)).not.toContain("By signing in you agree");
-    expect(text(plain.html)).toContain("We never send your workflows to a model.");
-
-    edition.legalLinks = { terms: "/terms", privacy: "/privacy" };
-    try {
+    await withEdition({ legalLinks: undefined }, async () => {
+      const plain = await renderPage(LoginPage, {});
+      expect(plain.html).not.toContain('href="/terms"');
+      expect(text(plain.html)).not.toContain("By signing in you agree");
+      expect(text(plain.html)).toContain("We never send your workflows to a model.");
+    });
+    await withEdition({ legalLinks: { terms: "/legal/terms", privacy: "/legal/privacy" } }, async () => {
       const linked = await renderPage(LoginPage, {});
-      expect(linked.html).toContain('href="/terms"');
-      expect(linked.html).toContain('href="/privacy"');
+      expect(linked.html).toContain('href="/legal/terms"');
+      expect(linked.html).toContain('href="/legal/privacy"');
       expect(text(linked.html)).toContain("By signing in you agree to the terms and privacy policy");
       expect(text(linked.html)).toContain("We never send your workflows to a model.");
-    } finally {
-      delete edition.legalLinks;
-    }
+    });
   });
 });

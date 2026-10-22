@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getDb } from "@/db/client";
+import { edition, type Edition } from "@/edition";
 import { getAuth } from "@/server/auth";
 import { createToken } from "@/server/tokens";
 import { createOrganisation, addMember } from "@/server/organisations";
@@ -12,6 +13,19 @@ export const example = (name: string) =>
   fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8");
 
 export const BASE = "http://localhost:3000";
+
+// Runs `test` with the edition changed as given, then puts it back. A test
+// that depends on the edition says which one it means, so the suite passes
+// whichever edition src/edition.ts is, the hosted one included.
+export async function withEdition(change: Partial<Edition>, test: () => Promise<void>) {
+  const before = { ...edition };
+  Object.assign(edition, change);
+  try {
+    await test();
+  } finally {
+    Object.assign(edition, before);
+  }
+}
 
 export type Who = { cookie?: string; token?: string } | undefined;
 
