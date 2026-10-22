@@ -140,6 +140,12 @@ pre, code { font-family: var(--mono); }
 .figure .drawing svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
 .figure pre { white-space: pre-wrap; font-size: 13px; }
 @media (max-width: 600px) { .figure { padding: 20px; border-radius: 22px; } .tabs { border-radius: 24px; } .tabs a { padding: 10px 14px; font-size: 14px; } }
+.yaml { display: flex; flex-direction: column; gap: 16px; }
+.yaml section { background: var(--wash); border-radius: 28px; padding: 24px; min-width: 0; }
+.yaml-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.yaml-head h2 { margin: 0; font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
+.yaml pre { margin: 0; background: var(--paper); border-radius: 16px; padding: 16px; font-size: 13px; line-height: 1.5; overflow-x: auto; max-width: 100%; }
+@media (max-width: 600px) { .yaml section { padding: 16px; border-radius: 22px; } }
 .side { border-radius: 22px; background: var(--wash); padding: 24px; }
 .side h2 { margin: 0 0 12px; font-size: 18px; font-weight: 700; }
 .deciders { display: flex; gap: 4px; height: 34px; }

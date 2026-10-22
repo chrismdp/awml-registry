@@ -15,14 +15,15 @@ export type VersionViewProps = {
   visibility: "public" | "private";
   number: number;
   views: View[];
-  shown: View;
+  shown: View | "yaml";
+  files: { view: View; text: string }[];
   mermaid: string;
   check: CheckResult;
   summary: Summary;
   versions: { number: number; pushedAt: Date; pushedBy: string | null }[];
 };
 
-const TAB: Record<View, string> = { security: "Who may see each part", platform: "Where each part runs" };
+const TAB: Record<View | "yaml", string> = { security: "Who may see each part", platform: "Where each part runs", yaml: "YAML" };
 
 export function VersionView(p: VersionViewProps) {
   const base = `/${p.owner}/${p.slug}`;
@@ -30,6 +31,8 @@ export function VersionView(p: VersionViewProps) {
   const latest = p.versions[0]?.number ?? p.number;
   const s = p.summary;
   const { publishingLabels } = names(s);
+  const download = p.shown === "yaml" ? p.views[0] : p.shown;
+  const tabs: (View | "yaml")[] = [...p.views, "yaml"];
   return (
     <article>
       <section className="wf-head">
@@ -58,7 +61,7 @@ export function VersionView(p: VersionViewProps) {
           <a href="#change" className="button">
             Change this workflow
           </a>
-          <a href={`${base}/v/${p.number}/${p.shown}.yaml`} className="button outline">
+          <a href={`${base}/v/${p.number}/${download}.yaml`} className="button outline">
             Download YAML
           </a>
         </div>
@@ -75,15 +78,31 @@ export function VersionView(p: VersionViewProps) {
       <div className="wf-body">
         <main>
           <div role="tablist" aria-label="View" className="tabs">
-            {p.views.map((view) => (
+            {tabs.map((view) => (
               <a key={view} role="tab" href={`?view=${view}`} aria-selected={view === p.shown}>
                 {TAB[view]}
               </a>
             ))}
           </div>
-          <figure className="figure" role="tabpanel" aria-label={`${p.title}, ${TAB[p.shown].toLowerCase()}`}>
-            <Mermaid text={p.mermaid} />
-          </figure>
+          {p.shown === "yaml" ? (
+            <div className="yaml" role="tabpanel" aria-label={`${p.title}, yaml`}>
+              {p.files.map((f) => (
+                <section key={f.view}>
+                  <div className="yaml-head">
+                    <h2>{f.view}.yaml</h2>
+                    <a href={`${base}/v/${p.number}/${f.view}.yaml`} className="button outline">
+                      Download
+                    </a>
+                  </div>
+                  <pre>{f.text}</pre>
+                </section>
+              ))}
+            </div>
+          ) : (
+            <figure className="figure" role="tabpanel" aria-label={`${p.title}, ${TAB[p.shown].toLowerCase()}`}>
+              <Mermaid text={p.mermaid} />
+            </figure>
+          )}
         </main>
 
         <aside>

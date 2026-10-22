@@ -14,6 +14,7 @@ import HomePage from "@/app/page";
 import GalleryPage from "@/app/gallery/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
+import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
 import TokensPage from "@/app/settings/tokens/page";
 import LoginPage from "@/app/login/page";
 import { makeToken } from "@/app/settings/tokens/actions";
@@ -149,6 +150,67 @@ describe("a workflow's page", () => {
     expect(shown).toContain("Who decides 3 code 1 person 1 step is decided by a person.");
     expect(shown).toContain("Who may see each part");
     expect(shown).not.toContain("Where each part runs");
+  });
+});
+
+describe("a workflow's YAML tab", () => {
+  const tricky = binDay.replace("title: Bin day", "title: Bin <day> & co");
+
+  it("is a third tab that shows the security file then the platform file as escaped text, with a download for each", async () => {
+    const ana = await person("ana");
+    await push(ana.username, "dinners", { token: ana.token }, { security: withTitle("Dinners <b>&</b>"), platform });
+    const page = await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" }, { search: { view: "yaml" } });
+    expect(page.status).toBe(200);
+    expect(text(page.html)).toContain("Who may see each part Where each part runs YAML");
+    expect(page.html).toContain(`href="?view=yaml"`);
+    expect(page.html).not.toContain("<figure");
+    expect(page.html).not.toContain("flowchart");
+    expect(page.html).toContain("title: Dinners &lt;b&gt;&amp;&lt;/b&gt;");
+    expect(page.html).not.toContain("<b>&</b>");
+    expect(page.html).toContain(platform.split("\n")[1].replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;"));
+    const shown = text(page.html);
+    expect(shown.indexOf("security.yaml")).toBeGreaterThan(-1);
+    expect(shown.indexOf("security.yaml")).toBeLessThan(shown.indexOf("platform.yaml"));
+    expect(page.html).toContain(`href="/${ana.username}/dinners/v/1/security.yaml"`);
+    expect(page.html).toContain(`href="/${ana.username}/dinners/v/1/platform.yaml"`);
+    expect(page.html).toContain("Download YAML");
+    expect(shown).toContain("Who decides");
+  });
+
+  it("shows only the security file when there is no platform file", async () => {
+    const ana = await person("ana");
+    await push(ana.username, "bins", { token: ana.token }, { security: tricky });
+    const page = await renderPage(WorkflowPage, { owner: ana.username, slug: "bins" }, { search: { view: "yaml" } });
+    const shown = text(page.html);
+    expect(shown).toContain("security.yaml");
+    expect(shown).toContain("title: Bin <day> & co");
+    expect(shown).not.toContain("platform.yaml");
+  });
+
+  it("works on an older version", async () => {
+    const ana = await person("ana");
+    await push(ana.username, "bins", { token: ana.token }, { security: binDay });
+    await push(ana.username, "bins", { token: ana.token }, { security: tricky });
+    const page = await renderPage(VersionPage, { owner: ana.username, slug: "bins", n: "1" }, { search: { view: "yaml" } });
+    expect(page.status).toBe(200);
+    expect(text(page.html)).toContain("title: Bin day");
+    expect(text(page.html)).not.toContain("title: Bin <day>");
+    expect(page.html).toContain(`href="/${ana.username}/bins/v/1/security.yaml"`);
+  });
+
+  it("is not found for someone outside a private workflow's organisation, and shown to a member", async () => {
+    const ana = await person("ana");
+    const bo = await person("bo");
+    await orgWith("cares", ana);
+    await push("cares", "secret", { token: ana.token }, { security: binDay, visibility: "private" });
+    const params = { owner: "cares", slug: "secret" };
+    const search = { view: "yaml" };
+    expect((await renderPage(WorkflowPage, params, { search })).status).toBe(404);
+    expect((await renderPage(WorkflowPage, params, { as: bo, search })).status).toBe(404);
+    expect((await renderPage(VersionPage, { ...params, n: "1" }, { as: bo, search })).status).toBe(404);
+    const member = await renderPage(WorkflowPage, params, { as: ana, search });
+    expect(member.status).toBe(200);
+    expect(text(member.html)).toContain("title: Bin day");
   });
 });
 
