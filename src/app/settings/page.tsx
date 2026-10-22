@@ -4,7 +4,8 @@ import { SettingsMenu } from "@/components/SettingsMenu";
 import { listConnectedApps } from "@/server/connected-apps";
 import { mcpUrl, ownAddress } from "@/server/http";
 import { organisationsOf } from "@/server/organisations";
-import { dateTime, pageContext } from "@/server/page";
+import { When } from "@/components/When";
+import { pageContext } from "@/server/page";
 import { listTokens } from "@/server/tokens";
 import { signedInWith } from "@/server/viewer";
 import { disconnect, saveUsername } from "./actions";
@@ -54,7 +55,7 @@ export default async function SettingsPage({
                     name="username"
                     defaultValue={viewer.username}
                     required
-                    pattern="[a-z0-9-]+"
+                    pattern="[a-z0-9\-]+"
                     maxLength={40}
                   />
                 </span>
@@ -99,8 +100,8 @@ export default async function SettingsPage({
                     {apps.map((a) => (
                       <tr key={a.clientId}>
                         <td className="name">{a.name || "Unnamed app"}</td>
-                        <td>{a.allowedAt ? dateTime(a.allowedAt) : "not known"}</td>
-                        <td>{a.lastUsedAt ? dateTime(a.lastUsedAt) : "not known"}</td>
+                        <td>{a.allowedAt ? <When at={a.allowedAt} /> : "not known"}</td>
+                        <td>{a.lastUsedAt ? <When at={a.lastUsedAt} /> : "not known"}</td>
                         <td className="act">
                           <form action={disconnect}>
                             <input type="hidden" name="clientId" value={a.clientId} />
@@ -157,7 +158,7 @@ export default async function SettingsPage({
                 Address
                 <span className="prefixed">
                   <span>{prefix}</span>
-                  <input name="slug" placeholder="acme" required pattern="[a-z0-9-]+" />
+                  <input name="slug" placeholder="acme" required pattern="[a-z0-9\-]+" />
                 </span>
               </label>
               <button type="submit" className="button">

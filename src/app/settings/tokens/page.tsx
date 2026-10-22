@@ -2,7 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { MakeTokenForm } from "@/components/MakeTokenForm";
 import { SettingsMenu } from "@/components/SettingsMenu";
-import { dateTime, pageContext } from "@/server/page";
+import { When } from "@/components/When";
+import { pageContext } from "@/server/page";
 import { listTokens } from "@/server/tokens";
 import { makeToken, revoke } from "./actions";
 
@@ -44,8 +45,10 @@ export default async function TokensPage() {
                     {tokens.map((t) => (
                       <tr key={t.id}>
                         <td className="name">{t.name}</td>
-                        <td>{dateTime(t.createdAt)}</td>
-                        <td>{t.lastUsedAt ? dateTime(t.lastUsedAt) : "Never"}</td>
+                        <td>
+                          <When at={t.createdAt} />
+                        </td>
+                        <td>{t.lastUsedAt ? <When at={t.lastUsedAt} /> : "Never"}</td>
                         <td className="act">
                           <form action={revoke}>
                             <input type="hidden" name="id" value={t.id} />
