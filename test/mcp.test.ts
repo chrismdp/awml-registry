@@ -270,6 +270,20 @@ describe("Positive boundary", () => {
     expect(await audit("push", mo.id)).toEqual([{ target: "acme/payroll v2" }]);
     expect(await audit("private_view", mo.id)).toEqual([{ target: "acme/payroll v2" }]);
   });
+
+  it("a person publishes a private workflow to their own account through /mcp, and only they read and list it", async () => {
+    const { mo, nell } = await twoOrgs();
+    const pushed = await publish(nell.token, { owner: nell.username, slug: "diary", workflow, visibility: "private" });
+    expect(pushed.isError).toBe(false);
+    expect(pushed.data).toMatchObject({ owner: nell.username, slug: "diary", number: 1 });
+    expect((await call("get", { owner: nell.username, slug: "diary" }, nell.token)).data.visibility).toBe("private");
+    const own = await call("list", {}, nell.token);
+    expect(own.data.workflows).toEqual([expect.objectContaining({ owner: nell.username, slug: "diary", visibility: "private" })]);
+    expect((await call("get", { owner: nell.username, slug: "diary" }, mo.token)).text).toBe("Not found.");
+    expect((await call("list", { owner: nell.username }, mo.token)).data.workflows).toEqual([]);
+    expect((await publish(mo.token, { owner: nell.username, slug: "diary", workflow })).text).toBe("Not found.");
+    expect(await audit("push", nell.id)).toEqual([]);
+  });
 });
 
 describe("Negative boundary", () => {

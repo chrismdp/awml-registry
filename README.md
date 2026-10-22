@@ -2,7 +2,7 @@
 
 You do not have to host a registry yourself. There is an official one at [awml.io](https://awml.io), free for public workflows.
 
-The AWML Registry stores, versions and draws [AWML](https://github.com/chrismdp/awml) workflow files. You push a workflow's one AWML 0.4 file, which holds its design and any implementations, and the registry checks it, numbers each push as a new version, and draws its security view and the platform view of each implementation. Public workflows are open to anyone. An organisation can also keep private workflows, which only its members see, with an inventory of all its workflows and an audit log.
+The AWML Registry stores, versions and draws [AWML](https://github.com/chrismdp/awml) workflow files. You push a workflow's one AWML 0.4 file, which holds its design and any implementations, and the registry checks it, numbers each push as a new version, and draws its security view and the platform view of each implementation. Public workflows are open to anyone. You can keep private workflows on your own account, which only you see. An organisation can also keep private workflows, which only its members see, with an inventory of all its workflows and an audit log.
 
 The registry also keeps platforms: descriptions of where a workflow can run, each with an optional install recipe. It works out which platforms a workflow fits, with the same AWML code as `awml fit`.
 
@@ -32,6 +32,8 @@ curl -X POST http://localhost:3000/api/v1/<you>/<workflow>/versions \
   -d '{"workflow": "<the YAML of the workflow file>"}'
 ```
 
+To keep the workflow private, add `"visibility": "private"` to its first push, or push it with `awml push --private`. A private workflow on your own account is seen by you alone; anyone else gets a 404, as for one that doesn't exist. A later push cannot change it. The registry may limit how many private workflows one person keeps (see "Where to change things"); an organisation has no such limit.
+
 The registry takes only AWML 0.4 files, marked `awml: "0.4"`. It refuses an older file with a 400 that says how to convert it. To turn a 0.3 or 0.2 pair into one file, run `awml convert security.yaml platform.yaml > workflow.yaml` and push that.
 
 The workflow's page is then at `/<you>/<workflow>`. Each view has its own address: `/<you>/<workflow>/security`, which draws the design; `/platform`, which draws the first implementation, with each at `/platform/<implementation>`; `/yaml`, which shows the file as text to copy or download; and `/checks`, which says what checking the file found. Older versions are at `/<you>/<workflow>/v/<n>`, with their views at `/v/<n>/security` and so on. Versions pushed before the registry took only 0.4 files keep their security and platform files, and their pages still show them.
@@ -48,7 +50,7 @@ curl -X POST http://localhost:3000/api/v1/platforms/<you>/<platform>/versions \
   -d '{"description": "<the YAML of the description>", "recipe": "<Markdown steps>"}'
 ```
 
-A recipe says where each secret goes, but never holds a secret itself. Anyone can read it, unless the platform is private. Only an organisation can keep a private platform, as with workflows: add `"visibility": "private"` to the first push.
+A recipe says where each secret goes, but never holds a secret itself. Anyone can read it, unless the platform is private. Only an organisation can keep a private platform: add `"visibility": "private"` to the first push.
 
 Read the latest version at `GET /api/v1/platforms/<owner>/<platform>`, one version at `.../v/<n>`, and its files at `/platforms/<owner>/<platform>/v/<n>/description.yaml` and `.../recipe.md`.
 
@@ -216,7 +218,7 @@ You need a Cloudflare account. Sign in to it with `npx wrangler login`, then:
 ## Where to change things
 
 - `vendor/awml/` holds the AWML Go package compiled to WebAssembly, which checks, summarises, draws and fits each file, so the registry and the `awml` command line agree. `vendor/awml/VERSION` names the AWML commit. To move to a newer AWML, run `npm run engine:update -- /path/to/awml`; it needs Go, and rewrites the test fixtures with what the native `awml` prints so `npm test` compares the two.
-- `src/edition.ts` decides whether an organisation may push and keep private workflows and platforms, what the home page shows, and whether the sign-in page links to terms and a privacy policy. The default allows everything, shows the gallery at `/` and links to neither.
+- `src/edition.ts` decides whether an organisation may push and keep private workflows and platforms, how many private workflows a person may keep on their own account, what the home page shows, and whether the sign-in page links to terms and a privacy policy. The default allows everything, sets no limit, shows the gallery at `/` and links to neither.
 - `drizzle/` holds the database migrations. After changing `src/db/schema.ts`, run `npm run db:generate`.
 - `src/fonts/` holds Inter, the font AWML's drawings ask for, which the registry serves itself so drawings look the same in every browser.
 
