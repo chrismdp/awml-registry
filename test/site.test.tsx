@@ -118,7 +118,7 @@ describe("the public gallery", () => {
     const shown = text(page.html);
     expect(shown).toContain("Public workflows");
     expect(shown).toContain("Workflows people have drawn and shared. Borrow one and make it yours.");
-    expect(shown).toContain("The family's dinners AI 1 Code 3 Person 0 ana / dinners");
+    expect(shown).toContain("The family's dinners AI 1 Code 3 ana / dinners");
     expect(page.html).toContain(await engine.draw(security).then((m) => m.split("\n")[0]));
     expect(page.html).toContain('placeholder="Search by title"');
     expect(page.html).toContain('action="/gallery"');

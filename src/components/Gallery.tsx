@@ -34,9 +34,9 @@ export function Gallery({ cards, q }: { cards: Card[]; q: string }) {
               <div className="body">
                 <div className="title">{c.title}</div>
                 <div className="chips">
-                  <span className="chip ai">AI {c.summary.steps.ai}</span>
-                  <span className="chip code">Code {c.summary.steps.code}</span>
-                  <span className="chip person">Person {c.summary.steps.person}</span>
+                  {c.summary.steps.ai > 0 && <span className="chip ai">AI {c.summary.steps.ai}</span>}
+                  {c.summary.steps.code > 0 && <span className="chip code">Code {c.summary.steps.code}</span>}
+                  {c.summary.steps.person > 0 && <span className="chip person">Person {c.summary.steps.person}</span>}
                 </div>
                 <div className="address">
                   {c.owner} / {c.slug}
