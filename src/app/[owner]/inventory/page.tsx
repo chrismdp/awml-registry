@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { OrgTabs } from "@/components/OrgTabs";
 import { count } from "@/components/words";
 import type { Summary } from "@/engine";
 import { followOldName, pageContext } from "@/server/page";
@@ -22,14 +23,7 @@ export default async function InventoryPage({ params }: { params: Promise<{ owne
   return (
     <>
       <section className="inv-head">
-        <nav className="org-tabs" aria-label={organisation.name}>
-          <Link href={`/${organisation.slug}`}>Workflows</Link>
-          <Link href={`/${organisation.slug}/inventory`} aria-current="page">
-            Inventory
-          </Link>
-          <Link href={`/${organisation.slug}/settings#members`}>Members</Link>
-          <Link href={`/${organisation.slug}/settings#audit`}>Audit log</Link>
-        </nav>
+        <OrgTabs organisation={organisation} current="inventory" />
         <h1>{organisation.name}&apos;s AI workflows</h1>
         <p>Where AI is, where people are, what it can see and where it runs.</p>
       </section>
