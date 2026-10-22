@@ -134,7 +134,7 @@ describe("the empty state", () => {
     const shown = await page(ana.username, { cookie: ana.cookie });
     expect(shown.status).toBe(200);
     const words = text(shown.html);
-    expect(words).toContain("ana's platforms Where work can run, and what each place offers. ana has no platforms yet.");
+    expect(words).toContain("ana's platforms Machines and services ana has described, so awml fit can say which ones can run a workflow. ana has no platforms yet.");
     expect(words).toContain(
       "What a platform is A platform description says where work can run, such as a laptop, a Mac mini or a server. " +
         "It is a short YAML file. It names the platform and says: " +

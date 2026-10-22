@@ -26,7 +26,7 @@ export default async function OwnerPlatformsPage({ params }: { params: Promise<{
           </p>
         )}
         <h1>{`${name}'s platforms`}</h1>
-        <p>Where work can run, and what each place offers.</p>
+        <p>{`Machines and services ${name} has described, so awml fit can say which ones can run a workflow.`}</p>
       </section>
 
       {platforms.length > 0 ? (
