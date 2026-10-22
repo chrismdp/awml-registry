@@ -67,6 +67,7 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `/{owner}/{slug}/v/{n}/{view}.yaml` | One file as YAML |
 | `/{org}/inventory` | The organisation's inventory, for members |
 | `/{org}/settings` | Members and the audit log, for owners (the hosted edition adds billing) |
+| `/settings` | Signing out, the AI apps connected to `/mcp` with a Disconnect for each, and the person's organisations |
 | `/settings/tokens` | Make and revoke API tokens |
 | `POST /api/v1/{owner}/{slug}/versions` | Push a version. Body JSON `{"security": "<yaml>"?, "platform": "<yaml>"?, "visibility": "public"\|"private"?}`, at least one file. The first push makes the workflow and sets its visibility (default public). Returns 201 with `{owner, slug, number, url}`, or 422 with `{errors: [...]}` |
 | `GET /api/v1/{owner}/{slug}` | The workflow and its list of versions |
@@ -178,6 +179,15 @@ Every address the sign-in metadata gives comes from `BETTER_AUTH_URL`, so a self
 | Same access | A person's registry token and their OAuth token answer every tool the same |
 
 The platform tools have the same four, under "platforms through /mcp" in `test/mcp.test.ts`: a member adds and reads their organisation's private platform, and the audit log records both; a non-member cannot find, read, add to or fit against a private platform, which looks not found; organisation A's token and OAuth session cannot search, get, add to or fit against organisation B's private platforms; and a person's registry token and OAuth token answer every platform tool the same.
+
+**Connected apps.** Settings lists each AI app the person has allowed on `/consent`: its name, when they allowed it and when it last used their account. That is when it last renewed its access, from the newest refresh token it holds for them, since `/mcp` checks an access token without the database and records nothing. Disconnect deletes the person's consent and every refresh and access token the app holds for them, and nobody else's, so it cannot renew. The access token it already holds is a JWT that lasts an hour, so access stops within an hour, as the page says. An app acts as one person, so organisation roles play no part. Added on 2026-10-22.
+
+| Boundary | Test (`test/connected-apps.test.ts`) |
+|---|---|
+| Positive | A person disconnects their own app: it leaves the list, a refresh fails at once and `/mcp` refuses it once its hour is up |
+| Negative | A person cannot see another person's app, and a Disconnect forged for it changes nothing |
+| Cross-tenant | Disconnecting an app for one person leaves another person's access through the same app |
+| Registry tokens | Disconnecting an app leaves the person's registry token working, and revoking a registry token leaves the app connected |
 
 ## Platforms and the fit
 

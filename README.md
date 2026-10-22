@@ -107,6 +107,8 @@ bearer_token_env_var = "AWML_TOKEN"
 
 **Any other client** that takes a header: send `Authorization: Bearer <token>` with a token made at `/settings/tokens`.
 
+**To see or cut off an AI app**, open Settings. Connected apps lists each app you have allowed, when you allowed it and when it last used your account, with a Disconnect button. A disconnected app cannot renew its access, so its access stops within an hour.
+
 ## Settings
 
 | Variable | What it is |

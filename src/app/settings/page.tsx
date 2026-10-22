@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { listConnectedApps } from "@/server/connected-apps";
 import { organisationsOf } from "@/server/organisations";
-import { pageContext } from "@/server/page";
+import { dateTime, pageContext } from "@/server/page";
+import { disconnect } from "./actions";
 
 export default async function SettingsPage({
   searchParams,
@@ -11,7 +13,7 @@ export default async function SettingsPage({
   const { error, notice } = await searchParams;
   const { db, viewer } = await pageContext();
   if (!viewer) redirect("/login?next=/settings");
-  const orgs = await organisationsOf(db, viewer.id);
+  const [orgs, apps] = await Promise.all([organisationsOf(db, viewer.id), listConnectedApps(db, viewer.id)]);
   return (
     <section className="plain-page">
       <h1>Settings</h1>
@@ -26,6 +28,44 @@ export default async function SettingsPage({
       <p>
         <Link href="/settings/tokens">API tokens</Link>
       </p>
+
+      <h2>Connected apps</h2>
+      <p>
+        AI apps you have allowed to use your account through the registry&apos;s MCP server. Last used is when an app
+        last renewed its access, which it does each hour it is in use.
+      </p>
+      <p>Disconnect an app and it cannot renew its access. Access stops within an hour.</p>
+      {apps.length === 0 ? (
+        <p>None yet.</p>
+      ) : (
+        <div className="wide">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">App</th>
+                <th scope="col">Allowed</th>
+                <th scope="col">Last used</th>
+                <th scope="col"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {apps.map((a) => (
+                <tr key={a.clientId}>
+                  <td>{a.name || "Unnamed app"}</td>
+                  <td>{a.allowedAt ? dateTime(a.allowedAt) : "not known"}</td>
+                  <td>{a.lastUsedAt ? dateTime(a.lastUsedAt) : "not known"}</td>
+                  <td>
+                    <form action={disconnect}>
+                      <input type="hidden" name="clientId" value={a.clientId} />
+                      <button type="submit">Disconnect</button>
+                    </form>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <h2>Organisations</h2>
       {orgs.length === 0 ? (

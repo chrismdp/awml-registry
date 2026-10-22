@@ -182,3 +182,10 @@ export async function connect(
   const body = await token.json();
   return { accessToken: body.access_token as string, refreshToken: body.refresh_token as string, clientId };
 }
+
+// A client swapping its refresh token for a new access token.
+export function refresh(clientId: string, refreshToken: string) {
+  return request("POST", "/api/auth/oauth2/token", {
+    form: { grant_type: "refresh_token", refresh_token: refreshToken, client_id: clientId, resource: MCP },
+  });
+}
