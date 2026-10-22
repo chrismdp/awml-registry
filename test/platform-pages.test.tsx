@@ -344,7 +344,7 @@ describe("a platform's page", () => {
     const page = await show(PlatformPage, o, "laptop");
     expect(page.status).toBe(200);
     expect(headOf(page.html)).toBe(
-      `${o} / platforms / laptop Codex on a laptop Public · Version 1 of 1 ` +
+      `${o} / platforms / laptop Codex on a laptop Platform · Public · Version 1 of 1 ` +
         "Codex on Ana's laptop, which she shuts when she travels. Set up as https://example.com/codex-setup says.",
     );
     expect(page.html).toContain(`<a href="/${o}">${o}</a> / <a href="/${o}/platforms">platforms</a> / laptop`);
@@ -444,7 +444,7 @@ holds: []
     const v1 = { owner: o, slug: "laptop", n: "1" };
     const old = await renderPage(PlatformVersionPage, v1);
     expect(old.status).toBe(200);
-    expect(headOf(old.html)).toContain("Codex on a laptop Public · Version 1 of 2");
+    expect(headOf(old.html)).toContain("Codex on a laptop Platform · Public · Version 1 of 2");
     expect(text(old.html)).toContain("Off for up to 14 days");
     expect(tabsOf(old.html).map((t) => t.href)).toEqual([
       `/platforms/${o}/laptop/v/1`,
@@ -488,7 +488,7 @@ describe("Private platforms on a platform's page", () => {
       for (const P of tabs) {
         const page = await show(P, "acme", "back-office", { cookie: who.cookie });
         expect(page.status).toBe(200);
-        expect(headOf(page.html)).toContain("Acme's back office Private · Version 1 of 1");
+        expect(headOf(page.html)).toContain("Acme's back office Platform · Private · Version 1 of 1");
       }
     expect((await renderPage(PlatformVersionPage, { owner: "acme", slug: "back-office", n: "1" }, { as: { cookie: mo.cookie } })).status).toBe(200);
   });

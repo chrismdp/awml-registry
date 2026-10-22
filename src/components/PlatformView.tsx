@@ -53,7 +53,7 @@ export function PlatformView(p: PlatformViewProps) {
           <h1>{p.label}</h1>
           <div className="meta">
             <span className="note">
-              {p.visibility === "public" ? "Public" : "Private"} · Version {p.number} of {latest}
+              Platform · {p.visibility === "public" ? "Public" : "Private"} · Version {p.number} of {latest}
             </span>
           </div>
           {p.described.intro && (
