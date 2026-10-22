@@ -1,5 +1,7 @@
-# Type checks, lints and tests every push and pull request. Deploying is up to
-# whoever runs a registry: scripts/deploy.sh deploys to Cloudflare.
+# Type checks, lints and tests every push and pull request. The build workflow also starts it by
+# dispatch after it pushes a branch or merges a change, because pushes and merges by the Actions
+# token start no other workflow. Deploying is up to whoever runs a registry: scripts/deploy.sh
+# deploys to Cloudflare.
 name: CI
 
 on:
@@ -15,6 +17,8 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

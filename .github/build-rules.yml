@@ -1,0 +1,46 @@
+# A build needs the maintainer's review if any of these hold. Otherwise it merges by itself.
+# scripts/build-rule.ts reads this file, and reads only this simple form of YAML: settings, lists
+# of paths one to a line, and comments on lines of their own. A path ending in / covers everything
+# under it.
+review_paths:
+  # What the registry is, how it is built and checked, and the factory itself.
+  - docs/SPEC.md
+  - AGENTS.md
+  - .github/
+  - scripts/
+  - eslint-rules/
+  - eslint.config.mjs
+  - tsconfig.json
+  - vitest.config.mts
+  - test/setup.ts
+  # Dependencies, the engine and how the registry is deployed.
+  - package.json
+  - package-lock.json
+  - vendor/
+  - Dockerfile
+  - wrangler.jsonc
+  - next.config.ts
+  - open-next.config.ts
+  # The database's shape and its migrations.
+  - drizzle/
+  - drizzle.config.ts
+  - src/db/schema.ts
+  # Who someone is, what they may read and push, and the tests of each access boundary.
+  - test/security.test.ts
+  - src/edition.ts
+  - src/app/api/auth/
+  - src/server/auth.ts
+  - src/server/oauth.ts
+  - src/server/secret.ts
+  - src/server/tokens.ts
+  - src/server/viewer.ts
+  - src/server/push.ts
+  - src/server/owners.ts
+  - src/server/organisations.ts
+  - src/server/audit.ts
+  - src/server/mcp.ts
+  - src/server/connected-apps.ts
+  - src/server/client-metadata.ts
+  - src/server/metadata-transport.ts
+  - src/server/metadata-transport.cloudflare.ts
+max_changed_lines: 400
