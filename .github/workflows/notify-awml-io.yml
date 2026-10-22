@@ -1,0 +1,28 @@
+# Tells awml.io's repository that this registry's main has moved, so awml.io tests and deploys the
+# new commit straight away. It sends nothing else: awml.io reads the registry itself.
+#
+# It needs the secret AWML_IO_DISPATCH_TOKEN: a fine-grained token with access only to
+# chrismdp/awml-cloud and the single permission Contents: read and write, which is what GitHub
+# asks for to send a repository_dispatch event. Without the secret, as in a fork, it does nothing.
+name: Tell awml.io
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send registry-moved to chrismdp/awml-cloud
+        env:
+          GH_TOKEN: ${{ secrets.AWML_IO_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "No AWML_IO_DISPATCH_TOKEN, so nothing to tell"
+            exit 0
+          fi
+          gh api repos/chrismdp/awml-cloud/dispatches -f event_type=registry-moved
