@@ -1,4 +1,6 @@
+import { isValidElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
+import { LoginForm } from "@/components/LoginForm";
 import { getDb } from "@/db/client";
 import { engine } from "@/engine";
 import { createOrganisation } from "@/server/organisations";
@@ -222,7 +224,35 @@ describe("the sign-in page", () => {
       delete process.env.GITHUB_CLIENT_ID;
     }
   });
+
+  it("tells the form what to say once the link is sent: that it went to the server log, unless email is set up", async () => {
+    const sentNotice = async () => {
+      pageRequest.headers = new Headers();
+      const page = await LoginPage({ searchParams: Promise.resolve({}) });
+      return propsOf(page, LoginForm)?.sent;
+    };
+    const withoutEmail = await sentNotice();
+    expect(withoutEmail).toMatch(/printed to the server's log/);
+    expect(withoutEmail).not.toMatch(/check your email/i);
+
+    process.env.MAIL_FROM = "Registry <login@registry.example.com>";
+    process.env.SMTP_URL = "smtp://mail.example.com";
+    try {
+      expect(await sentNotice()).toMatch(/check your email/i);
+    } finally {
+      delete process.env.MAIL_FROM;
+      delete process.env.SMTP_URL;
+    }
+  });
 });
+
+// The props of the first element of a type in a server component's tree.
+function propsOf<P>(node: ReactNode, type: (props: P) => ReactNode): P | undefined {
+  if (Array.isArray(node)) return node.map((n) => propsOf(n, type)).find(Boolean);
+  if (!isValidElement<{ children?: ReactNode }>(node)) return undefined;
+  if (node.type === type) return node.props as P;
+  return propsOf(node.props.children, type);
+}
 
 describe("names", () => {
   it("gives a user a username from their email on first sign-in, avoiding reserved and taken names", async () => {

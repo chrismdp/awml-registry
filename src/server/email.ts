@@ -1,6 +1,8 @@
 // Sign-in links go out through one small interface. pickSender chooses how:
 // Cloudflare's EMAIL binding on a Worker, SMTP on a server, or, with neither
 // set up or no MAIL_FROM to send them from, the server's log.
+// signInLinksEmailed tells the sign-in page which, so it can say where the
+// link went.
 import { mailPlatform } from "@/server/mail-platform";
 
 export interface EmailSender {
@@ -61,34 +63,50 @@ export function smtpOptions(env: MailEnv): SmtpOptions | null {
   };
 }
 
-export const consoleSender: EmailSender = {
-  async sendMagicLink(to, url) {
-    console.warn(
-      "[awml] EMAIL IS NOT SET UP: this sign-in link was NOT SENT, only printed here. " +
-        "Set MAIL_FROM, and SMTP_URL (or SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) or Cloudflare's EMAIL binding.",
-    );
-    console.log(`[awml] sign-in link for ${to}: ${url}`);
-  },
-};
-
-export function pickSender(config: {
+// What a platform offers for sending: a server SMTP, through createTransport;
+// a Worker only Cloudflare's EMAIL binding.
+export type MailPlatform = {
   binding?: EmailBinding;
   env: MailEnv;
   createTransport?: (options: SmtpOptions) => MailTransport;
-}): { kind: "cloudflare" | "smtp" | "console"; sender: EmailSender; problem?: string } {
-  const from = config.env.MAIL_FROM;
-  const options = smtpOptions(config.env);
-  if (!from) {
-    const problem =
-      config.binding || (options && config.createTransport)
-        ? "[awml] MAIL_FROM is not set, so sign-in links are printed to this log, not sent. Set MAIL_FROM to who they come from, such as Registry <login@registry.example.com>."
-        : undefined;
-    return { kind: "console", sender: consoleSender, problem };
-  }
-  if (config.binding) {
-    const binding = config.binding;
+};
+
+// What to set to send sign-in links, naming only what this platform can use.
+const howToSetUp = (platform: MailPlatform) =>
+  platform.createTransport
+    ? "Set MAIL_FROM, and SMTP_URL (or SMTP_HOST, SMTP_PORT, SMTP_USER and SMTP_PASS)."
+    : "Set MAIL_FROM, and bind Cloudflare Email Service as EMAIL in wrangler.jsonc.";
+
+function logSender(platform: MailPlatform): EmailSender {
+  const how = howToSetUp(platform);
+  return {
+    async sendMagicLink(to, url) {
+      console.warn(`[awml] EMAIL IS NOT SET UP: this sign-in link was NOT SENT, only printed here. ${how}`);
+      console.log(`[awml] sign-in link for ${to}: ${url}`);
+    },
+  };
+}
+
+// How sign-in links go out: by email when there is MAIL_FROM to send them
+// from and a way to send, otherwise to the server's log.
+export function senderKind(platform: MailPlatform): "cloudflare" | "smtp" | "console" {
+  if (!platform.env.MAIL_FROM) return "console";
+  if (platform.binding) return "cloudflare";
+  if (smtpOptions(platform.env) && platform.createTransport) return "smtp";
+  return "console";
+}
+
+export function pickSender(platform: MailPlatform): {
+  kind: "cloudflare" | "smtp" | "console";
+  sender: EmailSender;
+  problem?: string;
+} {
+  const kind = senderKind(platform);
+  const from = platform.env.MAIL_FROM!;
+  if (kind === "cloudflare") {
+    const binding = platform.binding!;
     return {
-      kind: "cloudflare",
+      kind,
       sender: {
         async sendMagicLink(to, url) {
           await binding.send({ from: parseFrom(from), to, ...signInEmail(url) });
@@ -96,10 +114,10 @@ export function pickSender(config: {
       },
     };
   }
-  if (options && config.createTransport) {
-    const transport = config.createTransport(options);
+  if (kind === "smtp") {
+    const transport = platform.createTransport!(smtpOptions(platform.env)!);
     return {
-      kind: "smtp",
+      kind,
       sender: {
         async sendMagicLink(to, url) {
           await transport.sendMail({ from, to, ...signInEmail(url) });
@@ -107,7 +125,17 @@ export function pickSender(config: {
       },
     };
   }
-  return { kind: "console", sender: consoleSender };
+  const canSend = platform.binding || (smtpOptions(platform.env) && platform.createTransport);
+  const problem =
+    canSend && !platform.env.MAIL_FROM
+      ? "[awml] MAIL_FROM is not set, so sign-in links are printed to this log, not sent. Set MAIL_FROM to who they come from, such as Registry <login@registry.example.com>."
+      : undefined;
+  return { kind, sender: logSender(platform), problem };
+}
+
+// Whether sign-in links reach people by email, or only the server's log.
+export async function signInLinksEmailed() {
+  return senderKind(await mailPlatform()) !== "console";
 }
 
 let override: EmailSender | undefined;

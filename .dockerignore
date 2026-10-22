@@ -7,3 +7,6 @@ data
 .env
 .env.local
 .dev.vars
+# Your compose file holds the registry's secrets.
+compose*.y*ml
+docker-compose*.y*ml

@@ -6,7 +6,17 @@ import { magicLinkClient } from "better-auth/client/plugins";
 
 const auth = createAuthClient({ plugins: [magicLinkClient()] });
 
-export function LoginForm({ providers, next }: { providers: ("github" | "google")[]; next: string }) {
+// `sent` is what to say once the link is on its way; the sign-in page knows
+// whether that is by email or only to the server's log.
+export function LoginForm({
+  providers,
+  next,
+  sent,
+}: {
+  providers: ("github" | "google")[];
+  next: string;
+  sent: string;
+}) {
   const [state, setState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   return (
     <>
@@ -42,7 +52,7 @@ export function LoginForm({ providers, next }: { providers: ("github" | "google"
           Email me a link
         </button>
       </form>
-      {state === "sent" && <p role="status">Check your email for a link to sign in.</p>}
+      {state === "sent" && <p role="status">{sent}</p>}
       {state === "failed" && <p role="alert">That did not work. Try again in a minute.</p>}
     </>
   );

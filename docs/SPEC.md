@@ -77,6 +77,7 @@ A private workflow is visible to its organisation's members and to nobody else.
 - **Public workflows** can be read by anyone, signed in or not. Only their owner can push to them: the user, or the organisation's members.
 - **Private workflows** can be read only by members. Anyone else gets a 404, the same as for a workflow that doesn't exist, so a private workflow's name never leaks.
 - **Owners** manage members. **Members** read and push. A token acts as its user and can do nothing more. So does an AI client's OAuth token, on `/mcp` only.
+- **A token that is not valid**, revoked or mistyped, gets a 401 that says to log in again, from the API, the YAML downloads and the organisation forms alike. It gets the same answer whatever it asks for, so it never learns whether a private workflow exists. A request with no `Authorization` header is anonymous. Decided 2026-10-22, after a self-hosting trial found a revoked token silently read as nobody.
 - A user's own workflows (owner is a user) are public only in v1; private workflows belong to organisations.
 
 Each boundary has a test:
@@ -86,6 +87,7 @@ Each boundary has a test:
 | Positive | A member can read and push a private workflow |
 | Negative | A non-member and a signed-out visitor both get 404 on a private workflow, its files, its version pages and its API |
 | Cross-tenant | A token from a member of organisation A can neither read nor push organisation B's workflows, public pushes included |
+| Invalid token | A revoked or made-up token gets the same 401 for a private, a public and a missing workflow; a valid token still reads as before |
 | Roles | An owner can do everything a member can, and manage members. A member cannot manage members or read the audit log |
 
 ## The edition hook

@@ -170,6 +170,13 @@ describe("Roles boundary", () => {
     for (const action of ["push", "private view", "joined", "left"]) expect(page.html).toContain(action);
   });
 
+  it("the audit log says whoever made the organisation joined it", async () => {
+    const olive = await person("olive");
+    await orgWith("acme", olive);
+    const page = await renderPage(OrgSettingsPage, { owner: "acme" }, { as: { cookie: olive.cookie } });
+    expect(page.html).toContain("<td>olive</td><td>joined</td><td>acme</td>");
+  });
+
   it("a member cannot manage members: 403", async () => {
     const { mo, nell, olive } = await acme();
     const add = await request("POST", "/api/orgs/acme/members", {
@@ -216,11 +223,9 @@ describe("Roles boundary", () => {
 describe("Tokens", () => {
   it("a revoked token is refused", async () => {
     const { mo } = await acme();
-    const db = await getDb();
-    const [t] = await listTokens(db, mo.id);
-    await revokeToken(db, mo.id, t.id);
+    await revoke(mo);
     expect((await push("acme", "payroll", { token: mo.token })).status).toBe(401);
-    expect((await request("GET", "/api/v1/acme/payroll", { as: { token: mo.token } })).status).toBe(404);
+    expect((await request("GET", "/api/v1/acme/payroll", { as: { token: mo.token } })).status).toBe(401);
   });
 
   it("a token's secret is never stored in plain text", async () => {
@@ -236,6 +241,97 @@ describe("Tokens", () => {
     const { mo } = await acme();
     const res = await push("acme", "payroll", { token: mo.token.slice(0, -2) + "xx" });
     expect(res.status).toBe(401);
+  });
+});
+
+async function revoke(who: { id: string }) {
+  const db = await getDb();
+  for (const t of await listTokens(db, who.id)) await revokeToken(db, who.id, t.id);
+}
+
+// Every way to read a workflow that takes a token, as status and body.
+async function tokenReads(owner: string, slug: string, token: string) {
+  const as = { token };
+  const read = async (path: string) => {
+    const res = await request("GET", path, { as });
+    return { status: res.status, body: await res.text() };
+  };
+  return {
+    api: await read(`/api/v1/${owner}/${slug}`),
+    versionApi: await read(`/api/v1/${owner}/${slug}/v/1`),
+    yaml: await read(`/${owner}/${slug}/v/1/security.yaml`),
+  };
+}
+
+// A CLI whose token was revoked, or mistyped, sends it on every request. It
+// gets a 401 telling it to log in again, never an answer as nobody, which
+// would make a private workflow look missing and hide the real problem.
+describe("A token that is not valid", () => {
+  it("positive: a valid token still reads its own organisation's private workflow", async () => {
+    const { mo } = await acme();
+    const reads = await tokenReads("acme", "payroll", mo.token);
+    expect([reads.api.status, reads.versionApi.status, reads.yaml.status]).toEqual([200, 200, 200]);
+    expect(reads.yaml.body).toBe(security);
+  });
+
+  it("negative: a revoked token gets 401 on every read and on a push, saying to log in again", async () => {
+    const { mo } = await acme();
+    await revoke(mo);
+    const reads = await tokenReads("acme", "payroll", mo.token);
+    const pushed = await push("acme", "payroll", { token: mo.token });
+    const answers = [reads.api, reads.versionApi, reads.yaml, { status: pushed.status, body: await pushed.text() }];
+    for (const answer of answers) {
+      expect(answer.status).toBe(401);
+      expect(answer.body).toMatch(/token is not valid/);
+      expect(answer.body).toMatch(/log in again/i);
+    }
+  });
+
+  it("negative: a revoked token gets 401 from the organisation routes too, and changes nothing", async () => {
+    const { olive, nell } = await acme();
+    await revoke(olive);
+    const as = { token: olive.token };
+    const answers = [
+      await request("POST", "/api/orgs", { as, form: { slug: "olive-co", name: "Olive Co" } }),
+      await request("POST", "/api/orgs/acme/members", { as, form: { identifier: nell.username } }),
+      await request("POST", `/api/orgs/acme/members/${olive.id}/remove`, { as }),
+    ];
+    for (const res of answers) {
+      expect(res.status).toBe(401);
+      expect(await res.text()).toMatch(/token is not valid/);
+    }
+    expect((await request("GET", "/api/v1/acme/payroll", { as: { token: nell.token } })).status).toBe(404);
+  });
+
+  it("negative: a made-up token gets the same 401 for a private, a public and a missing workflow, so it learns nothing", async () => {
+    const { olive } = await acme();
+    await push("acme", "handbook", { token: olive.token }, "public");
+    const madeUp = olive.token.slice(0, -2) + "xx";
+    const hidden = await tokenReads("acme", "payroll", madeUp);
+    expect(hidden.api.status).toBe(401);
+    expect(await tokenReads("acme", "handbook", madeUp)).toEqual(hidden);
+    expect(await tokenReads("acme", "nothing-here", madeUp)).toEqual(hidden);
+    expect(await tokenReads("nobody-here", "payroll", madeUp)).toEqual(hidden);
+  });
+
+  it("cross-tenant: another organisation's valid token still gets 404 for a private workflow, not 401", async () => {
+    const { mo } = await acme();
+    const bea = await person("bea");
+    await orgWith("beta", bea);
+    await push("beta", "secret-plans", { token: bea.token }, "private");
+    const reads = await tokenReads("beta", "secret-plans", mo.token);
+    expect([reads.api.status, reads.versionApi.status, reads.yaml.status]).toEqual([404, 404, 404]);
+  });
+
+  it("anonymous: with no Authorization header, public workflows still read and private ones are 404", async () => {
+    const { olive } = await acme();
+    await push("acme", "handbook", { token: olive.token }, "public");
+    const read = async (path: string) => (await request("GET", path)).status;
+    expect(await read("/api/v1/acme/handbook")).toBe(200);
+    expect(await read("/api/v1/acme/handbook/v/1")).toBe(200);
+    expect(await read("/acme/handbook/v/1/security.yaml")).toBe(200);
+    expect(await read("/api/v1/acme/payroll")).toBe(404);
+    expect(await read("/acme/payroll/v/1/security.yaml")).toBe(404);
   });
 });
 

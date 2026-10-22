@@ -68,6 +68,28 @@ describe("choosing how sign-in links are sent", () => {
     expect(warn.mock.calls.join(" ")).toMatch(/NOT SENT/);
     expect(log.mock.calls.join(" ")).toContain(url);
   });
+
+  it("on a server, as in Docker, says to set MAIL_FROM and SMTP and names nothing of Cloudflare's", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const chosen = pickSender({ env: {}, createTransport: fakeSmtp().createTransport });
+    await chosen.sender.sendMagicLink("ana@example.com", url);
+    const said = warn.mock.calls.join(" ");
+    expect(said).toContain("MAIL_FROM");
+    expect(said).toContain("SMTP_URL");
+    expect(said).not.toMatch(/Cloudflare|binding/);
+  });
+
+  it("on a Worker, says to set MAIL_FROM and bind Cloudflare Email Service and names nothing of SMTP", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const chosen = pickSender({ env: {} });
+    await chosen.sender.sendMagicLink("ana@example.com", url);
+    const said = warn.mock.calls.join(" ");
+    expect(said).toContain("MAIL_FROM");
+    expect(said).toContain("EMAIL");
+    expect(said).not.toMatch(/SMTP/);
+  });
 });
 
 describe("SMTP settings", () => {

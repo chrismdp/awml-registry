@@ -20,7 +20,8 @@ export async function createOrganisation(
   if (await ownerSlugTaken(db, slug)) return refuse(422, `"${slug}" is taken.`);
   const [org] = await db.insert(organisation).values({ slug, name }).returning();
   await db.insert(membership).values({ organisationId: org.id, userId: actorId, role: "owner" });
-  await record(db, org.id, actorId, "member_joined", await usernameOf(db, actorId));
+  // Whoever makes the organisation joins it: "olive joined acme".
+  await record(db, org.id, actorId, "member_joined", org.slug);
   return { ok: true, organisation: org };
 }
 

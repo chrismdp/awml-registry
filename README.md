@@ -16,9 +16,11 @@ cp .env.example .env.local   # then set BETTER_AUTH_SECRET
 npm run dev
 ```
 
+The registry will not start without a `BETTER_AUTH_SECRET` of at least 32 random characters. `openssl rand -base64 32` makes one.
+
 Open http://localhost:3000. The data goes in `data/registry.db`, made on first use.
 
-To sign in, enter your email. Unless you set up email (see Settings), the registry prints the sign-in link in the terminal running `npm run dev`; open it in your browser.
+To sign in, enter your email. Unless you set up email (see Settings), the registry prints the sign-in link in the terminal running `npm run dev`. Open it in your browser.
 
 To push from the command line, make a token at `/settings/tokens`, then:
 
@@ -30,20 +32,34 @@ curl -X POST http://localhost:3000/api/v1/<you>/<workflow>/versions \
 
 Run the tests with `npm test` and the type check with `npm run typecheck`.
 
+## Use the awml command
+
+The `awml` command talks to awml.io unless you tell it otherwise. To use your own registry, set `AWML_REGISTRY_URL` to its address, or pass its address with `--registry`:
+
+```sh
+export AWML_REGISTRY_URL=http://localhost:3000
+awml login    # asks for a token made at /settings/tokens
+awml push <you>/<workflow> security.yaml
+```
+
+If the registry says the token is not valid, it was revoked or mistyped. Make a new one and run `awml login` again.
+
 ## Connect your AI
 
-The registry is also an MCP server, at `https://awml.io/mcp`. Connect your AI to it and it can check, read and publish workflows as you, with the tools `check`, `publish`, `get`, `list` and `search` (`docs/SPEC.md` says what each does). It runs on your account, and the registry sends nothing to a model.
+Your registry is also an MCP server, at `/mcp` on its address. Below, `<registry>` is that address: the `BETTER_AUTH_URL` of your own registry, or `https://awml.io` for the official one. Every address the sign-in gives out comes from `BETTER_AUTH_URL` too.
+
+Connect your AI to it and it can check, read and publish workflows as you, with the tools `check`, `publish`, `get`, `list` and `search` (`docs/SPEC.md` says what each does). It runs on your account, and the registry sends nothing to a model.
 
 Every request to `/mcp` needs you signed in, so your AI asks you to sign in when you connect it. Public workflows stay readable without an account on the website, through the API and with `awml pull`.
 
-**Claude.ai and Claude Desktop.** In Customize, open Connectors and add a custom connector with the URL `https://awml.io/mcp`. Claude sends you to awml.io to sign in, then asks you to allow it. If Claude asks how to register, choose to register automatically: the registry offers dynamic client registration. On a Team or Enterprise plan, an owner can add the connector for everyone in Organization settings, then each member connects it.
+**Claude.ai and Claude Desktop.** In Customize, open Connectors and add a custom connector with the URL `<registry>/mcp`. Claude reaches it from the internet, so it needs a public `https` address. Claude sends you to your registry to sign in, then asks you to allow it. If Claude asks how to register, choose to register automatically: the registry offers dynamic client registration. On a Team or Enterprise plan, an owner can add the connector for everyone in Organization settings, then each member connects it.
 
 **ChatGPT.** Add a connector with the same URL. It signs in the same way.
 
 **Claude Code.**
 
 ```sh
-claude mcp add --transport http awml https://awml.io/mcp
+claude mcp add --transport http awml <registry>/mcp
 ```
 
 Then run `/mcp` in Claude Code and choose awml to sign in.
@@ -51,7 +67,7 @@ Then run `/mcp` in Claude Code and choose awml to sign in.
 **Codex**, with a token made at `/settings/tokens`:
 
 ```sh
-codex mcp add awml --url https://awml.io/mcp --bearer-token-env-var AWML_TOKEN
+codex mcp add awml --url <registry>/mcp --bearer-token-env-var AWML_TOKEN
 export AWML_TOKEN=awml_...
 ```
 
@@ -59,20 +75,18 @@ That writes these lines to `~/.codex/config.toml`, which you can also write your
 
 ```toml
 [mcp_servers.awml]
-url = "https://awml.io/mcp"
+url = "<registry>/mcp"
 bearer_token_env_var = "AWML_TOKEN"
 ```
 
 **Any other client** that takes a header: send `Authorization: Bearer <token>` with a token made at `/settings/tokens`.
 
-On a registry of your own, use its address in place of `https://awml.io`. Every address the sign-in gives out comes from `BETTER_AUTH_URL`.
-
 ## Settings
 
 | Variable | What it is |
 |---|---|
-| `BETTER_AUTH_URL` | The address people reach the registry at, such as `https://registry.example.com` |
-| `BETTER_AUTH_SECRET` | At least 32 random characters; `openssl rand -base64 32` makes one |
+| `BETTER_AUTH_URL` | The address people reach the registry at, exactly as the browser shows it, port included, such as `https://registry.example.com` or `http://localhost:8080`. If it is wrong, signing in fails with "Invalid origin" |
+| `BETTER_AUTH_SECRET` | At least 32 random characters; `openssl rand -base64 32` makes one. The registry will not start without one |
 | `DATABASE_PATH` | The SQLite file. Default: `data/registry.db` |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | Optional. Sign-in with GitHub; the callback is `<BETTER_AUTH_URL>/api/auth/callback/github` |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional. Sign-in with Google; the callback is `<BETTER_AUTH_URL>/api/auth/callback/google` |
@@ -80,7 +94,7 @@ On a registry of your own, use its address in place of `https://awml.io`. Every 
 | `SMTP_URL` | An SMTP server to send sign-in emails through, such as `smtps://user:password@mail.example.com` |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | The same as `SMTP_URL`, in parts. The port defaults to 587; port 465 uses TLS from the start |
 
-Sign-in by email link always works. With `MAIL_FROM` and either `SMTP_URL` or `SMTP_HOST` set, the links are emailed. Without them, they are only written to the server's log, and the log says so each time, naming `MAIL_FROM` when that is what is missing.
+Sign-in by email link always works. With `MAIL_FROM` and either `SMTP_URL` or `SMTP_HOST` set, the links are emailed. Without them, they are only written to the server's log, and the log says so each time, naming `MAIL_FROM` when that is what is missing. The sign-in page says so too.
 
 ## Host it yourself
 
@@ -91,7 +105,23 @@ cp compose.example.yaml compose.yaml   # then set BETTER_AUTH_URL and BETTER_AUT
 docker compose up -d
 ```
 
-The container brings the database up to date each time it starts. Back up the volume to back up the registry.
+The container brings the database up to date each time it starts. `docker compose ps` shows it as healthy once it answers.
+
+`BETTER_AUTH_URL` must match the address in the browser, port included. To serve on port 8080, change the port mapping to `"8080:3000"` and `BETTER_AUTH_URL` to `http://localhost:8080`. If you change one without the other, signing in fails with "Invalid origin".
+
+Without email set up, the sign-in links are in the container's log:
+
+```sh
+docker compose logs registry | grep 'sign-in link'
+```
+
+**Backups.** SQLite runs in WAL mode here. It keeps recent changes in `registry.db-wal` until it folds them into `registry.db`, so a copy of `registry.db` alone can miss them. Stop the container first, or copy all three `registry.db*` files together:
+
+```sh
+docker compose stop registry
+docker compose cp registry:/data ./registry-backup
+docker compose start registry
+```
 
 ## Run it on Cloudflare
 

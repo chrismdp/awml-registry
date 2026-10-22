@@ -5,9 +5,11 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # The address people reach the registry at.
+      # The address people reach the registry at, exactly as the browser shows
+      # it, port included. Change it when you change the port above.
       BETTER_AUTH_URL: http://localhost:3000
       # At least 32 random characters: openssl rand -base64 32
+      # The registry will not start with change-me.
       BETTER_AUTH_SECRET: change-me
       # Email for sign-in links. Without MAIL_FROM and SMTP, the links are only printed to the log.
       # MAIL_FROM: "Registry <login@example.com>"
@@ -20,6 +22,12 @@ services:
     volumes:
       - registry-data:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/auth/ok').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
 
 volumes:
   registry-data:

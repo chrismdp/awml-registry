@@ -1,16 +1,17 @@
 import { getDb } from "@/db/client";
-import { backTo, json, type Params } from "@/server/http";
+import { backTo, json, refusal, type Params } from "@/server/http";
 import { addMember } from "@/server/organisations";
-import { getViewer } from "@/server/viewer";
+import { requestViewer } from "@/server/viewer";
 
 // The form on /{org}/settings that adds a member by email or username.
 export async function POST(req: Request, { params }: Params<"org">) {
   const { org } = await params;
-  const viewer = await getViewer(req.headers);
+  const asker = await requestViewer(req.headers);
+  if (!asker.ok) return refusal(asker);
   const form = await req.formData();
   const added = await addMember(
     await getDb(),
-    viewer?.id,
+    asker.viewer?.id,
     org,
     String(form.get("identifier") ?? ""),
     form.get("role") === "owner" ? "owner" : "member",
