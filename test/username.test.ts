@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
-import { auditEvent, user, workflow } from "@/db/schema";
+import { auditEvent, platform, user, workflow } from "@/db/schema";
 import { createOrganisation } from "@/server/organisations";
 import { listTokens, revokeToken } from "@/server/tokens";
 import SettingsPage from "@/app/settings/page";
@@ -470,5 +470,243 @@ describe("the old address", () => {
     expect((await createOrganisation(await getDb(), bea.id, { slug: "ana-cooks", name: "Cooks" })).ok).toBe(true);
     expect((await request("GET", "/api/v1/ana-cooks/dinners")).status).toBe(404);
     expect(await renderPage(OwnerPage, { owner: "ana-cooks" })).toMatchObject({ status: 200 });
+  });
+});
+
+// The tools on /mcp follow an old name as the API does: a tool that takes an
+// owner, a workflow (owner/slug) or a platform reaches the person's current
+// name, and answers with the address there. Where the name leads, the usual
+// access check decides, as on the website.
+describe("old names on /mcp", () => {
+  // A person's private workflow and platform, which the push rules never
+  // make: here only to show that following an old name leaves the check to
+  // the current name.
+  async function makePrivate(slug: string) {
+    const db = await getDb();
+    await db.update(workflow).set({ visibility: "private" }).where(eq(workflow.slug, slug));
+    await db.update(platform).set({ visibility: "private" }).where(eq(platform.slug, slug));
+  }
+
+  it("every tool that takes an owner follows an old name to the current one, and answers with the current address", async () => {
+    const ana = await person("ana");
+    const nell = await person("nell");
+    await publish(ana, "ana", "dinners");
+    await addPlatform(ana, "ana", "worker");
+    await patchMe({ token: ana.token }, { username: "ana-cooks" });
+
+    for (const who of [ana, nell]) {
+      const got = await call("get", { owner: "ana", slug: "dinners" }, who.token);
+      expect(got.data).toMatchObject({ owner: "ana-cooks", slug: "dinners", url: `${BASE}/ana-cooks/dinners` });
+      expect(got.text).toContain(`ana-cooks/dinners, version 1 of 1, public. ${BASE}/ana-cooks/dinners`);
+      expect((await call("get", { owner: "ana", slug: "dinners", version: 1 }, who.token)).data).toMatchObject({
+        owner: "ana-cooks",
+        url: `${BASE}/ana-cooks/dinners/v/1`,
+      });
+      const listed = await call("list", { owner: "ana" }, who.token);
+      expect(listed.data.workflows.map((w: { owner: string; url: string }) => [w.owner, w.url])).toEqual([
+        ["ana-cooks", `${BASE}/ana-cooks/dinners`],
+      ]);
+      const platformRead = await call("get_platform", { owner: "ana", slug: "worker" }, who.token);
+      expect(platformRead.data).toMatchObject({
+        owner: "ana-cooks",
+        slug: "worker",
+        url: `${BASE}/api/v1/platforms/ana-cooks/worker`,
+      });
+      expect(platformRead.text).toContain("platform ana-cooks/worker, version 1 of 1");
+      const fitted = await call("fit_workflow", { workflow: "ana/dinners", platforms: ["ana/worker@1"] }, who.token);
+      expect(fitted.data.workflow).toEqual({ owner: "ana-cooks", slug: "dinners", number: 1 });
+      expect(fitted).toEqual(
+        await call("fit_workflow", { workflow: "ana-cooks/dinners", platforms: ["ana-cooks/worker@1"] }, who.token),
+      );
+      expect(await call("fit_workflow", { workflow: "ana/dinners@1" }, who.token)).toEqual(
+        await call("fit_workflow", { workflow: "ana-cooks/dinners@1" }, who.token),
+      );
+    }
+
+    // Writes to the old name go to the current owner.
+    const published = await call("publish", { owner: "ana", slug: "dinners", workflow: dinners }, ana.token);
+    expect(published.data).toEqual({ owner: "ana-cooks", slug: "dinners", number: 2, url: `${BASE}/ana-cooks/dinners` });
+    const added = await call("add_platform", { owner: "ana", slug: "worker", description: worker }, ana.token);
+    expect(added.data).toEqual({
+      owner: "ana-cooks",
+      slug: "worker",
+      number: 2,
+      url: `${BASE}/api/v1/platforms/ana-cooks/worker/v/2`,
+    });
+    // Someone else's write to the old name is refused as at the current name.
+    for (const [tool, args] of [
+      ["publish", { slug: "dinners", workflow: dinners }],
+      ["add_platform", { slug: "worker", description: worker }],
+    ] as const) {
+      const old = await call(tool, { owner: "ana", ...args }, nell.token);
+      expect(old.isError, tool).toBe(true);
+      expect(old, tool).toEqual(await call(tool, { owner: "ana-cooks", ...args }, nell.token));
+    }
+
+    // After a second rename, both old names lead to the current one.
+    await patchMe({ token: ana.token }, { username: "ana-bakes" });
+    for (const old of ["ana", "ana-cooks"])
+      expect((await call("get", { owner: old, slug: "dinners" }, nell.token)).data.owner, old).toBe("ana-bakes");
+  });
+
+  it("an old name someone else has taken belongs to them: the tools reach their workflows, not the person who gave it up", async () => {
+    const ana = await person("ana");
+    const bea = await person("bea");
+    await publish(ana, "ana", "dinners");
+    await patchMe({ token: ana.token }, { username: "ana-cooks" });
+    expect((await patchMe({ token: bea.token }, { username: "ana" })).status).toBe(200);
+
+    expect((await call("get", { owner: "ana", slug: "dinners" }, ana.token)).text).toBe("Not found.");
+    expect((await call("list", { owner: "ana" }, ana.token)).data.workflows).toEqual([]);
+    expect((await call("fit_workflow", { workflow: "ana/dinners" }, ana.token)).text).toBe("Not found: ana/dinners.");
+    const intoBeas = await call("publish", { owner: "ana", slug: "dinners", workflow: dinners }, ana.token);
+    expect(intoBeas.isError).toBe(true);
+    const beas = await call("publish", { owner: "ana", slug: "dinners", workflow: dinners }, bea.token);
+    expect(beas.data).toMatchObject({ owner: "ana", number: 1 });
+    expect((await call("get", { owner: "ana-cooks", slug: "dinners" }, ana.token)).data.versions).toEqual([1]);
+  });
+
+  it("Positive boundary: the person reads and fits their own private workflow and platform through their old name", async () => {
+    const ana = await person("ana");
+    await publish(ana, "ana", "diary");
+    await addPlatform(ana, "ana", "diary");
+    await makePrivate("diary");
+    await patchMe({ token: ana.token }, { username: "ana-new" });
+
+    expect((await call("get", { owner: "ana", slug: "diary" }, ana.token)).data).toMatchObject({
+      owner: "ana-new",
+      visibility: "private",
+    });
+    expect((await call("list", { owner: "ana" }, ana.token)).data.workflows.map((w: { slug: string }) => w.slug)).toEqual([
+      "diary",
+    ]);
+    expect((await call("get_platform", { owner: "ana", slug: "diary" }, ana.token)).data).toMatchObject({
+      owner: "ana-new",
+      visibility: "private",
+    });
+    const fitted = await call("fit_workflow", { workflow: "ana/diary", platforms: ["ana/diary"] }, ana.token);
+    expect(fitted.isError).toBe(false);
+    expect(fitted.data.workflow).toEqual({ owner: "ana-new", slug: "diary", number: 1 });
+  });
+
+  it("Negative boundary: a stranger gets the same not found through an old name as for a missing workflow or platform", async () => {
+    const ana = await person("ana");
+    const nell = await person("nell");
+    await publish(ana, "ana", "diary");
+    await addPlatform(ana, "ana", "diary");
+    await makePrivate("diary");
+    await patchMe({ token: ana.token }, { username: "ana-new" });
+
+    for (const owner of ["ana", "ana-new"]) {
+      const hidden = await call("get", { owner, slug: "diary" }, nell.token);
+      const missing = await call("get", { owner, slug: "nothing-here" }, nell.token);
+      expect([hidden.isError, hidden.text], owner).toEqual([missing.isError, missing.text]);
+      expect(hidden.text).toBe("Not found.");
+      expect((await call("get", { owner, slug: "diary", version: 1 }, nell.token)).text).toBe("Not found.");
+      expect((await call("list", { owner }, nell.token)).data.workflows).toEqual([]);
+      const platformHidden = await call("get_platform", { owner, slug: "diary" }, nell.token);
+      const platformMissing = await call("get_platform", { owner, slug: "nothing-here" }, nell.token);
+      expect([platformHidden.isError, platformHidden.text]).toEqual([platformMissing.isError, platformMissing.text]);
+      expect((await call("fit_workflow", { workflow: `${owner}/diary` }, nell.token)).text).toBe("Not found: ana-new/diary.");
+      expect((await call("fit_workflow", { workflow: `${owner}/nothing-here` }, nell.token)).text).toBe(
+        "Not found: ana-new/nothing-here.",
+      );
+      const named = await call("fit_workflow", { file: dinners, platforms: [`${owner}/diary`] }, nell.token);
+      expect([named.isError, named.text]).toEqual([true, "Not found: ana-new/diary."]);
+      const all = await call("fit_workflow", { file: dinners }, nell.token);
+      expect(JSON.stringify(all)).not.toContain("diary");
+      for (const [tool, args] of [
+        ["publish", { slug: "diary", workflow: dinners }],
+        ["add_platform", { slug: "diary", description: worker }],
+      ] as const)
+        expect((await call(tool, { owner, ...args }, nell.token)).isError, `${tool} ${owner}`).toBe(true);
+    }
+    expect((await call("get", { owner: "ana-new", slug: "diary" }, ana.token)).data.versions).toEqual([1]);
+    expect((await call("get_platform", { owner: "ana-new", slug: "diary" }, ana.token)).data.versions).toEqual([1]);
+  });
+
+  it("Cross-tenant boundary: an old name an organisation took leads to it, and its private workflows and platforms are not found to the name's former holder", async () => {
+    const olive = await person("olive");
+    const mo = await person("mo");
+    const bea = await person("bea");
+    await orgWith("acme", olive, [mo]);
+    await publish(olive, "olive", "dinners");
+    await patchMe({ token: olive.token }, { username: "olive-new" });
+    const db = await getDb();
+    expect((await createOrganisation(db, bea.id, { slug: "olive", name: "Olive Ltd" })).ok).toBe(true);
+    expect(
+      (await call("publish", { owner: "olive", slug: "plans", workflow: dinners, visibility: "private" }, bea.token)).isError,
+    ).toBe(false);
+    expect(
+      (await call("add_platform", { owner: "olive", slug: "vault", description: worker, visibility: "private" }, bea.token))
+        .isError,
+    ).toBe(false);
+
+    const { accessToken: oauth } = await connect(olive);
+    for (const bearer of [olive.token, oauth, mo.token]) {
+      expect((await call("get", { owner: "olive", slug: "plans" }, bearer)).text).toBe("Not found.");
+      expect((await call("get", { owner: "olive", slug: "dinners" }, bearer)).text).toBe("Not found.");
+      expect((await call("list", { owner: "olive" }, bearer)).data.workflows).toEqual([]);
+      expect((await call("get_platform", { owner: "olive", slug: "vault" }, bearer)).text).toBe("Not found.");
+      expect((await call("fit_workflow", { workflow: "olive/plans" }, bearer)).text).toBe("Not found: olive/plans.");
+      const named = await call("fit_workflow", { file: dinners, platforms: ["olive/vault"] }, bearer);
+      expect([named.isError, named.text]).toEqual([true, "Not found: olive/vault."]);
+      expect((await call("publish", { owner: "olive", slug: "plans", workflow: dinners }, bearer)).text).toBe("Not found.");
+      expect((await call("add_platform", { owner: "olive", slug: "vault", description: worker }, bearer)).text).toBe(
+        "Not found.",
+      );
+    }
+    // Olive's own workflow is under her current name, as ever.
+    expect((await call("get", { owner: "olive-new", slug: "dinners" }, olive.token)).data.versions).toEqual([1]);
+    expect((await call("get", { owner: "olive", slug: "plans" }, bea.token)).data.versions).toEqual([1]);
+    expect((await call("get_platform", { owner: "olive", slug: "vault" }, bea.token)).data.versions).toEqual([1]);
+  });
+
+  it("Roles boundary: the owner and a member of an organisation that took an old name both read and push its private workflows there; the name's former holder cannot", async () => {
+    const olive = await person("olive");
+    const bea = await person("bea");
+    const mo = await person("mo");
+    await patchMe({ token: olive.token }, { username: "olive-new" });
+    await orgWith("olive", bea, [mo]);
+    expect(
+      (await call("publish", { owner: "olive", slug: "plans", workflow: dinners, visibility: "private" }, bea.token)).isError,
+    ).toBe(false);
+
+    for (const [who, number] of [
+      [bea, 2],
+      [mo, 3],
+    ] as const) {
+      expect((await call("get", { owner: "olive", slug: "plans" }, who.token)).data.owner).toBe("olive");
+      expect((await call("publish", { owner: "olive", slug: "plans", workflow: dinners }, who.token)).data.number).toBe(number);
+    }
+    expect((await call("get", { owner: "olive", slug: "plans" }, olive.token)).text).toBe("Not found.");
+  });
+
+  it("Invalid token: a revoked or made-up token gets the same 401 for an old name, a current name and a missing one", async () => {
+    const ana = await person("ana");
+    await publish(ana, "ana", "dinners");
+    await addPlatform(ana, "ana", "worker");
+    await patchMe({ token: ana.token }, { username: "ana-new" });
+    const db = await getDb();
+    for (const t of await listTokens(db, ana.id)) await revokeToken(db, ana.id, t.id);
+
+    for (const token of [ana.token, "awml_madeup"]) {
+      const answers = new Set<string>();
+      for (const owner of ["ana", "ana-new", "nobody-here"])
+        for (const [name, args] of [
+          ["get", { owner, slug: "dinners" }],
+          ["list", { owner }],
+          ["get_platform", { owner, slug: "worker" }],
+          ["fit_workflow", { workflow: `${owner}/dinners`, platforms: [`${owner}/worker`] }],
+          ["publish", { owner, slug: "dinners", workflow: dinners }],
+          ["add_platform", { owner, slug: "worker", description: worker }],
+        ] as const) {
+          const res = await post("tools/call", { name, arguments: args }, token);
+          answers.add(JSON.stringify([res.status, res.headers.get("www-authenticate"), await res.text()]));
+        }
+      expect(answers.size, token).toBe(1);
+      expect(JSON.parse([...answers][0])[0]).toBe(401);
+    }
+    expect((await request("GET", "/api/v1/ana-new/dinners")).status).toBe(200);
   });
 });
