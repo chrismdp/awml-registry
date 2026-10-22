@@ -143,17 +143,39 @@ export function VersionView(p: VersionViewProps) {
               </dl>
             </section>
 
-            <section className="side">
-              <h2>Leaves its scope</h2>
-              {publishingLabels.length === 0 ? (
-                <p className="plain">Nothing leaves its scope.</p>
-              ) : (
+            {publishingLabels.length > 0 && (
+              <section className="side">
+                <h2>Leaves its scope</h2>
                 <ul className="leaves">
                   {publishingLabels.map((l, i) => (
                     <li key={i}>{l}</li>
                   ))}
                 </ul>
-              )}
+              </section>
+            )}
+
+            <section id="change" className="change">
+              <div>
+                <h2>Change it</h2>
+                <p>
+                  Every change is checked, then saved as version {latest + 1}. Version {latest} stays as it is.
+                </p>
+              </div>
+              <section className="own-ai">
+                <h3>Ask your own AI</h3>
+                <p>
+                  Connect Claude or ChatGPT to the registry and tell it what to change. It runs on your account, not
+                  ours.
+                </p>
+                <pre>{mcpUrl()}</pre>
+              </section>
+              <section>
+                <h3>Push from your machine</h3>
+                <pre>
+                  awml push {p.owner}/{p.slug} {p.views.map((v) => `${v}.yaml`).join(" ")}
+                  {p.visibility === "private" ? " --private" : ""}
+                </pre>
+              </section>
             </section>
 
             <section className="side">
@@ -196,27 +218,6 @@ export function VersionView(p: VersionViewProps) {
                 </ol>
               </section>
             )}
-
-            <section id="change" className="change">
-              <div>
-                <h2>Change it</h2>
-                <p>
-                  Every change is checked, then saved as version {latest + 1}. Version {latest} stays as it is.
-                </p>
-              </div>
-              <section className="own-ai">
-                <h3>Ask your own AI</h3>
-                <p>Connect Claude or ChatGPT to the registry and tell it what to change. It runs on your account, not ours.</p>
-                <pre>{mcpUrl()}</pre>
-              </section>
-              <section>
-                <h3>Push from your machine</h3>
-                <pre>
-                  awml push {p.owner}/{p.slug} {p.views.map((v) => `${v}.yaml`).join(" ")}
-                  {p.visibility === "private" ? " --private" : ""}
-                </pre>
-              </section>
-            </section>
           </aside>
         </div>
       )}

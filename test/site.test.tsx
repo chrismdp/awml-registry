@@ -262,6 +262,26 @@ describe("a workflow's page", () => {
     expect(shown).toContain("Everything in it Triggers 3 Reviews 1 Notes 3 Connectors 3 Surfaces 3 Scopes 3");
   });
 
+  it("orders the side panel: who decides, outside actions, what leaves, change it, everything in it, versions", async () => {
+    const ana = await person("ana");
+    await push(ana.username, "dinners", { token: ana.token }, { security, platform });
+    await push(ana.username, "dinners", { token: ana.token }, { security: withTitle("Dinners"), platform });
+    const shown = text((await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" })).html);
+    const order = ["Who decides", "Outside actions", "Leaves its scope", "Change it", "Everything in it", "Versions"];
+    const at = order.map((h) => shown.indexOf(h));
+    expect(at.every((i) => i >= 0), String(at)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+  });
+
+  it("leaves out what leaves its scope when nothing does", async () => {
+    const ana = await person("ana");
+    await push(ana.username, "bins", { token: ana.token }, { security: binDay });
+    const shown = text((await renderPage(WorkflowPage, { owner: ana.username, slug: "bins" })).html);
+    expect(shown).toContain("Outside actions");
+    expect(shown).not.toContain("Leaves its scope");
+    expect(shown).not.toContain("Nothing leaves its scope.");
+  });
+
   it("says how to change it with your own AI or from your machine, and that the version before stays", async () => {
     const ana = await person("ana");
     await push(ana.username, "dinners", { token: ana.token }, { security, platform });
