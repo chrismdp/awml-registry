@@ -12,7 +12,7 @@ import {
 } from "better-auth/oauth2";
 import { errors as jose, type JSONWebKeySet } from "jose";
 import * as z from "zod";
-import { getDb } from "@/db/client";
+import { getDb, type Db } from "@/db/client";
 import { getAuth } from "./auth";
 import { mcpUrl, ownUrl } from "./http";
 import { fitWorkflow, type Fit } from "./fit";
@@ -20,7 +20,7 @@ import { organisationsOf } from "./organisations";
 import { pushPlatformVersion, readPlatformVersion, searchPlatforms } from "./platforms";
 import { checkWorkflow, explore, ownerPage, pushVersion, readVersion } from "./registry";
 import { userIdForSecret } from "./tokens";
-import { savedNotice, setUsername } from "./usernames";
+import { renamedTo, savedNotice, setUsername } from "./usernames";
 import { viewerFor, type Viewer } from "./viewer";
 
 type Person = NonNullable<Viewer>;
@@ -105,7 +105,24 @@ const legacyFile = (view: string) =>
     .string()
     .optional()
     .describe(`Not used: AWML 0.3's ${view} view, which the registry no longer takes. Send the 0.4 file as workflow.`);
-const owner = z.string().describe("A username or an organisation's slug, as in <registry>/owner/slug");
+const owner = z
+  .string()
+  .describe(
+    "A username or an organisation's slug, as in <registry>/owner/slug. A username its person has since changed leads to their current one",
+  );
+
+// The name an owner goes by now: a username its person gave up, while no
+// person or organisation holds it, leads to the one they took, as the old
+// addresses on the website and the API do. The tool then checks access under
+// that name, so following an old name shows nobody anything more.
+const current = async (db: Db, name: string) => (await renamedTo(db, name)) ?? name;
+
+// owner/slug or owner/slug@version, with its owner as current gives it.
+async function currentRef(db: Db, ref: string) {
+  const at = ref.indexOf("/");
+  return at > 0 ? `${await current(db, ref.slice(0, at))}${ref.slice(at)}` : ref;
+}
+
 const slug = z.string().describe("The workflow's slug: lowercase letters, digits and single hyphens");
 
 type Listed = { owner: string; slug: string; title: string; visibility?: string; updatedAt: Date };
@@ -205,7 +222,7 @@ function server(person: Person) {
     },
     async ({ owner, slug, workflow, security, platform, visibility }) => {
       const db = await getDb();
-      const pushed = await pushVersion(db, person, owner, slug, { workflow, security, platform, visibility });
+      const pushed = await pushVersion(db, person, await current(db, owner), slug, { workflow, security, platform, visibility });
       if (!pushed.ok) return refused(pushed.errors);
       const url = page(pushed.owner, pushed.slug);
       return answer(`Saved version ${pushed.number} of ${pushed.owner}/${pushed.slug}: ${url}`, {
@@ -232,7 +249,7 @@ function server(person: Person) {
     },
     async ({ owner, slug, version }) => {
       const db = await getDb();
-      const v = await readVersion(db, person, owner, slug, version ?? "latest");
+      const v = await readVersion(db, person, await current(db, owner), slug, version ?? "latest");
       if (!v) return NOT_FOUND;
       const url = version === undefined ? page(v.owner, v.slug) : ownUrl(`/${v.owner}/${v.slug}/v/${v.number}`);
       const versions = v.versions.map((x) => x.number);
@@ -271,7 +288,7 @@ function server(person: Person) {
     async ({ owner }) => {
       const db = await getDb();
       const owners = owner
-        ? [owner]
+        ? [await current(db, owner)]
         : [person.username, ...(await organisationsOf(db, person.id)).map((o) => o.slug)];
       const rows: Listed[] = [];
       for (const o of owners) {
@@ -333,7 +350,7 @@ function server(person: Person) {
     },
     async ({ owner, slug, version }) => {
       const db = await getDb();
-      const p = await readPlatformVersion(db, person, owner, slug, version ?? "latest");
+      const p = await readPlatformVersion(db, person, await current(db, owner), slug, version ?? "latest");
       if (!p) return NOT_FOUND;
       const versions = p.versions.map((x) => x.number);
       const text = [
@@ -379,7 +396,7 @@ function server(person: Person) {
     },
     async ({ owner, slug, description, recipe, visibility }) => {
       const db = await getDb();
-      const pushed = await pushPlatformVersion(db, person, owner, slug, { description, recipe, visibility });
+      const pushed = await pushPlatformVersion(db, person, await current(db, owner), slug, { description, recipe, visibility });
       if (!pushed.ok) return refused(pushed.errors);
       const url = platformUrl(pushed.owner, pushed.slug, pushed.number);
       return answer(`Saved version ${pushed.number} of the platform ${pushed.owner}/${pushed.slug}: ${url}`, {
@@ -407,7 +424,14 @@ function server(person: Person) {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ workflow, file, security, implementation, platforms }) => {
-      const fitted = await fitWorkflow(await getDb(), person, { workflow, file, security, implementation, platforms });
+      const db = await getDb();
+      const fitted = await fitWorkflow(db, person, {
+        workflow: workflow === undefined ? undefined : await currentRef(db, workflow),
+        file,
+        security,
+        implementation,
+        platforms: platforms && (await Promise.all(platforms.map((p) => currentRef(db, p)))),
+      });
       if (!fitted.ok) return refused(fitted.errors);
       return answer(fitText(fitted.fit), fitted.fit);
     },

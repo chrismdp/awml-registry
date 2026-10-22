@@ -154,7 +154,7 @@ Added on 2026-10-22. A person's username starts as the part of their email addre
 
 **When the redirect stops.** An old name is free for anyone to take: a person renaming, someone signing up, or a new organisation. Once someone holds it, their page is there and the redirect stops. If a person takes the name and later gives it up, it redirects to them, as the last person to give it up. A person who takes back their own old name has their page there again, and the name they left redirects to it.
 
-**`/mcp`** tools take names as they are now: an old name answers `Not found.`, as a missing owner does.
+**`/mcp`** tools follow an old name as the API does. Each tool that takes an owner, a workflow (`owner/slug`) or a platform (`get`, `list`, `publish`, `get_platform`, `add_platform` and `fit_workflow`) reads an old name as the person's current one while no person or organisation holds it, and its answer names the current address, so the AI app learns the new name. Writes to an old name go to the person's current name, by the usual push rules. An old name someone else has taken is theirs. The tool checks access under the current name, so an old name never shows anyone a private workflow or platform they could not see under the new one. Decided 2026-10-22, after an AI app that remembered an old address got `Not found.`.
 
 | Boundary | Test (`test/username.test.ts`) |
 |---|---|
@@ -162,6 +162,16 @@ Added on 2026-10-22. A person's username starts as the part of their email addre
 | Negative | A taken, reserved or badly formed name is refused with a clear message on all three, and nothing changes; nobody can change another person's username, whatever the request names; a signed-out request gets a 401, and Settings sends them to sign in; a revoked or made-up token gets a 401 from the API and `/mcp` |
 | Cross-tenant | Renaming moves only the person's own pages, never another person's or an organisation's; an old name now held by an organisation never redirects, and its private workflow is the same 404 to the name's former holder and to a stranger; a redirect sends a stranger to the new address, where a private workflow is still a 404 |
 | Redirect lifecycle | The old name redirects with a 308 from pages, files and the API, keeping the query; after two renames both old names lead to the current one; the redirect stops once a person, someone signing up or an organisation takes the old name |
+
+The `/mcp` tools' old names have their tests under "old names on /mcp" in the same file: each tool that takes an owner follows an old name and answers with the current address, writes included, and an old name someone else took reaches them. Through an old name, as through the current one:
+
+| Boundary | Test |
+|---|---|
+| Positive | The person reads, lists and fits their own private workflow and platform through their old name |
+| Negative | A stranger gets the same `Not found.` from `get`, `list`, `get_platform` and `fit_workflow` as for a missing workflow or platform, and cannot publish or add to either |
+| Cross-tenant | An old name an organisation took leads to it: the name's former holder and a member of another organisation, by registry token or OAuth, cannot read, list, fit, publish or add to its private workflows and platforms, which its owner reads |
+| Roles | The owner and a member of the organisation that took an old name both read and push its private workflows there; the name's former holder cannot |
+| Invalid token | A revoked or made-up token gets the same 401 from every tool for an old name, a current name and a missing one |
 
 The platform pages, `/{owner}/platforms` and `/platforms`, list a private platform to its organisation's members only, and their tests are under "Private platforms on the platform pages" in `test/platform-pages.test.tsx`. A platform's own page, `/platforms/{owner}/{slug}`, each tab and each version, is a 404 to anyone outside its organisation, under "Private platforms on a platform's page" in the same file. On the lists: a member sees their organisation's private platforms on both pages; a non-member and a signed-out visitor never see one listed, its files are not found, and an organisation whose platforms are all private looks the same as one with none; a member of one organisation never sees another's private platforms. Listing records nothing in the audit log; opening a private platform's file records the view.
 
@@ -191,7 +201,7 @@ This repo's `wrangler.jsonc` has placeholders for a self-hoster to fill in, and 
 
 Added after v1, on 2026-10-22. A person connects their own AI (Claude.ai, Claude Desktop, ChatGPT, Claude Code, Codex) to `<registry>/mcp` and asks it to check, read or publish workflows. It runs on their account, not ours; the registry still sends nothing to a model.
 
-**Tools.** Each calls the same functions in `src/server` as the website and the API, so it sees what the person may see and the audit log records the same events (`push` on publish and add_platform, `private_view` on reading a private workflow or platform, or fitting against a private platform, `member_renamed` on set_username).
+**Tools.** Each calls the same functions in `src/server` as the website and the API, so it sees what the person may see and the audit log records the same events (`push` on publish and add_platform, `private_view` on reading a private workflow or platform, or fitting against a private platform, `member_renamed` on set_username). A tool given a username its person has since changed follows it to their current one (see "Usernames").
 
 | Tool | What it does |
 |---|---|
