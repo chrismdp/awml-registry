@@ -301,7 +301,69 @@ pre, code { font-family: var(--mono); }
 .signin .small { margin: 18px 0 0; font-size: 14px; line-height: 1.5; color: var(--ink-soft); }
 .signin-page .foot { margin: 28px 0 0; font-size: 14px; color: var(--ink-faint); text-align: center; }
 
-/* Pages not yet redesigned: settings, tokens, an owner's page */
+/* A person's settings and API tokens: a side menu, then a card for each part.
+   The menu stacks above the cards on a phone. */
+.settings-head { padding: 44px 0 28px; }
+.settings-head h1 { margin-top: 10px; font-size: clamp(32px, 7vw, 48px); line-height: 1.08; font-weight: 800; letter-spacing: -0.03em; }
+.settings-head h1:first-child { margin-top: 0; }
+.settings-head > p:not([role]):not(.crumb) { margin: 10px 0 0; font-size: 17px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.settings { display: flex; flex-wrap: wrap; gap: 40px; padding-bottom: 96px; align-items: start; }
+.settings-menu { flex: 1 1 220px; max-width: 260px; display: flex; flex-direction: column; gap: 4px; font-size: 15px; font-weight: 600; }
+.settings-menu a { color: var(--ink-soft); text-decoration: none; padding: 10px 16px; border-radius: 999px; min-height: 44px; display: flex; align-items: center; }
+.settings-menu a[aria-current="page"] { color: var(--paper); background: var(--ink); }
+.settings-main { flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+@media (max-width: 600px) {
+  .settings { gap: 20px; }
+  .settings-menu { max-width: none; flex-direction: row; flex-wrap: wrap; }
+}
+.settings-card { border-radius: 22px; background: var(--wash); padding: 32px; min-width: 0; }
+@media (max-width: 600px) { .settings-card { padding: 20px; } }
+.settings-card h2 { font-size: 24px; font-weight: 700; margin-bottom: 16px; }
+.settings-card h2:has(+ .lead) { margin-bottom: 0; }
+.settings-card h3 { margin: 28px 0 12px; font-size: 18px; font-weight: 700; }
+.settings-card .lead { margin: 8px 0 20px; font-size: 16px; line-height: 1.55; color: var(--ink-soft); max-width: 620px; overflow-wrap: anywhere; }
+.settings-card .hint { margin: 14px 0 0; font-size: 14px; color: var(--ink-faint); overflow-wrap: anywhere; }
+.settings-card .fields-row + .hint { margin-top: 10px; }
+.fields-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600; flex: 1 1 240px; min-width: 0; }
+.field > input, .prefixed {
+  background: var(--paper); border: none; border-radius: 12px; box-shadow: inset 0 0 0 1.5px var(--edge);
+  min-height: 48px; padding: 0 14px; font: inherit; font-weight: 400; font-size: 15px;
+}
+.prefixed { display: flex; align-items: center; font-family: var(--mono); }
+.prefixed > span { color: var(--ink-faint); }
+.prefixed input { border: none; outline: none; font: inherit; flex: 1 1 auto; min-width: 0; background: transparent; color: var(--ink); }
+.prefixed:focus-within { box-shadow: inset 0 0 0 2px var(--ink); }
+.fields-row .button { min-height: 48px; padding: 12px 22px; }
+.button.quiet { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--edge); font-size: 14px; padding: 8px 16px; }
+.button.quiet:hover { color: var(--ink); }
+.sign-out { margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--rule); display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.sign-out p { margin: 0; font-size: 15px; color: var(--ink-soft); }
+.settings-card.summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; }
+.settings-card.summary > div { flex: 1 1 400px; min-width: 0; }
+.settings-card.summary .lead { margin-bottom: 0; }
+.settings-table { background: var(--paper); border-radius: 16px; overflow-x: auto; }
+.settings-table table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 15px; }
+.settings-table td, .settings-table th { padding: 14px 12px; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: middle; }
+.settings-table thead tr { font-size: 13px; color: var(--ink-soft); }
+.settings-table th { font-weight: 600; }
+.settings-table .name { font-weight: 700; }
+.settings-table .act { text-align: right; }
+.settings-orgs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.settings-orgs li { background: var(--paper); border-radius: 16px; padding: 16px 20px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.settings-orgs a { color: var(--ink); font-weight: 700; font-size: 17px; }
+.settings-orgs .address { font-family: var(--mono); font-size: 14px; color: var(--ink-faint); overflow-wrap: anywhere; }
+/* A token just made, shown once. */
+.settings-card.dark { background: var(--ink); color: var(--paper); }
+.settings-card.dark .lead { margin-bottom: 18px; color: var(--on-ink); }
+.settings-card.dark .secret { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.settings-card.dark .secret code { flex: 1 1 360px; min-width: 0; overflow-wrap: anywhere; font-size: 15px; background: #26282e; color: #e6e8eb; border-radius: 12px; padding: 14px 16px; }
+.settings-card.dark .button.outline { background: var(--paper); color: var(--ink); box-shadow: none; font-weight: 700; min-height: 48px; padding: 12px 22px; }
+.settings-card.dark .copied { font-size: 14px; color: var(--on-ink); }
+.settings-card.dark .after { margin: 18px 0 0; font-size: 15px; color: var(--on-ink); }
+.settings-card.dark .after code { color: var(--paper); }
+
+/* Pages not yet redesigned: an owner's page, an organisation's settings */
 .plain-page { padding: 44px 0 80px; max-width: 60rem; }
 .plain-page h1 { font-size: 36px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 12px; }
 .plain-page h2 { margin: 28px 0 8px; }

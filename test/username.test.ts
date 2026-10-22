@@ -95,14 +95,12 @@ describe("the username field on Settings", () => {
   it("shows the current username with Save, and says the old address will redirect", async () => {
     const ana = await person("ana");
     const page = await renderPage(SettingsPage, {}, { as: ana });
-    const section = page.html.split("<h2>Username</h2>")[1].split("<h2>")[0];
+    const section = page.html.split("<h2>Your username</h2>")[1].split("<h2>")[0];
     expect(section).toContain('name="username"');
     expect(section).toContain('value="ana"');
     expect(section).toContain(">Save</button>");
-    expect(section).toContain('Your workflows and platforms live at <a href="/ana">/ana</a>.');
-    expect(text(section)).toContain(
-      "Change your username and they move with you. Links to your old address will redirect to the new one until someone else takes your old name.",
-    );
+    expect(section).toContain('Your workflows and platforms live at <a href="/ana">localhost:3000/ana</a>.');
+    expect(text(section)).toContain("Change it and they move with you. Old links redirect until someone else takes the name.");
   });
 });
 
