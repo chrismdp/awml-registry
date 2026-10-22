@@ -2,7 +2,7 @@
 // use their account through /mcp, and Disconnect, which cuts it off.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "@/db/client";
-import { dateTime } from "@/server/page";
+import { ukTime } from "@/server/page";
 import { listTokens, revokeToken } from "@/server/tokens";
 import SettingsPage from "@/app/settings/page";
 import { disconnect } from "@/app/settings/actions";
@@ -57,8 +57,8 @@ describe("Connected apps on the settings page", () => {
     expect(section).toContain("Disconnect one and its access stops within an hour.");
     expect(section).toContain("Test AI");
     expect(section).toContain("Claude test");
-    expect(section).toContain(dateTime(allowedAt));
-    expect(section).toContain(dateTime(renewedAt));
+    expect(section).toContain(ukTime(allowedAt));
+    expect(section).toContain(ukTime(renewedAt));
     expect(section.match(/>Disconnect</g)).toHaveLength(2);
   });
 });

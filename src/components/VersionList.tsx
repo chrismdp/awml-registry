@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { whenPushed } from "@/server/page";
+import { When } from "./When";
 
 export type ListedVersion = { number: number; pushedAt: Date; pushedBy: string | null; awml: string | null };
 
@@ -29,7 +29,7 @@ export function VersionList({
             </>
           )}
           {sep}
-          <time dateTime={v.pushedAt.toISOString()}>{whenPushed(v.pushedAt)}</time>
+          <When at={v.pushedAt} />
           {v.awml && (
             <>
               {sep}

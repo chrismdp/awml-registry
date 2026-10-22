@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { getDb } from "@/db/client";
 import { platformVersion, version } from "@/db/schema";
-import { whenPushed } from "@/server/page";
+import { ukTime } from "@/server/page";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
 import PlatformPage from "@/app/platforms/[owner]/[slug]/page";
@@ -34,24 +34,24 @@ describe("when a version was pushed", () => {
   const now = new Date("2026-10-22T15:43:00Z");
 
   it("says Today or Yesterday for those days, in UK time", () => {
-    expect(whenPushed(new Date("2026-10-22T15:43:00Z"), now)).toBe("Today 4:43pm");
-    expect(whenPushed(new Date("2026-10-21T23:30:00Z"), now)).toBe("Today 12:30am");
-    expect(whenPushed(new Date("2026-10-21T08:12:00Z"), now)).toBe("Yesterday 9:12am");
-    expect(whenPushed(new Date("2026-10-20T22:59:00Z"), now)).toBe("20 Oct 2026, 11:59pm");
+    expect(ukTime(new Date("2026-10-22T15:43:00Z"), now)).toBe("Today 4:43pm");
+    expect(ukTime(new Date("2026-10-21T23:30:00Z"), now)).toBe("Today 12:30am");
+    expect(ukTime(new Date("2026-10-21T08:12:00Z"), now)).toBe("Yesterday 9:12am");
+    expect(ukTime(new Date("2026-10-20T22:59:00Z"), now)).toBe("20 Oct 2026, 11:59pm");
   });
 
   it("gives the date otherwise, with the time in UK time, in winter and summer", () => {
-    expect(whenPushed(OCT_18, now)).toBe("18 Oct 2026, 9:12am");
-    expect(whenPushed(new Date("2026-01-05T12:00:00Z"), now)).toBe("5 Jan 2026, 12:00pm");
-    expect(whenPushed(new Date("2026-09-30T23:05:00Z"), now)).toBe("1 Oct 2026, 12:05am");
-    expect(whenPushed(new Date("2026-09-02T17:00:00Z"), now)).toBe("2 Sep 2026, 6:00pm");
+    expect(ukTime(OCT_18, now)).toBe("18 Oct 2026, 9:12am");
+    expect(ukTime(new Date("2026-01-05T12:00:00Z"), now)).toBe("5 Jan 2026, 12:00pm");
+    expect(ukTime(new Date("2026-09-30T23:05:00Z"), now)).toBe("1 Oct 2026, 12:05am");
+    expect(ukTime(new Date("2026-09-02T17:00:00Z"), now)).toBe("2 Sep 2026, 6:00pm");
   });
 
   it("counts yesterday across the change of the clocks", () => {
     // Monday 26 October 2026, 10:00 GMT; the clocks went back on the Sunday.
     const monday = new Date("2026-10-26T10:00:00Z");
-    expect(whenPushed(new Date("2026-10-25T00:30:00Z"), monday)).toBe("Yesterday 1:30am");
-    expect(whenPushed(new Date("2026-10-24T22:30:00Z"), monday)).toBe("24 Oct 2026, 11:30pm");
+    expect(ukTime(new Date("2026-10-25T00:30:00Z"), monday)).toBe("Yesterday 1:30am");
+    expect(ukTime(new Date("2026-10-24T22:30:00Z"), monday)).toBe("24 Oct 2026, 11:30pm");
   });
 });
 

@@ -1,15 +1,19 @@
 // The Settings and API tokens pages, built to docs/storyboard/Settings.dc.html
 // and docs/storyboard/Tokens.dc.html: a side menu, then a card for each part.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { eq } from "drizzle-orm";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getDb } from "@/db/client";
-import { account } from "@/db/schema";
+import { account, token } from "@/db/schema";
 import SettingsPage from "@/app/settings/page";
 import TokensPage from "@/app/settings/tokens/page";
 import { NewToken } from "@/components/MakeTokenForm";
 import { addMember } from "@/server/organisations";
 import { createToken, revokeToken, listTokens } from "@/server/tokens";
 import { orgWith, person, signIn } from "./helpers";
+import { connect } from "./mcp-client";
 import { renderPage } from "./pages";
 
 const text = (html: string) =>
@@ -21,6 +25,29 @@ const text = (html: string) =>
     .trim();
 
 type Someone = { cookie: string };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+// Thursday 22 October 2026, 4:43pm in London (BST).
+function itIsOct22() {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-22T15:43:00Z"));
+}
+
+// A table sits in a white box that scrolls sideways inside its card, so on a
+// phone the page itself never does.
+function scrollsInItsCard(html: string) {
+  expect(html).toMatch(/<div class="settings-table"><table>/);
+  const css = fs.readFileSync(path.join("src", "app", "site.css"), "utf8");
+  const box = /^\.settings-table\s*{([^}]*)}/m.exec(css)?.[1] ?? "";
+  expect(box).toMatch(/overflow-x:\s*auto/);
+}
+
+// The pattern attribute on the input with this name, as the browser gets it.
+const patternOf = (html: string, name: string) =>
+  new RegExp(`<input [^>]*name="${name}"[^>]*>`).exec(html)?.[0].match(/pattern="([^"]*)"/)?.[1];
 
 const settings = async (who: Someone, search: Record<string, string> = {}) =>
   (await renderPage(SettingsPage, {}, { as: who, search })).html;
@@ -156,6 +183,46 @@ describe("Settings", () => {
     expect(html).toMatch(/Address<span[^>]*><span[^>]*>localhost:3000\/<\/span><input [^>]*name="slug"/);
   });
 
+  // An unescaped "-" in a class is an error where the browser compiles a
+  // pattern with the v flag, as Chrome does, and then it checks nothing.
+  it("gives the username and organisation address fields a pattern the browser can compile", async () => {
+    const html = await settings(await person("ana"));
+    for (const name of ["username", "slug"]) {
+      const pattern = patternOf(html, name);
+      expect(pattern).toBe("[a-z0-9\\-]+");
+      const field = new RegExp(`^(?:${pattern})$`, "v");
+      expect(field.test("ana-2")).toBe(true);
+      expect(field.test("Ana")).toBe(false);
+    }
+  });
+
+  it("has no pattern attribute anywhere in src that the browser cannot compile", () => {
+    const files = fs.readdirSync("src", { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".tsx"));
+    const patterns = files.flatMap((f) =>
+      [...fs.readFileSync(path.join("src", f), "utf8").matchAll(/\bpattern="([^"]*)"/g)].map(([, p]) => p),
+    );
+    expect(patterns.length).toBeGreaterThan(0);
+    for (const p of patterns) expect(() => new RegExp(`^(?:${p})$`, "v"), p).not.toThrow();
+  });
+
+  it("says when each connected app was allowed and last used in UK time, as the Versions lists do", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // Wednesday 21 October 2026, 9:12am in London (BST).
+    vi.setSystemTime(new Date("2026-10-21T08:12:00Z"));
+    const ana = await person("ana");
+    await connect(ana);
+    itIsOct22();
+    const rows = text(card(await settings(ana), "Connected apps"));
+    expect(rows).toContain("Test AI Yesterday 9:12am Yesterday 9:12am Disconnect");
+    expect(rows).not.toContain("UTC");
+  });
+
+  it("puts the connected apps table in a box that scrolls inside its card", async () => {
+    const ana = await person("ana");
+    await connect(ana);
+    scrollsInItsCard(card(await settings(ana), "Connected apps"));
+  });
+
   it("says when the person is in no organisation", async () => {
     const ana = await person("ana");
     expect(text(card(await settings(ana), "Organisations"))).toContain("You are not in any organisation.");
@@ -190,9 +257,26 @@ describe("API tokens", () => {
   it("lists the person's tokens with Revoke, and says what revoking does", async () => {
     const ana = await person("ana");
     const html = card(await tokens(ana), "Your tokens");
-    expect(text(html)).toMatch(/^Your tokens Name Made Last used Actions test .+ UTC Never Revoke /);
+    expect(text(html)).toMatch(/^Your tokens Name Made Last used Actions test Today \d{1,2}:\d{2}[ap]m Never Revoke /);
     expect(text(html)).toContain("Revoke a token and anything using it stops working straight away.");
     expect(html.match(/>Revoke</g)).toHaveLength(1);
+  });
+
+  it("says when each token was made and last used in UK time, as the Versions lists do", async () => {
+    itIsOct22();
+    const ana = await person("ana");
+    const db = await getDb();
+    await createToken(db, ana.id, "laptop");
+    // Sunday 18 October 2026, 9:12am in London (BST).
+    await db.update(token).set({ lastUsedAt: new Date("2026-10-18T08:12:00Z") }).where(eq(token.name, "laptop"));
+    const rows = text(card(await tokens(ana), "Your tokens"));
+    expect(rows).toContain("test Today 4:43pm Never Revoke");
+    expect(rows).toContain("laptop Today 4:43pm 18 Oct 2026, 9:12am Revoke");
+    expect(rows).not.toContain("UTC");
+  });
+
+  it("puts the tokens table in a box that scrolls inside its card", async () => {
+    scrollsInItsCard(card(await tokens(await person("ana")), "Your tokens"));
   });
 
   it("says None yet when the person has no tokens", async () => {

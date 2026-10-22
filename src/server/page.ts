@@ -33,9 +33,9 @@ function inLondon(d: Date) {
   return { year: parts.year, month: parts.month, day: parts.day, hour: parts.hour, minute: parts.minute };
 }
 
-// When a version was pushed, in UK time: "Today 4:43pm", "Yesterday 9:12am",
-// or "18 Oct 2026, 9:12am".
-export function whenPushed(at: Date, now = new Date()) {
+// A moment in UK time, as the Versions lists and Settings say when something
+// happened: "Today 4:43pm", "Yesterday 9:12am", or "18 Oct 2026, 9:12am".
+export function ukTime(at: Date, now = new Date()) {
   const t = inLondon(at);
   const clock = `${t.hour % 12 || 12}:${String(t.minute).padStart(2, "0")}${t.hour < 12 ? "am" : "pm"}`;
   const today = inLondon(now);
