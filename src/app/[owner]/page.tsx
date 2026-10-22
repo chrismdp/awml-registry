@@ -15,7 +15,7 @@ export default async function OwnerPage({ params }: { params: Promise<{ owner: s
   const isOrg = owner.type === "organisation";
   return (
     <section className="plain-page">
-      <h1>{owner.name}</h1>
+      <h1>{owner.name || owner.slug}</h1>
       <p>
         {owner.slug}
         {isOrg ? " · organisation" : ""}
