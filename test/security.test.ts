@@ -11,6 +11,8 @@ import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
 import VersionSecurityPage from "@/app/[owner]/[slug]/v/[n]/security/page";
 import VersionPlatformPage from "@/app/[owner]/[slug]/v/[n]/platform/page";
 import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
+import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
+import VersionChecksPage from "@/app/[owner]/[slug]/v/[n]/checks/page";
 import OwnerPage from "@/app/[owner]/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import OrgSettingsPage from "@/app/[owner]/settings/page";
@@ -48,12 +50,14 @@ const latestPages: Record<string, Page<{ owner: string; slug: string }>> = {
   securityView: WorkflowSecurityPage,
   platformView: WorkflowPlatformPage,
   yamlView: WorkflowYamlPage,
+  checksView: WorkflowChecksPage,
 };
 const versionPages: Record<string, Page<{ owner: string; slug: string; n: string }>> = {
   versionPage: VersionPage,
   versionSecurityView: VersionSecurityPage,
   versionPlatformView: VersionPlatformPage,
   versionYamlView: VersionYamlPage,
+  versionChecksView: VersionChecksPage,
 };
 
 async function everyRead(who: Who, owner = "acme", slug = "payroll") {

@@ -31,6 +31,9 @@ dirty=$(git -C "$src" status --porcelain -- '*.go' go.mod go.sum cmd wasm | grep
   echo "built with $(go version | cut -d' ' -f3)"
   echo "from https://github.com/chrismdp/awml"
 } > "$out/VERSION"
+# The same, for the registry to name: the release it was built from, or the
+# nearest one and how far past it, and the commit.
+printf '{ "tag": "%s", "commit": "%s" }\n' "$(git -C "$src" describe --tags --always "$commit")$dirty" "$commit" > "$out/version.json"
 
 # What the native CLI says, for the tests to compare against.
 cp "$src/examples/dinners-security.yaml" "$src/examples/dinners-platform.yaml" "$src/wasm/testdata/bad.yaml" "$fixtures/"

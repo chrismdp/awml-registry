@@ -19,6 +19,8 @@ import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
 import VersionSecurityPage from "@/app/[owner]/[slug]/v/[n]/security/page";
 import VersionPlatformPage from "@/app/[owner]/[slug]/v/[n]/platform/page";
 import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
+import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
+import VersionChecksPage from "@/app/[owner]/[slug]/v/[n]/checks/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import OrgSettingsPage from "@/app/[owner]/settings/page";
 import GalleryPage from "@/app/gallery/page";
@@ -382,6 +384,7 @@ describe("the old address", () => {
       security: [WorkflowSecurityPage, VersionSecurityPage],
       platform: [WorkflowPlatformPage, VersionPlatformPage],
       yaml: [WorkflowYamlPage, VersionYamlPage],
+      checks: [WorkflowChecksPage, VersionChecksPage],
     };
     for (const [view, [latest, older]] of Object.entries(views)) {
       expect(await renderPage(latest, { owner: "ana", slug: "dinners" })).toMatchObject({

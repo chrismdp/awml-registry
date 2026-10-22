@@ -41,6 +41,9 @@ export type FitResult = {
 export type FitReport = { results: FitResult[]; gaps: string[] };
 
 export interface Engine {
+  // The AWML it was built from: its release, as `git describe --tags` names
+  // it, and its commit (vendor/awml/VERSION).
+  version: { tag: string; commit: string };
   // The messages `awml check` gives for one file; empty when it has no mistakes.
   check(yaml: string): Promise<string[]>;
   // One workflow's summary from either view or both. The files must pass check.

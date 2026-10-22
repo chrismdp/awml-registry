@@ -29,7 +29,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 ## What v1 does
 
 - **Push and pull.** Push a workflow's security file, platform file or both from the CLI or the API. Every version can be downloaded as YAML or pulled with the CLI.
-- **A page per version.** Each view drawn behind its own tab, at its own address (Mermaid, drawn in the browser from the text the AWML package produces, in the Inter font the registry serves, loaded before Mermaid measures the labels), the check result, and the summary worked out from the files at push. A YAML tab shows the files themselves and nothing else, each with a Copy button and a Download link.
+- **A page per version.** Each view drawn behind its own tab, at its own address (Mermaid, drawn in the browser from the text the AWML package produces, in the Inter font the registry serves, loaded before Mermaid measures the labels), and the summary worked out from the files at push. A YAML tab shows the files themselves and nothing else, each with a Copy button and a Download link. A Checks tab says what checking the files found (see "Checks").
 - **A public gallery.** Anyone can browse public workflows and search them by title. Anyone signed in can publish one, free.
 - **Private workflows for an organisation.** Only its members can see them. In this repo's default edition every organisation may keep private workflows; the hosted edition limits that to paying organisations.
 - **An inventory for each organisation.** Every workflow in one table with its summary counts, plus totals across them all.
@@ -64,10 +64,11 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `/gallery` | The gallery of public workflows, newest first, with search by title |
 | `/explore` | Where the gallery was. Redirects permanently (308) to `/gallery`, keeping the search |
 | `/{owner}` | A user's or organisation's workflows: the public ones to everyone, the private ones to members too |
-| `/{owner}/{slug}` | The latest version: its security view drawn (its platform view, when it has no security file), the summary, the check result, the list of versions, and the command to push the next one |
+| `/{owner}/{slug}` | The latest version: its security view drawn (its platform view, when it has no security file), the summary, the list of versions, and the command to push the next one. The header gives the owner / slug, the title, public or private and the version, and nothing more |
 | `/{owner}/{slug}/security`, `/{owner}/{slug}/platform` | The latest version the same way, with that view drawn. 404 when the version has no such file |
-| `/{owner}/{slug}/yaml` | The latest version's files as text, `security.yaml` then `platform.yaml`, each full width with a Copy button and a Download link. The page keeps its header (owner / slug, title, check result, version) and its tabs, and shows nothing generated: no drawing, no summary, no versions, no Change it box |
-| `/{owner}/{slug}/v/{n}`, `/{owner}/{slug}/v/{n}/security`, `/platform`, `/yaml` | One version, the same ways |
+| `/{owner}/{slug}/yaml` | The latest version's files as text, `security.yaml` then `platform.yaml`, each full width with a Copy button and a Download link. The page keeps its header and its tabs, and shows nothing generated: no drawing, no summary, no versions, no Change it box |
+| `/{owner}/{slug}/checks` | The latest version's checks (see "Checks"). Its tab, after YAML, carries a tick when every file passes, or the number of mistakes |
+| `/{owner}/{slug}/v/{n}`, `/{owner}/{slug}/v/{n}/security`, `/platform`, `/yaml`, `/checks` | One version, the same ways |
 | `/{owner}/{slug}?view={view}`, `/{owner}/{slug}/v/{n}?view={view}` | Where the views were. Redirect permanently (308) to the view's own address, such as `/{owner}/{slug}/platform`, whether or not the workflow is there, so the redirect tells nobody anything |
 | `/{owner}/{slug}/v/{n}/{view}.yaml` | One file as YAML |
 | `/{org}/inventory` | The organisation's inventory, for members |
@@ -95,6 +96,12 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `/consent` | Where a person lets an AI client act as them, after signing in at `/login` |
 
 The API takes `Authorization: Bearer <token>` or a browser session. The CLI talks to `https://awml.io` unless `--registry` or `AWML_REGISTRY_URL` names another.
+
+## Checks
+
+Added on 2026-10-22. A push with any mistake is refused, so every version passed `awml check` when it was pushed. The Checks tab checks each file again, with the AWML the registry runs, and shows for each file: its name, the AWML that checked it (the release and commit in `vendor/awml/version.json`, which `npm run engine:update` writes beside `vendor/awml/VERSION`), and each check with its result, "No mistakes" or the mistakes it found. A file with mistakes is not drawn: its view says how many it has and links to Checks.
+
+AWML 0.3.0's check gives only the mistakes it finds. It names no rule and does not list the checks it ran, so each file has one row, `awml check` itself, and the page says so, with a link to the part of AWML's spec that says what `awml check` reports. When AWML lists its checks with a result for each, each becomes a row of its own.
 
 ## Access
 

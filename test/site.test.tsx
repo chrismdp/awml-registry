@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { LoginForm } from "@/components/LoginForm";
 import { drawingFont } from "@/components/Mermaid";
 import { getDb } from "@/db/client";
+import { version } from "@/db/schema";
 import { engine } from "@/engine";
 import { createOrganisation } from "@/server/organisations";
 import { listTokens } from "@/server/tokens";
@@ -21,6 +22,8 @@ import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
 import VersionSecurityPage from "@/app/[owner]/[slug]/v/[n]/security/page";
 import VersionPlatformPage from "@/app/[owner]/[slug]/v/[n]/platform/page";
 import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
+import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
+import VersionChecksPage from "@/app/[owner]/[slug]/v/[n]/checks/page";
 import { copyText } from "@/components/CopyButton";
 import TokensPage from "@/app/settings/tokens/page";
 import LoginPage from "@/app/login/page";
@@ -53,6 +56,7 @@ const text = (html: string) =>
   html
     .replace(/<[^>]+>/g, " ")
     .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&")
@@ -60,11 +64,24 @@ const text = (html: string) =>
 
 // The page's view tabs: where each goes, what it says, and whether it is the one on show.
 const tabs = (html: string) =>
-  [...html.matchAll(/<a role="tab" href="([^"]*)" aria-selected="(true|false)">([^<]*)<\/a>/g)].map(([, href, selected, label]) => ({
+  [...html.matchAll(/<a role="tab" href="([^"]*)" aria-selected="(true|false)">(.*?)<\/a>/g)].map(([, href, selected, inner]) => ({
     href,
-    label,
+    label: text(inner).trim(),
     selected: selected === "true",
   }));
+
+// The page's header: owner / slug, title, visibility and version.
+const header = (html: string) => text(html.split('<section class="wf-head">')[1].split("</section>")[0]).trim();
+
+// The messages `awml check` gives for test/fixtures/bad.yaml.
+const badMessages = () =>
+  example("bad.check.txt").trim().split("\n").map((l) => l.replace(/^bad\.yaml: /, ""));
+
+// What the Checks view says before and after its files.
+const CHECKS_INTRO =
+  "AWML checked each file when it was pushed, and the registry refuses a push with any mistake. " +
+  "Each file is checked again here, by the AWML this registry runs.";
+const CHECKS_END = "AWML lists the mistakes it finds, not each rule it checks. Its spec says what it checks for.";
 
 // The text of each file a page shows, by the id of its box.
 const files = (html: string) =>
@@ -127,19 +144,19 @@ describe("the public gallery", () => {
 });
 
 describe("a workflow's page", () => {
-  it("draws one view at a time behind a tab for each, each tab its own address, and downloads the file on show", async () => {
+  it("draws one view at a time behind a tab for each, each tab its own address", async () => {
     const ana = await person("ana");
     const o = ana.username;
     await push(o, "dinners", { token: ana.token }, { security, platform });
     const page = await renderPage(WorkflowPage, { owner: o, slug: "dinners" });
     const shown = text(page.html);
-    expect(shown).toContain(`${o} / dinners The family's dinners No mistakes Public · Version 1 of 1`);
+    expect(shown).toContain(`${o} / dinners The family's dinners Public · Version 1 of 1 Who may see each part`);
     expect(page.html).toContain(await engine.draw(security).then((m) => m.split("\n")[0]));
-    expect(page.html).toContain(`href="/${o}/dinners/v/1/security.yaml"`);
     expect(tabs(page.html)).toEqual([
       { href: `/${o}/dinners/security`, label: "Who may see each part", selected: true },
       { href: `/${o}/dinners/platform`, label: "Where each part runs", selected: false },
       { href: `/${o}/dinners/yaml`, label: "YAML", selected: false },
+      { href: `/${o}/dinners/checks`, label: "Checks No mistakes", selected: false },
     ]);
     expect(page.html).not.toContain("?view=");
 
@@ -149,8 +166,20 @@ describe("a workflow's page", () => {
     const other = await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" });
     expect(other.status).toBe(200);
     expect(other.html).toContain(await engine.draw(platform).then((m) => m.split("\n")[1]));
-    expect(other.html).toContain(`href="/${o}/dinners/v/1/platform.yaml"`);
     expect(tabs(other.html).filter((t) => t.selected).map((t) => t.href)).toEqual([`/${o}/dinners/platform`]);
+  });
+
+  it("keeps its header to the owner, title, visibility and version on every view: no buttons and no badge", async () => {
+    const ana = await person("ana");
+    const o = ana.username;
+    await push(o, "dinners", { token: ana.token }, { security, platform });
+    const params = { owner: o, slug: "dinners" };
+    for (const page of [WorkflowPage, WorkflowSecurityPage, WorkflowPlatformPage, WorkflowYamlPage, WorkflowChecksPage]) {
+      const html = (await renderPage(page, params)).html;
+      expect(header(html), page.name).toBe(`${o} / dinners The family's dinners Public · Version 1 of 1`);
+      expect(html, page.name).not.toContain("Change this workflow");
+      expect(html, page.name).not.toContain("Download YAML");
+    }
   });
 
   it("gives an older version's views their own addresses, and its tabs keep to that version", async () => {
@@ -162,12 +191,13 @@ describe("a workflow's page", () => {
 
     const drawn = await renderPage(VersionPlatformPage, v1);
     expect(drawn.status).toBe(200);
-    expect(text(drawn.html)).toContain("No mistakes Public · Version 1 of 2");
+    expect(header(drawn.html)).toBe(`${o} / dinners Dinners for two Public · Version 1 of 2`);
     expect(drawn.html).toContain(await engine.draw(platform).then((m) => m.split("\n")[1]));
     expect(tabs(drawn.html)).toEqual([
       { href: `/${o}/dinners/v/1/security`, label: "Who may see each part", selected: false },
       { href: `/${o}/dinners/v/1/platform`, label: "Where each part runs", selected: true },
       { href: `/${o}/dinners/v/1/yaml`, label: "YAML", selected: false },
+      { href: `/${o}/dinners/v/1/checks`, label: "Checks No mistakes", selected: false },
     ]);
     expect((await renderPage(VersionSecurityPage, v1)).html).toBe((await renderPage(VersionPage, v1)).html);
     expect(files((await renderPage(VersionYamlPage, v1)).html)["security-yaml"]).toBe(security);
@@ -206,7 +236,7 @@ describe("a workflow's page", () => {
     expect((await renderPage(VersionPlatformPage, { owner: o, slug: "bins", n: "1" })).status).toBe(404);
     const page = await renderPage(WorkflowSecurityPage, { owner: o, slug: "bins" });
     expect(page.status).toBe(200);
-    expect(tabs(page.html).map((t) => t.href)).toEqual([`/${o}/bins/security`, `/${o}/bins/yaml`]);
+    expect(tabs(page.html).map((t) => t.href)).toEqual([`/${o}/bins/security`, `/${o}/bins/yaml`, `/${o}/bins/checks`]);
   });
 
   it("keeps each file's raw download at /v/{n}/{view}.yaml", async () => {
@@ -268,8 +298,8 @@ describe("a workflow's YAML view", () => {
     expect(page.status).toBe(200);
     const shown = text(page.html);
     expect(shown).toContain(
-      `${o} / dinners Dinners <b>&</b> No mistakes Public · Version 1 of 1 ` +
-        "Who may see each part Where each part runs YAML security.yaml Copy Download # The family's dinners",
+      `${o} / dinners Dinners <b>&</b> Public · Version 1 of 1 ` +
+        "Who may see each part Where each part runs YAML Checks No mistakes security.yaml Copy Download # The family's dinners",
     );
     expect(tabs(page.html).filter((t) => t.selected).map((t) => t.href)).toEqual([`/${o}/dinners/yaml`]);
     expect(page.html).not.toContain("<figure");
@@ -344,6 +374,77 @@ describe("a workflow's YAML view", () => {
     const member = await renderPage(WorkflowYamlPage, params, { as: ana });
     expect(member.status).toBe(200);
     expect(files(member.html)).toEqual({ "security-yaml": binDay });
+  });
+});
+
+describe("a workflow's Checks view", () => {
+  it("is a fourth tab, after YAML, with a tick when every file passes, and lists each file checked and the AWML that checked it", async () => {
+    const ana = await person("ana");
+    const o = ana.username;
+    await push(o, "dinners", { token: ana.token }, { security, platform });
+    const page = await renderPage(WorkflowChecksPage, { owner: o, slug: "dinners" });
+    expect(page.status).toBe(200);
+    expect(tabs(page.html).map((t) => [t.label, t.selected])).toEqual([
+      ["Who may see each part", false],
+      ["Where each part runs", false],
+      ["YAML", false],
+      ["Checks No mistakes", true],
+    ]);
+    expect(tabs(page.html)[3].href).toBe(`/${o}/dinners/checks`);
+    expect(text(page.html)).toContain(
+      `${o} / dinners The family's dinners Public · Version 1 of 1 Who may see each part Where each part runs YAML Checks No mistakes ` +
+        `${CHECKS_INTRO} ` +
+        "security.yaml Checked by AWML v0.3.0 awml check No mistakes " +
+        "platform.yaml Checked by AWML v0.3.0 awml check No mistakes " +
+        CHECKS_END,
+    );
+    expect(page.html).toContain(
+      'href="https://github.com/chrismdp/awml/blob/726be1b29fc2e8cbd926be2deab3c15207cee24d/SPEC.md#the-file-format"',
+    );
+    expect(page.html).not.toContain("<figure");
+    expect(page.html).not.toContain("<pre");
+    for (const gone of ["Who decides", "Outside actions", "Leaves its scope", "Everything in it", "Change it"])
+      expect(text(page.html), gone).not.toContain(gone);
+  });
+
+  it("counts the mistakes on its tab and lists each under its file, and a file with mistakes is not drawn", async () => {
+    const ana = await person("ana");
+    const o = ana.username;
+    await push(o, "dinners", { token: ana.token }, { security, platform });
+    // A version AWML now finds a mistake in: a push is refused for one, so
+    // only a stored file checked again by a newer AWML can be like this.
+    await (await getDb()).update(version).set({ security: example("bad.yaml") });
+    const [mistake] = badMessages();
+
+    const page = await renderPage(WorkflowChecksPage, { owner: o, slug: "dinners" });
+    expect(page.status).toBe(200);
+    expect(tabs(page.html)[3]).toEqual({ href: `/${o}/dinners/checks`, label: "Checks 1 mistake", selected: true });
+    expect(text(page.html)).toContain(
+      `security.yaml Checked by AWML v0.3.0 awml check 1 mistake ${mistake} ` +
+        "platform.yaml Checked by AWML v0.3.0 awml check No mistakes",
+    );
+    expect(header(page.html)).toBe(`${o} / dinners The family's dinners Public · Version 1 of 1`);
+
+    const drawn = await renderPage(WorkflowPage, { owner: o, slug: "dinners" });
+    expect(drawn.status).toBe(200);
+    expect(drawn.html).not.toContain("flowchart");
+    expect(text(drawn.html)).toContain("security.yaml has 1 mistake, so it cannot be drawn. See Checks.");
+    expect(drawn.html).toContain(`href="/${o}/dinners/checks"`);
+    expect(tabs(drawn.html)[3].label).toBe("Checks 1 mistake");
+    // The other file still draws.
+    const other = await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" });
+    expect(other.html).toContain(await engine.draw(platform).then((m) => m.split("\n")[1]));
+  });
+
+  it("works on an older version, each file checked as that version has it", async () => {
+    const ana = await person("ana");
+    const o = ana.username;
+    await push(o, "bins", { token: ana.token }, { security: binDay });
+    await push(o, "bins", { token: ana.token }, { security, platform });
+    const page = await renderPage(VersionChecksPage, { owner: o, slug: "bins", n: "1" });
+    expect(page.status).toBe(200);
+    expect(tabs(page.html).map((t) => t.href)).toEqual([`/${o}/bins/v/1/security`, `/${o}/bins/v/1/yaml`, `/${o}/bins/v/1/checks`]);
+    expect(text(page.html)).toContain(`${CHECKS_INTRO} security.yaml Checked by AWML v0.3.0 awml check No mistakes ${CHECKS_END}`);
   });
 });
 
@@ -512,6 +613,11 @@ describe("the tokens page", () => {
 });
 
 describe("the engine", () => {
+  it("names the AWML it was built from: the commit vendor/awml/VERSION gives, and its release", () => {
+    const vendored = fs.readFileSync(path.join("vendor", "awml", "VERSION"), "utf8").split("\n")[0];
+    expect(engine.version).toEqual({ tag: "v0.3.0", commit: vendored.split(" ")[1] });
+  });
+
   it("gives the verdict, summary and drawing the native awml gives", async () => {
     expect(await engine.check(security)).toEqual([]);
     expect(await engine.check(example("bad.yaml"))).toEqual(

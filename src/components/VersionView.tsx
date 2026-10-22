@@ -1,10 +1,10 @@
 import Link from "next/link";
-import type { CheckResult } from "@/db/schema";
 import type { Summary } from "@/engine";
 import { mcpUrl } from "@/server/http";
 import { dateTime, type PageView } from "@/server/page";
 import type { View } from "@/server/registry";
 import { names, stepCount } from "@/server/summary";
+import { Checks, mistakesIn, Tick, type CheckedFile } from "./Checks";
 import { CopyButton } from "./CopyButton";
 import { Mermaid } from "./Mermaid";
 import { count } from "./words";
@@ -21,26 +21,46 @@ export type VersionViewProps = {
   views: View[];
   shown: PageView;
   files: { view: View; text: string }[];
+  // What checking each file found, and the AWML that checked them.
+  checks: CheckedFile[];
+  checkedBy: { tag: string; commit: string };
+  // The shown file drawn, or "" when it is not a drawing view or the file has mistakes.
   mermaid: string;
-  check: CheckResult;
   summary: Summary;
   versions: { number: number; pushedAt: Date; pushedBy: string | null }[];
 };
 
-const TAB: Record<PageView, string> = { security: "Who may see each part", platform: "Where each part runs", yaml: "YAML" };
+const TAB: Record<PageView, string> = {
+  security: "Who may see each part",
+  platform: "Where each part runs",
+  yaml: "YAML",
+  checks: "Checks",
+};
 
 export function VersionView(p: VersionViewProps) {
   const base = `/${p.owner}/${p.slug}`;
-  const problems = Object.values(p.check).flat();
+  const mistakes = mistakesIn(p.checks);
   const latest = p.versions[0]?.number ?? p.number;
   const s = p.summary;
   const { publishingLabels } = names(s);
-  const tabs: PageView[] = [...p.views, "yaml"];
+  const tabs: PageView[] = [...p.views, "yaml", "checks"];
   const tablist = (
     <div role="tablist" aria-label="View" className="tabs">
       {tabs.map((view) => (
         <a key={view} role="tab" href={`${p.address}/${view}`} aria-selected={view === p.shown}>
           {TAB[view]}
+          {view === "checks" &&
+            (mistakes === 0 ? (
+              <>
+                <Tick />
+                <span className="hidden-label">No mistakes</span>
+              </>
+            ) : (
+              <>
+                <span className="tab-count">{mistakes}</span>
+                <span className="hidden-label">{mistakes === 1 ? "mistake" : "mistakes"}</span>
+              </>
+            ))}
         </a>
       ))}
     </div>
@@ -54,43 +74,20 @@ export function VersionView(p: VersionViewProps) {
           </p>
           <h1>{p.title}</h1>
           <div className="meta">
-            {problems.length === 0 ? (
-              <span className="badge good">
-                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-                  <path d="M2.5 7.5 L5.5 10.5 L11.5 3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                No mistakes
-              </span>
-            ) : (
-              <span className="badge bad">{count(problems.length, "mistake", "mistakes")}</span>
-            )}
             <span className="note">
               {p.visibility === "public" ? "Public" : "Private"} · Version {p.number} of {latest}
             </span>
           </div>
         </div>
-        {p.shown !== "yaml" && (
-          <div className="actions">
-            <a href="#change" className="button">
-              Change this workflow
-            </a>
-            <a href={`${base}/v/${p.number}/${p.shown}.yaml`} className="button outline">
-              Download YAML
-            </a>
-          </div>
-        )}
       </section>
 
-      {problems.length > 0 && (
-        <ul className="mistakes" role="alert">
-          {problems.map((e) => (
-            <li key={e}>{e}</li>
-          ))}
-        </ul>
-      )}
-
-      {p.shown === "yaml" ? (
-        <div className="yaml">
+      {p.shown === "checks" ? (
+        <div className="full">
+          {tablist}
+          <Checks title={p.title} files={p.checks} checkedBy={p.checkedBy} />
+        </div>
+      ) : p.shown === "yaml" ? (
+        <div className="full yaml">
           {tablist}
           <div className="files" role="tabpanel" aria-label={`${p.title}, yaml`}>
             {p.files.map((f) => (
@@ -114,7 +111,11 @@ export function VersionView(p: VersionViewProps) {
           <main>
             {tablist}
             <figure className="figure" role="tabpanel" aria-label={`${p.title}, ${TAB[p.shown].toLowerCase()}`}>
-              <Mermaid text={p.mermaid} />
+              {p.mermaid ? (
+                <Mermaid text={p.mermaid} />
+              ) : (
+                <CannotDraw file={p.checks.find((f) => f.view === p.shown)!} checks={`${p.address}/checks`} />
+              )}
             </figure>
           </main>
 
@@ -220,6 +221,16 @@ export function VersionView(p: VersionViewProps) {
         </div>
       )}
     </article>
+  );
+}
+
+// In place of a drawing of a file that has mistakes, which AWML will not draw.
+function CannotDraw({ file, checks }: { file: CheckedFile; checks: string }) {
+  return (
+    <p className="cannot-draw">
+      {file.view}.yaml has {count(mistakesIn([file]), "mistake", "mistakes")}, so it cannot be drawn.{" "}
+      <a href={checks}>See Checks.</a>
+    </p>
   );
 }
 

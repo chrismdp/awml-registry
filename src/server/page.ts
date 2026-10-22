@@ -23,10 +23,11 @@ export async function followOldName(db: Db, owner: string, rest = "") {
   permanentRedirect(`/${now}${rest}`);
 }
 
-// A workflow's page shows one of its files drawn, or all of them as text.
-export type PageView = View | "yaml";
+// A workflow's page shows one of its files drawn, all of them as text, or
+// what checking them found.
+export type PageView = View | "yaml" | "checks";
 export const isPageView = (value: unknown): value is PageView =>
-  value === "yaml" || (VIEWS as readonly unknown[]).includes(value);
+  value === "yaml" || value === "checks" || (VIEWS as readonly unknown[]).includes(value);
 
 // The address of a workflow's page: its latest version or version `n`, and
 // one view, or none for the page's own address, which shows the first view

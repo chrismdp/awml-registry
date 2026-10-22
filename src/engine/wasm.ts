@@ -2,6 +2,7 @@
 // verdict, summary and drawing as the awml command line. vendor/awml/VERSION
 // names the AWML commit; `npm run engine:update` rebuilds it.
 import { createAWML, type AWML } from "../../vendor/awml/awml.js";
+import version from "../../vendor/awml/version.json";
 import { loadAwmlModule } from "@/engine/module";
 import type { Engine, Files, FitReport, Summary } from "./types";
 
@@ -14,6 +15,7 @@ function awml() {
 }
 
 export const wasmEngine: Engine = {
+  version,
   async check(yaml) {
     return (await awml()).check(yaml);
   },
