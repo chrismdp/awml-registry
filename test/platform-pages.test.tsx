@@ -6,9 +6,15 @@ import OwnerPage from "@/app/[owner]/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import OwnerPlatformsPage from "@/app/[owner]/platforms/page";
 import SharedPlatformsPage from "@/app/platforms/page";
+import PlatformPage from "@/app/platforms/[owner]/[slug]/page";
+import PlatformRecipePage from "@/app/platforms/[owner]/[slug]/recipe/page";
+import PlatformYamlPage from "@/app/platforms/[owner]/[slug]/yaml/page";
+import PlatformVersionPage from "@/app/platforms/[owner]/[slug]/v/[n]/page";
+import PlatformVersionRecipePage from "@/app/platforms/[owner]/[slug]/v/[n]/recipe/page";
+import PlatformVersionYamlPage from "@/app/platforms/[owner]/[slug]/v/[n]/yaml/page";
 import { example, orgWith, person, request, type Who } from "./helpers";
 import { call } from "./mcp-client";
-import { renderPage } from "./pages";
+import { renderPage, type Page } from "./pages";
 
 const backOffice = `awml: "0.3"
 platform: { id: back-office, label: "Acme's back office" }
@@ -71,16 +77,18 @@ describe("an owner's platforms page", () => {
     expect(words).toContain("acme's platforms");
     expect(words).toContain("Acme's back office acme/back-office Private · Version 1 Description Install recipe");
     expect(words).toContain("A code worker acme/worker Public · Version 2 Description No install recipe");
-    expect(shown.html).toContain('href="/platforms/acme/back-office/v/1/description.yaml"');
-    expect(shown.html).toContain('href="/platforms/acme/back-office/v/1/recipe.md"');
-    expect(shown.html).toContain('href="/platforms/acme/worker/v/2/description.yaml"');
-    expect(shown.html).not.toContain('href="/platforms/acme/worker/v/2/recipe.md"');
+    expect(shown.html).toMatch(/<a href="\/platforms\/acme\/back-office">Acme&#x27;s back office<\/a>/);
+    expect(shown.html).toMatch(/<a href="\/platforms\/acme\/back-office">Description<\/a>/);
+    expect(shown.html).toMatch(/<a href="\/platforms\/acme\/back-office\/recipe">Install recipe<\/a>/);
+    expect(shown.html).toMatch(/<a href="\/platforms\/acme\/worker">A code worker<\/a>/);
+    expect(shown.html).not.toContain('href="/platforms/acme/worker/recipe"');
   });
 
-  it("gives the files it links to", async () => {
+  it("gives the pages it links to", async () => {
     const { mo } = await platforms();
-    for (const path of ["/platforms/acme/back-office/v/1/description.yaml", "/platforms/acme/back-office/v/1/recipe.md"])
-      expect((await request("GET", path, { as: { cookie: mo.cookie } })).status).toBe(200);
+    const as = { cookie: mo.cookie };
+    expect((await renderPage(PlatformPage, { owner: "acme", slug: "back-office" }, { as })).status).toBe(200);
+    expect((await renderPage(PlatformRecipePage, { owner: "acme", slug: "back-office" }, { as })).status).toBe(200);
   });
 
   it("puts a shorter version of the help under the list, for those who may add platforms there", async () => {
@@ -216,7 +224,7 @@ describe("the shared platforms page", () => {
     expect(words).toContain("Shared platforms Public platforms from every owner.");
     expect(words.indexOf("beta/open-box")).toBeLessThan(words.indexOf("acme/worker"));
     expect(shown.html).toContain('href="/beta/platforms"');
-    expect(shown.html).toContain('href="/platforms/beta/open-box/v/1/description.yaml"');
+    expect(shown.html).toContain('href="/platforms/beta/open-box"');
     expect(shown.html).toContain('action="/platforms"');
   });
 
@@ -281,5 +289,222 @@ describe("Private platforms on the platform pages", () => {
     expect(sharedAsMo).toContain("acme/back-office");
     expect(sharedAsMo).not.toContain("beta/vault");
     expect(sharedAsMo).not.toContain("Beta's vault server");
+  });
+});
+
+// A platform's own page: what it offers in plain words, its install recipe
+// and its description file, each tab its own address.
+
+// A description whose comments say why each value is what it is.
+const commented = `# Codex on Ana's laptop, which she shuts when she travels.
+# Set up as https://example.com/codex-setup says.
+
+awml: "0.3"
+platform: { id: codex-laptop, label: "Codex on a laptop" }
+# Shut for up to a fortnight on holiday.
+# See https://example.com/holidays.
+off_for_up_to: P14D
+# Codex runs the workflow's own code.
+steps: code
+# Codex is OpenAI's agent.
+agents: [openai]
+calls: any
+# Only the notes folder syncs to it.
+holds: [notes, drafts]
+`;
+const recipeWithHtml = `# Install on the laptop
+
+1. Install [Codex](https://example.com/codex).
+2. Run \`codex login\`.
+
+<script>alert(1)</script>
+`;
+
+// The page's tabs: where each goes, what it says, and whether it is on show.
+const tabsOf = (html: string) =>
+  [...html.matchAll(/<a role="tab" href="([^"]*)" aria-selected="(true|false)">(.*?)<\/a>/g)].map(([, href, selected, inner]) => ({
+    href,
+    label: text(inner).trim(),
+    selected: selected === "true",
+  }));
+const headOf = (html: string) => text(html.split('<section class="wf-head">')[1].split("</section>")[0]).trim();
+const show = (P: Page<{ owner: string; slug: string }>, owner: string, slug: string, as?: Who) =>
+  renderPage(P, { owner, slug }, { as });
+
+async function laptopFor(name = "ana") {
+  const ana = await person(name);
+  await pushPlatform(ana.username, "laptop", { token: ana.token }, { description: commented, recipe: recipeWithHtml });
+  return ana;
+}
+
+describe("a platform's page", () => {
+  it("has a header of crumb, label, visibility and version, the file's top comment, and three tabs, each its own address", async () => {
+    const ana = await laptopFor();
+    const o = ana.username;
+    const page = await show(PlatformPage, o, "laptop");
+    expect(page.status).toBe(200);
+    expect(headOf(page.html)).toBe(
+      `${o} / platforms / laptop Codex on a laptop Public · Version 1 of 1 ` +
+        "Codex on Ana's laptop, which she shuts when she travels. Set up as https://example.com/codex-setup says.",
+    );
+    expect(page.html).toContain(`<a href="/${o}">${o}</a> / <a href="/${o}/platforms">platforms</a> / laptop`);
+    expect(page.html).toContain('<a href="https://example.com/codex-setup">https://example.com/codex-setup</a>');
+    expect(tabsOf(page.html)).toEqual([
+      { href: `/platforms/${o}/laptop`, label: "What it offers", selected: true },
+      { href: `/platforms/${o}/laptop/recipe`, label: "Install recipe", selected: false },
+      { href: `/platforms/${o}/laptop/yaml`, label: "YAML", selected: false },
+    ]);
+    for (const P of [PlatformRecipePage, PlatformYamlPage]) {
+      const other = await show(P, o, "laptop");
+      expect(other.status).toBe(200);
+      expect(headOf(other.html)).toBe(headOf(page.html));
+    }
+    expect(tabsOf((await show(PlatformYamlPage, o, "laptop")).html).filter((t) => t.selected).map((t) => t.href)).toEqual([
+      `/platforms/${o}/laptop/yaml`,
+    ]);
+  });
+
+  it("says what it offers in plain words, each field with the comment above it as evidence, its links kept", async () => {
+    const ana = await laptopFor();
+    const page = await show(PlatformPage, ana.username, "laptop");
+    const words = text(page.html);
+    expect(words).toContain(
+      "Off for up to 14 days Shut for up to a fortnight on holiday. See https://example.com/holidays. " +
+        "Runs steps as code Codex runs the workflow's own code. " +
+        "AI from openai Codex is OpenAI's agent. " +
+        "Can call any company " +
+        "Holds notes and drafts Only the notes folder syncs to it.",
+    );
+    expect(page.html).toContain('<a href="https://example.com/holidays">https://example.com/holidays</a>.');
+  });
+
+  it("puts the words for an always-on agent platform that calls named companies and holds nothing", async () => {
+    const ana = await person("ana");
+    const box = `awml: "0.3"
+platform: { id: box, label: "A box" }
+off_for_up_to: P2DT1H30M
+steps: agent
+agents: []
+calls: [anthropic, openai]
+holds: []
+`;
+    await pushPlatform(ana.username, "box", { token: ana.token }, { description: box });
+    const words = text((await show(PlatformPage, ana.username, "box")).html);
+    expect(words).toContain(
+      "Off for up to 2 days, 1 hour and 30 minutes Runs steps as an AI agent AI from none " +
+        "Can call anthropic and openai Holds nothing",
+    );
+    await pushPlatform(ana.username, "box", { token: ana.token }, { description: box.replace("P2DT1H30M", "PT0S") });
+    expect(text((await show(PlatformPage, ana.username, "box")).html)).toContain("Off for up to no time: it is always on");
+  });
+
+  it("offers the command to check a workflow against it", async () => {
+    const ana = await laptopFor();
+    const words = text((await show(PlatformPage, ana.username, "laptop")).html);
+    expect(words).toContain(
+      "Check a workflow against it awml fit workflow.yaml laptop.yaml " +
+        "awml fit says whether the workflow can run here, or every reason it can't.",
+    );
+  });
+
+  it("renders the install recipe as HTML, with no raw HTML let through", async () => {
+    const ana = await laptopFor();
+    const page = await show(PlatformRecipePage, ana.username, "laptop");
+    expect(page.html).toContain("<h1>Install on the laptop</h1>");
+    expect(page.html).toContain('<li>Install <a href="https://example.com/codex">Codex</a>.</li>');
+    expect(page.html).toContain("<code>codex login</code>");
+    expect(page.html).not.toContain("<script>");
+    expect(page.html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(text(page.html)).not.toContain("Off for up to");
+  });
+
+  it("says when there is no install recipe yet, and is still found", async () => {
+    const ana = await person("ana");
+    await pushPlatform(ana.username, "worker", { token: ana.token }, { description: worker });
+    const page = await show(PlatformRecipePage, ana.username, "worker");
+    expect(page.status).toBe(200);
+    expect(text(page.html)).toContain("This platform has no install recipe yet.");
+  });
+
+  it("shows the raw description under YAML, with Copy and Download", async () => {
+    const ana = await laptopFor();
+    const o = ana.username;
+    const page = await show(PlatformYamlPage, o, "laptop");
+    const pre = page.html.match(/<pre id="description-yaml">([^]*?)<\/pre>/)![1];
+    expect(pre.replace(/&#x27;/g, "'").replace(/&quot;/g, '"')).toBe(commented);
+    expect(page.html).toContain('<button type="button" class="button outline" aria-controls="description-yaml">Copy</button>');
+    expect(page.html).toContain(`<a href="/platforms/${o}/laptop/v/1/description.yaml" class="button outline" download="">Download</a>`);
+    expect(text(page.html)).not.toContain("Check a workflow against it");
+  });
+
+  it("gives an older version its own page and tabs, and lists the versions", async () => {
+    const ana = await laptopFor();
+    const o = ana.username;
+    await pushPlatform(o, "laptop", { token: ana.token }, { description: commented.replace("P14D", "P7D") });
+    const v1 = { owner: o, slug: "laptop", n: "1" };
+    const old = await renderPage(PlatformVersionPage, v1);
+    expect(old.status).toBe(200);
+    expect(headOf(old.html)).toContain("Codex on a laptop Public · Version 1 of 2");
+    expect(text(old.html)).toContain("Off for up to 14 days");
+    expect(tabsOf(old.html).map((t) => t.href)).toEqual([
+      `/platforms/${o}/laptop/v/1`,
+      `/platforms/${o}/laptop/v/1/recipe`,
+      `/platforms/${o}/laptop/v/1/yaml`,
+    ]);
+    expect(old.html).toContain(`href="/platforms/${o}/laptop">Version 2</a>`);
+    expect(text((await show(PlatformPage, o, "laptop")).html)).toContain("Off for up to 7 days");
+    expect(text((await renderPage(PlatformVersionRecipePage, v1)).html)).toContain("Install on the laptop");
+    expect((await renderPage(PlatformVersionYamlPage, v1)).html).toContain(`href="/platforms/${o}/laptop/v/1/description.yaml"`);
+    expect((await renderPage(PlatformVersionPage, { ...v1, n: "3" })).status).toBe(404);
+  });
+
+  it("is not found for a platform that does not exist", async () => {
+    expect((await show(PlatformPage, "nobody-here", "laptop")).status).toBe(404);
+  });
+
+  it("sends an old username's address for good (308) to the same page under the new name", async () => {
+    const ana = await laptopFor();
+    const res = await request("PATCH", "/api/v1/me", { as: { token: ana.token }, json: { username: "ana-new" } });
+    expect(res.status).toBe(200);
+    expect(await show(PlatformPage, ana.username, "laptop")).toMatchObject({ status: 308, location: "/platforms/ana-new/laptop" });
+    expect(await show(PlatformYamlPage, ana.username, "laptop")).toMatchObject({
+      status: 308,
+      location: "/platforms/ana-new/laptop/yaml",
+    });
+    expect(await renderPage(PlatformVersionRecipePage, { owner: ana.username, slug: "laptop", n: "1" })).toMatchObject({
+      status: 308,
+      location: "/platforms/ana-new/laptop/v/1/recipe",
+    });
+    expect((await show(PlatformPage, "ana-new", "laptop")).status).toBe(200);
+  });
+});
+
+describe("Private platforms on a platform's page", () => {
+  const tabs = [PlatformPage, PlatformRecipePage, PlatformYamlPage];
+
+  it("positive: the owner and a member of the organisation see its private platform", async () => {
+    const { olive, mo } = await platforms();
+    for (const who of [olive, mo])
+      for (const P of tabs) {
+        const page = await show(P, "acme", "back-office", { cookie: who.cookie });
+        expect(page.status).toBe(200);
+        expect(headOf(page.html)).toContain("Acme's back office Private · Version 1 of 1");
+      }
+    expect((await renderPage(PlatformVersionPage, { owner: "acme", slug: "back-office", n: "1" }, { as: { cookie: mo.cookie } })).status).toBe(200);
+  });
+
+  it("negative: a non-member and a signed-out visitor get a 404 on every tab and version", async () => {
+    const { nell } = await platforms();
+    for (const as of [undefined, { cookie: nell.cookie }]) {
+      for (const P of tabs) expect((await show(P, "acme", "back-office", as)).status).toBe(404);
+      expect((await renderPage(PlatformVersionPage, { owner: "acme", slug: "back-office", n: "1" }, { as })).status).toBe(404);
+    }
+  });
+
+  it("cross-tenant: a member of one organisation gets a 404 on another's private platform", async () => {
+    const { mo, bea } = await platforms();
+    expect((await show(PlatformPage, "beta", "vault", { cookie: mo.cookie })).status).toBe(404);
+    expect((await show(PlatformPage, "acme", "back-office", { cookie: bea.cookie })).status).toBe(404);
+    expect((await show(PlatformPage, "beta", "open-box", { cookie: mo.cookie })).status).toBe(200);
   });
 });

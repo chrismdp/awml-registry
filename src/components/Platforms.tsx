@@ -11,23 +11,26 @@ export type PlatformRow = {
   hasRecipe: boolean;
 };
 
-// Platforms, each with its label, address, version and links to the files of
-// its latest version. Across owners, the address links to its owner's platforms.
+// Platforms, each with its label linked to its page, its address, version and
+// links to its page's tabs. Across owners, the address links to its owner's
+// platforms.
 export function PlatformList({ platforms, linkOwner = false }: { platforms: PlatformRow[]; linkOwner?: boolean }) {
   return (
     <ul className="pf-list">
       {platforms.map((p) => {
         const address = `${p.owner}/${p.slug}`;
-        const files = `/platforms/${address}/v/${p.number}`;
+        const page = `/platforms/${address}`;
         return (
           <li key={address} className="pf">
-            <div className="label">{p.label}</div>
+            <div className="label">
+              <Link href={page}>{p.label}</Link>
+            </div>
             <div className="address">{linkOwner ? <Link href={`/${p.owner}/platforms`}>{address}</Link> : address}</div>
             <div className="facts">{`${p.visibility === "public" ? "Public" : "Private"} · Version ${p.number}`}</div>
             <div className="files">
-              <a href={`${files}/description.yaml`}>Description</a>
+              <a href={page}>Description</a>
               {p.hasRecipe ? (
-                <a href={`${files}/recipe.md`}>Install recipe</a>
+                <a href={`${page}/recipe`}>Install recipe</a>
               ) : (
                 <span className="none">No install recipe</span>
               )}

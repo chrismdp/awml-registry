@@ -250,6 +250,28 @@ pre, code { font-family: var(--mono); }
 .pf-short { max-width: 60rem; }
 @media (max-width: 600px) { .pf-add pre { font-size: 12px; } }
 .pf-more { margin: 0; font-size: 17px; }
+/* A platform's page: what it offers, field by field, with the comment above each in its file. */
+.pf-intro { margin-top: 14px; max-width: 70ch; font-size: 17px; color: var(--ink-soft); }
+.pf-intro .said { margin: 0; }
+.pf-intro .said + .said { margin-top: 8px; }
+.said a { overflow-wrap: anywhere; }
+.pf-panel { padding: 24px; }
+.offers { margin: 0; display: flex; flex-direction: column; gap: 10px; font-size: 15px; }
+.offers > div { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: 12px; background: var(--paper); border-radius: 14px; padding: 14px 16px; }
+.offers dt { font-weight: 700; }
+.offers dd { margin: 0; min-width: 0; }
+.offers .value { font-weight: 600; font-size: 16px; overflow-wrap: anywhere; }
+.offers .said { margin: 6px 0 0; color: var(--ink-soft); line-height: 1.5; }
+@media (max-width: 600px) { .pf-panel { padding: 16px; } .offers > div { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
+.recipe { font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
+.recipe > :first-child { margin-top: 0; }
+.recipe > :last-child { margin-bottom: 0; }
+.recipe h1 { font-size: 24px; } .recipe h2 { font-size: 20px; } .recipe h3 { font-size: 17px; }
+.recipe h1, .recipe h2, .recipe h3 { margin: 20px 0 8px; font-weight: 700; }
+.recipe pre { background: var(--paper); border-radius: 12px; padding: 12px 14px; font-size: 13px; overflow-x: auto; }
+.recipe :not(pre) > code { font-size: 0.93em; }
+.pf-fit pre { margin: 0; background: var(--paper); border-radius: 12px; padding: 10px 12px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pf-fit p { margin: 10px 0 0; font-size: 15px; }
 
 /* Sign in */
 .signin-page { min-height: 100vh; background: var(--wash); display: flex; flex-direction: column; align-items: center; padding: 64px 24px; }
