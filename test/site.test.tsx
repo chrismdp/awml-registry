@@ -64,18 +64,23 @@ const text = (html: string) =>
 
 // The page's view tabs: where each goes, what it says, and whether it is the one on show.
 const tabs = (html: string) =>
-  [...html.matchAll(/<a role="tab" href="([^"]*)" aria-selected="(true|false)">(.*?)<\/a>/g)].map(([, href, selected, inner]) => ({
-    href,
-    label: text(inner).trim(),
-    selected: selected === "true",
-  }));
+  [...html.matchAll(/<a role="tab" href="([^"]*)" aria-selected="(true|false)">(.*?)<\/a>/g)].map(
+    ([, href, selected, inner]) => ({
+      href,
+      label: text(inner).trim(),
+      selected: selected === "true",
+    }),
+  );
 
 // The page's header: owner / slug, title, visibility and version.
 const header = (html: string) => text(html.split('<section class="wf-head">')[1].split("</section>")[0]).trim();
 
 // The messages `awml check` gives for test/fixtures/bad.yaml.
 const badMessages = () =>
-  example("bad.check.txt").trim().split("\n").map((l) => l.replace(/^bad\.yaml: /, ""));
+  example("bad.check.txt")
+    .trim()
+    .split("\n")
+    .map((l) => l.replace(/^bad\.yaml: /, ""));
 
 // What the Checks view says before and after its files.
 const CHECKS_INTRO =
@@ -88,7 +93,12 @@ const files = (html: string) =>
   Object.fromEntries(
     [...html.matchAll(/<pre id="([^"]+)">([^]*?)<\/pre>/g)].map(([, id, body]) => [
       id,
-      body.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&"),
+      body
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#x27;/g, "'")
+        .replace(/&amp;/g, "&"),
     ]),
   );
 
@@ -166,7 +176,11 @@ describe("a workflow's page", () => {
     const other = await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" });
     expect(other.status).toBe(200);
     expect(other.html).toContain(await engine.draw(platform).then((m) => m.split("\n")[1]));
-    expect(tabs(other.html).filter((t) => t.selected).map((t) => t.href)).toEqual([`/${o}/dinners/platform`]);
+    expect(
+      tabs(other.html)
+        .filter((t) => t.selected)
+        .map((t) => t.href),
+    ).toEqual([`/${o}/dinners/platform`]);
   });
 
   it("keeps its header to the owner, title, visibility and version on every view: no buttons and no badge", async () => {
@@ -174,7 +188,13 @@ describe("a workflow's page", () => {
     const o = ana.username;
     await push(o, "dinners", { token: ana.token }, { security, platform });
     const params = { owner: o, slug: "dinners" };
-    for (const page of [WorkflowPage, WorkflowSecurityPage, WorkflowPlatformPage, WorkflowYamlPage, WorkflowChecksPage]) {
+    for (const page of [
+      WorkflowPage,
+      WorkflowSecurityPage,
+      WorkflowPlatformPage,
+      WorkflowYamlPage,
+      WorkflowChecksPage,
+    ]) {
       const html = (await renderPage(page, params)).html;
       expect(header(html), page.name).toBe(`${o} / dinners The family's dinners Public · Version 1 of 1`);
       expect(html, page.name).not.toContain("Change this workflow");
@@ -220,9 +240,13 @@ describe("a workflow's page", () => {
       });
     }
     // A view it does not know leaves the page as it is.
-    expect((await renderPage(WorkflowPage, { owner: o, slug: "dinners" }, { search: { view: "other" } })).status).toBe(200);
+    expect((await renderPage(WorkflowPage, { owner: o, slug: "dinners" }, { search: { view: "other" } })).status).toBe(
+      200,
+    );
     // Each part of the address it sends to stays inside its own segment.
-    expect(await renderPage(WorkflowPage, { owner: "/evil.example", slug: "a b" }, { search: { view: "yaml" } })).toMatchObject({
+    expect(
+      await renderPage(WorkflowPage, { owner: "/evil.example", slug: "a b" }, { search: { view: "yaml" } }),
+    ).toMatchObject({
       status: 308,
       location: "/%2Fevil.example/a%20b/yaml",
     });
@@ -243,7 +267,10 @@ describe("a workflow's page", () => {
     const ana = await person("ana");
     const o = ana.username;
     await push(o, "dinners", { token: ana.token }, { security, platform });
-    for (const [view, body] of [["security", security], ["platform", platform]]) {
+    for (const [view, body] of [
+      ["security", security],
+      ["platform", platform],
+    ]) {
       const res = await request("GET", `/${o}/dinners/v/1/${view}.yaml`);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toBe("application/yaml; charset=utf-8");
@@ -269,7 +296,10 @@ describe("a workflow's page", () => {
     const shown = text((await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" })).html);
     const order = ["Who decides", "Outside actions", "Leaves its scope", "Change it", "Everything in it", "Versions"];
     const at = order.map((h) => shown.indexOf(h));
-    expect(at.every((i) => i >= 0), String(at)).toBe(true);
+    expect(
+      at.every((i) => i >= 0),
+      String(at),
+    ).toBe(true);
     expect(at).toEqual([...at].sort((a, b) => a - b));
   });
 
@@ -297,7 +327,7 @@ describe("a workflow's page", () => {
 
   it("names the person steps when people decide some of the steps", async () => {
     const ana = await person("ana");
-    const withPerson = security.replace("kind: ai, label: \"Plan", "kind: person, label: \"Plan");
+    const withPerson = security.replace('kind: ai, label: "Plan', 'kind: person, label: "Plan');
     await push(ana.username, "dinners", { token: ana.token }, { security: withPerson });
     const shown = text((await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" })).html);
     expect(shown).toContain("Who decides 3 code 1 person 1 step is decided by a person.");
@@ -321,7 +351,11 @@ describe("a workflow's YAML view", () => {
       `${o} / dinners Dinners <b>&</b> Public · Version 1 of 1 ` +
         "Who may see each part Where each part runs YAML Checks No mistakes security.yaml Copy Download # The family's dinners",
     );
-    expect(tabs(page.html).filter((t) => t.selected).map((t) => t.href)).toEqual([`/${o}/dinners/yaml`]);
+    expect(
+      tabs(page.html)
+        .filter((t) => t.selected)
+        .map((t) => t.href),
+    ).toEqual([`/${o}/dinners/yaml`]);
     expect(page.html).not.toContain("<figure");
     expect(page.html).not.toContain("flowchart");
     for (const gone of [
@@ -341,8 +375,12 @@ describe("a workflow's YAML view", () => {
     expect(page.html).not.toContain("<b>&</b>");
     expect(shown.indexOf("security.yaml")).toBeLessThan(shown.indexOf("platform.yaml"));
     for (const view of ["security", "platform"]) {
-      expect(page.html).toContain(`<button type="button" class="button outline" aria-controls="${view}-yaml">Copy</button>`);
-      expect(page.html).toContain(`<a href="/${o}/dinners/v/1/${view}.yaml" class="button outline" download="">Download</a>`);
+      expect(page.html).toContain(
+        `<button type="button" class="button outline" aria-controls="${view}-yaml">Copy</button>`,
+      );
+      expect(page.html).toContain(
+        `<a href="/${o}/dinners/v/1/${view}.yaml" class="button outline" download="">Download</a>`,
+      );
     }
   });
 
@@ -363,7 +401,11 @@ describe("a workflow's YAML view", () => {
     expect(page.status).toBe(200);
     expect(files(page.html)).toEqual({ "security-yaml": binDay });
     expect(page.html).toContain(`href="/${o}/bins/v/1/security.yaml"`);
-    expect(tabs(page.html).filter((t) => t.selected).map((t) => t.href)).toEqual([`/${o}/bins/v/1/yaml`]);
+    expect(
+      tabs(page.html)
+        .filter((t) => t.selected)
+        .map((t) => t.href),
+    ).toEqual([`/${o}/bins/v/1/yaml`]);
   });
 
   it("copies a file with the clipboard, and selects its text for the person to copy where the browser will not", async () => {
@@ -463,8 +505,14 @@ describe("a workflow's Checks view", () => {
     await push(o, "bins", { token: ana.token }, { security, platform });
     const page = await renderPage(VersionChecksPage, { owner: o, slug: "bins", n: "1" });
     expect(page.status).toBe(200);
-    expect(tabs(page.html).map((t) => t.href)).toEqual([`/${o}/bins/v/1/security`, `/${o}/bins/v/1/yaml`, `/${o}/bins/v/1/checks`]);
-    expect(text(page.html)).toContain(`${CHECKS_INTRO} security.yaml Checked by AWML v0.3.0 awml check No mistakes ${CHECKS_END}`);
+    expect(tabs(page.html).map((t) => t.href)).toEqual([
+      `/${o}/bins/v/1/security`,
+      `/${o}/bins/v/1/yaml`,
+      `/${o}/bins/v/1/checks`,
+    ]);
+    expect(text(page.html)).toContain(
+      `${CHECKS_INTRO} security.yaml Checked by AWML v0.3.0 awml check No mistakes ${CHECKS_END}`,
+    );
   });
 });
 
@@ -478,8 +526,11 @@ describe("an organisation's inventory", () => {
     const both = JSON.parse(example("dinners.summary.json"));
     const one = JSON.parse(example("dinners-security.summary.json"));
 
-    const inv = (await inventory(await getDb(), (await getViewer(new Headers({ cookie: olive.cookie }))), "acme"))!;
-    expect(inv.rows.map((r) => [r.slug, r.latest])).toEqual([["dinners", 2], ["payroll", 1]]);
+    const inv = (await inventory(await getDb(), await getViewer(new Headers({ cookie: olive.cookie })), "acme"))!;
+    expect(inv.rows.map((r) => [r.slug, r.latest])).toEqual([
+      ["dinners", 2],
+      ["payroll", 1],
+    ]);
     expect(inv.rows[0].summary).toEqual(both);
     expect(inv.totals.steps.code).toBe(both.steps.code + one.steps.code);
     expect(inv.totals.outsideActions.ask).toBe(both.outsideActions.ask + one.outsideActions.ask);
@@ -487,7 +538,6 @@ describe("an organisation's inventory", () => {
     expect(inv.totals.platforms).toBe(both.platforms + one.platforms);
     expect(inv.totals.publishingLines.count).toBe(both.publishingLines.count + one.publishingLines.count);
     expect(inv.totals.publishingLines.labels).toEqual(["standing rule: dinners to carers"]);
-
   });
 
   it("counts where AI and people are across the workflows, and lists each one's AI steps, people, scopes and platforms", async () => {
@@ -507,9 +557,7 @@ describe("an organisation's inventory", () => {
     expect(shown).toContain("4 scopes touched, 1 line leaves one");
     expect(shown).toContain("1 of 2 don't say where they run yet");
     expect(shown).toContain("Workflow AI People Scopes it touches Runs on");
-    expect(shown).toContain(
-      "Bin day Public None Code only Nobody home No platform view yet",
-    );
+    expect(shown).toContain("Bin day Public None Code only Nobody home No platform view yet");
     expect(shown).toContain(
       "The family's dinners Private · 1 line leaves a scope 1 of 4 steps Plan next week's dinners 1 review Owen's yes to the exact basket carers family household Server: claude-sonnet-4-5 The family messaging app The supermarket The calendar The kitchen screen",
     );
@@ -590,10 +638,16 @@ describe("names", () => {
       const made = await createOrganisation(db, ana.id, { slug, name: "x" });
       expect(made.ok, slug).toBe(false);
     }
-    const res = await request("POST", "/api/orgs", { as: { cookie: ana.cookie }, form: { slug: "acme", name: "Acme" } });
+    const res = await request("POST", "/api/orgs", {
+      as: { cookie: ana.cookie },
+      form: { slug: "acme", name: "Acme" },
+    });
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("http://localhost:3000/acme/settings");
-    const again = await request("POST", "/api/orgs", { as: { cookie: ana.cookie }, form: { slug: "acme", name: "Acme" } });
+    const again = await request("POST", "/api/orgs", {
+      as: { cookie: ana.cookie },
+      form: { slug: "acme", name: "Acme" },
+    });
     expect(again.headers.get("location")).toContain("error=");
   });
 
@@ -641,7 +695,10 @@ describe("the engine", () => {
   it("gives the verdict, summary and drawing the native awml gives", async () => {
     expect(await engine.check(security)).toEqual([]);
     expect(await engine.check(example("bad.yaml"))).toEqual(
-      example("bad.check.txt").trim().split("\n").map((l) => l.replace(/^bad\.yaml: /, "")),
+      example("bad.check.txt")
+        .trim()
+        .split("\n")
+        .map((l) => l.replace(/^bad\.yaml: /, "")),
     );
     expect(await engine.check("- just a list\n")).not.toEqual([]);
     expect(await engine.summarise({ security, platform })).toEqual(JSON.parse(example("dinners.summary.json")));
@@ -680,5 +737,19 @@ describe("the terms and privacy policy", () => {
       expect(text(linked.html)).toContain("By signing in you agree to the terms and privacy policy");
       expect(text(linked.html)).toContain("We never send your workflows to a model.");
     });
+  });
+});
+
+describe("the favicon", () => {
+  it("is the logomark, in ink on light and white on dark", () => {
+    const icon = fs.readFileSync(path.join("src", "app", "icon.svg"), "utf8");
+    for (const part of [
+      'd="M20 14 V8"',
+      'cx="20" cy="6"',
+      'x="5" y="15" width="30" height="30" rx="8"',
+      'd="M47 22.8 L56 30 L47 37.2 Z"',
+    ])
+      expect(icon, part).toContain(part);
+    expect(icon).toContain("prefers-color-scheme: dark");
   });
 });
