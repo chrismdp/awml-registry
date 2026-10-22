@@ -3,9 +3,10 @@
 #
 # Only people with write access can add a label, so the label is the decision. Claude works in the
 # first job with a read-only token, sees only the issue and the comments of the repository's own
-# people, and hands back a patch. The second job, which Claude never runs in, applies the patch,
-# runs the same checks as ci.yml, and only then pushes a branch and opens the pull request. The
-# maintainer reviews and merges it.
+# people, and hands back a patch. A second job, which can only read, applies the patch and runs
+# the same checks as ci.yml. Only when they pass does a third job, which runs nothing from the
+# patch, apply it again, push a branch and open the pull request. Claude never runs in a job that
+# can write. The maintainer reviews and merges it.
 #
 # It needs a CLAUDE_CODE_OAUTH_TOKEN secret, made with `claude setup-token`, so the runs come out
 # of the maintainer's subscription rather than a metered API key. The `build` label must exist in
@@ -84,15 +85,16 @@ jobs:
             ${{ runner.temp }}/build/change.patch
             ${{ runner.temp }}/build/message.md
 
-  open:
+  check:
     needs: draft
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -111,6 +113,23 @@ jobs:
           npm run typecheck
           npm run lint
           npm test
+
+  open:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: change
+          path: ${{ runner.temp }}/change
+
+      - name: Apply the change
+        run: git apply --index "$RUNNER_TEMP/change/change.patch"
 
       - name: Push a branch and open the pull request
         env:
