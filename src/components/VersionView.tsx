@@ -7,7 +7,7 @@ import { names, stepCount } from "@/server/summary";
 import { Checks, mistakesIn, Tick, type CheckedFile } from "./Checks";
 import { CopyButton } from "./CopyButton";
 import { VersionList, type ListedVersion } from "./VersionList";
-import { Mermaid } from "./Mermaid";
+import { PanZoom } from "./PanZoom";
 import { count } from "./words";
 
 export type VersionViewProps = {
@@ -123,7 +123,7 @@ export function VersionView(p: VersionViewProps) {
               {p.nowhere ? (
                 <p className="cannot-draw">This workflow doesn&apos;t say where it runs yet.</p>
               ) : p.mermaid ? (
-                <Mermaid text={p.mermaid} />
+                <PanZoom text={p.mermaid} />
               ) : (
                 <CannotDraw file={p.checks.find((f) => f.name === p.drawnFrom)!} checks={`${p.address}/checks`} />
               )}
