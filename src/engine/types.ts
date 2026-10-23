@@ -1,7 +1,7 @@
 // What the registry needs from the AWML package, which runs here as the Go
 // package compiled to WebAssembly (see ./wasm.ts).
 
-// A version's files: one AWML 0.4 workflow, or, for versions stored before
+// A version's files: one AWML 0.4 or 0.5 workflow, or, for versions stored before
 // the registry took only 0.4 files, a security view, a platform view or both.
 export type Files = { workflow?: string; security?: string; platform?: string };
 
@@ -54,9 +54,9 @@ export interface Engine {
   // One workflow's summary from its files. The files must pass check.
   summarise(files: Files): Promise<Summary>;
   // Mermaid text for one file that passes check, drawn in the browser: its
-  // security view, or a 0.4 workflow's platform view of one implementation.
+  // security view, or a 0.4 or 0.5 workflow's platform view of one implementation.
   draw(yaml: string, implementation?: string): Promise<string>;
-  // Where a workflow can run: its design, a 0.4 workflow or a legacy
+  // Where a workflow can run: its design, a 0.4 or 0.5 workflow or a legacy
   // security view, judged against platform descriptions, each named by its
   // own id. With an implementation, its placement is judged instead, each
   // block against the description it names. Every file must pass check.

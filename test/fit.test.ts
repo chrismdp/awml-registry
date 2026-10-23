@@ -2,7 +2,7 @@
 // against the platforms in the registry.
 import { describe, expect, it } from "vitest";
 import { engine } from "@/engine";
-import { WORKFLOW_IS_NOT_04 } from "@/server/awml-file";
+import { WORKFLOW_IS_TOO_OLD } from "@/server/awml-file";
 import { example, person, request, storeLegacyVersion, type Who } from "./helpers";
 
 const clientEmail = example("client-email.yaml");
@@ -134,13 +134,13 @@ describe("fitting a workflow through the API", () => {
     // A version stored before the registry took only 0.4 files, with only a platform view.
     await storeLegacyVersion(username, "drawn", a, { platform: dinnersPlatform });
     const cases: [unknown, number, string[]][] = [
-      [{}, 422, ["Send a workflow as owner/slug, or its AWML 0.4 file as file."]],
+      [{}, 422, ["Send a workflow as owner/slug, or its AWML 0.4 or 0.5 file as file."]],
       [{ workflow: `${username}/client-email`, file: clientEmail }, 422, ["Send a workflow or the YAML of its file, not both."]],
       [{ workflow: "client-email" }, 422, ["Name the workflow as owner/slug or owner/slug@version."]],
       [{ workflow: `${username}/nothing-here` }, 404, [`Not found: ${username}/nothing-here.`]],
       [{ workflow: `${username}/client-email@9` }, 404, [`Not found: ${username}/client-email@9.`]],
       [{ workflow: `${username}/drawn` }, 422, [`${username}/drawn v1 has no security view, which the fit needs.`]],
-      [{ file: dinnersPlatform }, 400, [WORKFLOW_IS_NOT_04]],
+      [{ file: dinnersPlatform }, 400, [WORKFLOW_IS_TOO_OLD]],
       [{ file: descriptions.worker }, 422, ["file: this is a platform description; the fit needs a workflow."]],
       [{ file: "title: nonsense\n" }, 422, (await engine.check("title: nonsense\n")).map((e) => `file: ${e}`)],
       [{ file: clientEmail, implementation: 7 }, 422, ["implementation is the id of one of the workflow's implementations."]],

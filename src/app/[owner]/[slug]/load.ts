@@ -11,7 +11,7 @@ import { readVersion, VIEWS, type FileName, type View } from "@/server/registry"
 // "checks". With no view asked for, the security view is drawn, or a version
 // stored before 0.4 draws the first file it has.
 //
-// An AWML 0.4 workflow is one file: its security view draws the design, and
+// An AWML 0.4 or 0.5 workflow is one file: its security view draws the design, and
 // its platform view draws one implementation, the first unless `implementation`
 // names another. A 404 for anyone who may not see the version, for an
 // implementation it does not have, and for a view a version stored before
@@ -50,7 +50,7 @@ export async function loadVersion(
     })),
   );
 
-  // The file the shown view is drawn from, and for a 0.4 platform view, the
+  // The file the shown view is drawn from, and for a 0.4 or 0.5 platform view, the
   // implementation drawn, if it has any.
   const placed = shown === "platform" ? (implementation ?? implementations[0]?.id) : undefined;
   const source: FileName | undefined = workflow ? "workflow" : views.find((view) => view === shown);

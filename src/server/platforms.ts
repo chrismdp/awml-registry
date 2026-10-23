@@ -7,7 +7,7 @@ import type { Db } from "@/db/client";
 import { membership, platform, platformVersion, user } from "@/db/schema";
 import { engine } from "@/engine";
 import { record } from "./audit";
-import { awmlOf, isOlderAwml, PLATFORM_IS_NOT_04, readYaml } from "./awml-file";
+import { awmlOf, descriptionId, isOlderAwml, PLATFORM_IS_TOO_OLD, platformAddress, readYaml, REGISTERED_PLATFORM } from "./awml-file";
 import { findOwner, isOwnerOrMember, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH } from "./push";
 import { refuse, type Result } from "./result";
@@ -42,14 +42,19 @@ async function findPlatform(db: Db, owner: Owner, slug: string) {
   return p ?? null;
 }
 
-// The mistakes in a platform description, each as "description: ...", and its
-// label. `awml check` finds most; a workflow sent as a description is refused
-// here.
-async function checkDescription(text: string) {
+// The mistakes in a platform description pushed to an address, each as
+// "description: ...", and its label. `awml check` finds most; a workflow sent
+// as a description is refused here, and so is a description whose id is the
+// address of another platform, owner/platforms/slug, which it may have only
+// when that is its own.
+async function checkDescription(text: string, address: string) {
   const found = await engine.check(text);
   if (found.length) return { errors: found.map((e) => `description: ${e}`) };
   if (readYaml(text)?.platform === undefined)
     return { errors: ["description: this is a workflow, not a platform description. Push it as a workflow."] };
+  const id = descriptionId(text);
+  if (REGISTERED_PLATFORM.test(id) && id !== address)
+    return { errors: [`description: the platform id "${id}" must be ${address}, where it is pushed, or a bare id.`] };
   return { errors: [], label: labelOf(text) };
 }
 
@@ -75,13 +80,13 @@ export async function pushPlatformVersion(
   if (recipe !== undefined && recipe !== null && typeof recipe !== "string")
     return refuse(422, "Send the recipe as Markdown text.");
 
-  if (isOlderAwml(description)) return refuse(400, PLATFORM_IS_NOT_04);
+  if (isOlderAwml(description)) return refuse(400, PLATFORM_IS_TOO_OLD);
 
   const pushed = await pushedVisibility(owner, existing, body.visibility, "platform");
   if (!pushed.ok) return pushed;
   const { visibility } = pushed;
 
-  const checked = await checkDescription(description);
+  const checked = await checkDescription(description, platformAddress(owner.slug, slug));
   if (checked.errors.length) return refuse(422, ...checked.errors);
   const label = checked.label!;
 

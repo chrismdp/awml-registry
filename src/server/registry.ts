@@ -7,7 +7,7 @@ import { record } from "./audit";
 import { measures, total } from "./summary";
 import { findOwner, isOwnerOrMember, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH } from "./push";
-import { awmlOf, isOlderAwml, readYaml, WORKFLOW_IS_NOT_04 } from "./awml-file";
+import { awmlOf, isOlderAwml, readYaml, WORKFLOW_IS_TOO_OLD } from "./awml-file";
 import { refuse, type Result } from "./result";
 import { workflowSlugProblem } from "./slugs";
 import type { Viewer } from "./viewer";
@@ -15,7 +15,7 @@ import type { Viewer } from "./viewer";
 export const VIEWS = ["security", "platform"] as const;
 export type View = (typeof VIEWS)[number];
 
-// A version's files by the names their downloads use: one 0.4 workflow, or
+// A version's files by the names their downloads use: one 0.4 or 0.5 workflow, or
 // the security and platform files of a version stored before.
 export const FILES = ["workflow", ...VIEWS] as const;
 export type FileName = (typeof FILES)[number];
@@ -50,7 +50,7 @@ async function readable(db: Db, viewer: Viewer, ownerSlug: string, slug: string)
   return { owner, workflow: w };
 }
 
-// The one file a push sends: an AWML 0.4 workflow, as `workflow`, or alone
+// The one file a push sends: an AWML 0.4 or 0.5 workflow, as `workflow`, or alone
 // as `security`, as awml push 0.4.0 sends it. Anything marked as an older
 // AWML is refused with a 400 that says how to convert it, whichever field it
 // came in.
@@ -62,10 +62,10 @@ function fileFrom(body: PushBody): Result<{ file: string }> {
     if (typeof text !== "string") return refuse(422, `${field}: send the file as a string of YAML.`);
     sent.push(text);
   }
-  if (sent.some(isOlderAwml)) return refuse(400, WORKFLOW_IS_NOT_04);
-  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.4 file as workflow.");
+  if (sent.some(isOlderAwml)) return refuse(400, WORKFLOW_IS_TOO_OLD);
+  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.4 or 0.5 file as workflow.");
   if (sent.length > 1)
-    return refuse(422, "Send one file, as workflow: an AWML 0.4 workflow holds its design and its implementations.");
+    return refuse(422, "Send one file, as workflow: an AWML 0.4 or 0.5 workflow holds its design and its implementations.");
   return { ok: true, file: sent[0] };
 }
 
@@ -284,7 +284,7 @@ const ownerSlugSql = sql<string>`coalesce(
 const isLatest = sql`${version.number} = (select max(v2.number) from version v2 where v2.workflow_id = ${version.workflowId})`;
 
 // The public gallery, newest first, searched by title, with each workflow's
-// latest summary and the file its card draws: the 0.4 workflow, whose
+// latest summary and the file its card draws: the 0.4 or 0.5 workflow, whose
 // security view is drawn, or for a version stored before, the security view,
 // or the platform view when there is no security file.
 export async function explore(db: Db, query = "", limit = 50) {
@@ -357,7 +357,7 @@ export async function inventory(db: Db, viewer: Viewer, orgSlug: string) {
       latest: l?.number ?? null,
       summary: l?.summary ?? null,
       hasSecurity: Boolean(l?.hasSecurity),
-      // A 0.4 workflow says where it runs in its implementations, whose
+      // A 0.4 or 0.5 workflow says where it runs in its implementations, whose
       // blocks its summary counts as platforms.
       hasPlatform: Boolean(l?.hasPlatform) || (l?.summary.platforms ?? 0) > 0,
     };

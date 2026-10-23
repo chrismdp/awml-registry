@@ -600,6 +600,23 @@ describe("Private platforms", () => {
       expect(await auditRows("private_view")).toEqual(["platforms/acme/back-office v1"]);
     });
 
+    it("judges a block that names the private platform as acme/platforms/back-office for a member, and records the view", async () => {
+      const { mo } = await platforms();
+      const res = await request("POST", "/api/v1/fit", {
+        as: { token: mo.token },
+        json: { file: placedOn("acme/platforms/back-office"), implementation: "office" },
+      });
+      expect(res.status).toBe(200);
+      expect((await res.json()).results[0]).toMatchObject({
+        block: "cowork",
+        platform: "acme/back-office",
+        id: "acme/platforms/back-office",
+        judged: true,
+        fits: true,
+      });
+      expect(await auditRows("private_view")).toEqual(["platforms/acme/back-office v1"]);
+    });
+
     it("never judges a block against another organisation's private platform, nor reveals it", async () => {
       const { mo, nell } = await platforms();
       for (const [who, id] of [
@@ -618,6 +635,48 @@ describe("Private platforms", () => {
           expect(JSON.stringify(body)).not.toContain(secret);
       }
       expect(await auditRows("private_view")).toEqual([]);
+    });
+
+    it("never judges a block against another organisation's private platform named as owner/platforms/slug, nor reveals it", async () => {
+      const { mo, nell } = await platforms();
+      for (const [who, address, platforms] of [
+        [mo, "beta/platforms/vault", undefined],
+        [mo, "beta/platforms/vault", ["beta/open-box"]],
+        [nell, "acme/platforms/back-office", undefined],
+        [undefined, "acme/platforms/back-office", undefined],
+      ] as const) {
+        const res = await request("POST", "/api/v1/fit", {
+          as: who && { token: who.token },
+          json: { file: placedOn(address), implementation: "office", platforms },
+        });
+        const body = await res.json();
+        expect(res.status).toBe(200);
+        expect(body.results).toEqual([]);
+        expect(body.gaps).toEqual([
+          `group "cowork" names platform "${address}", but its description wasn't given: pull it with awml pull ${address}`,
+        ]);
+        for (const secret of ["beta/vault", "acme/back-office", "beta-vault", "Beta's vault server", "Acme's back office"])
+          expect(JSON.stringify(body)).not.toContain(secret);
+      }
+      // Naming the hidden platform in platforms is the same as naming a missing one.
+      const named = await request("POST", "/api/v1/fit", {
+        as: { token: nell.token },
+        json: { file: placedOn("acme/platforms/back-office"), implementation: "office", platforms: ["acme/back-office"] },
+      });
+      expect([named.status, await named.json()]).toEqual([404, { errors: ["Not found: acme/back-office."] }]);
+      expect(await auditRows("private_view")).toEqual([]);
+    });
+
+    it("a platform cannot take another's address as its description's id, so it is never judged in its place", async () => {
+      const { nell } = await platforms();
+      const posing = backOffice
+        .replace('awml: "0.4"', 'awml: "0.5"')
+        .replace("id: back-office,", "id: acme/platforms/back-office,");
+      const res = await pushPlatform(nell.username, "back-office", { token: nell.token }, { description: posing });
+      expect(res.status).toBe(422);
+      expect((await res.json()).errors).toEqual([
+        `description: the platform id "acme/platforms/back-office" must be ${nell.username}/platforms/back-office, where it is pushed, or a bare id.`,
+      ]);
     });
   });
 

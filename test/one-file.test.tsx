@@ -1,9 +1,9 @@
-// The registry takes AWML 0.4 files only: one file per workflow version,
-// holding the design and any implementations. Older files are refused at
-// push, and versions stored before stay readable as history.
+// The registry takes AWML 0.4 and 0.5 files only: one file per workflow
+// version, holding the design and any implementations. Older files are
+// refused at push, and versions stored before stay readable as history.
 import { describe, expect, it } from "vitest";
 import { engine } from "@/engine";
-import { PLATFORM_IS_NOT_04, WORKFLOW_IS_NOT_04 } from "@/server/awml-file";
+import { PLATFORM_IS_TOO_OLD, WORKFLOW_IS_TOO_OLD } from "@/server/awml-file";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import WorkflowSecurityPage from "@/app/[owner]/[slug]/security/page";
 import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
@@ -21,7 +21,8 @@ import { example, orgWith, person, request, storeLegacyVersion, type Who } from 
 import { call } from "./mcp-client";
 import { renderPage } from "./pages";
 
-const dinners = example("dinners.yaml");
+const dinners = example("dinners.yaml"); // 0.5
+const dinners04 = example("dinners-04.yaml"); // the same, marked 0.4
 const clientEmail = example("client-email.yaml");
 const legacySecurity = example("legacy/dinners-security.yaml"); // 0.2
 const legacyPlatform = example("legacy/dinners-platform.yaml"); // 0.2
@@ -98,17 +99,17 @@ describe("pushing a workflow", () => {
     ]) {
       expect(await push(ana.username, "dinners", as, body), JSON.stringify(Object.keys(body))).toEqual({
         status: 400,
-        body: { errors: [WORKFLOW_IS_NOT_04] },
+        body: { errors: [WORKFLOW_IS_TOO_OLD] },
       });
     }
     expect((await request("GET", `/api/v1/${ana.username}/dinners`)).status).toBe(404);
   });
 
   it("says exactly how to convert", () => {
-    expect(WORKFLOW_IS_NOT_04).toBe(
-      "This registry takes AWML 0.4 files. Convert a 0.3 pair with `awml convert security.yaml platform.yaml > workflow.yaml` and push that.",
+    expect(WORKFLOW_IS_TOO_OLD).toBe(
+      "This registry takes AWML 0.4 and 0.5 files. Convert a 0.3 pair with `awml convert security.yaml platform.yaml > workflow.yaml` and push that.",
     );
-    expect(PLATFORM_IS_NOT_04).toBe('This registry takes AWML 0.4 platform descriptions. Change `awml:` to "0.4" and push again.');
+    expect(PLATFORM_IS_TOO_OLD).toBe('This registry takes AWML 0.4 and 0.5 platform descriptions. Change `awml:` to "0.5" and push again.');
   });
 
   it("refuses a 0.3 or a 0.2 file through the MCP publish and check tools with the same message", async () => {
@@ -116,15 +117,16 @@ describe("pushing a workflow", () => {
     for (const files of [{ security: clientEmail03 }, { security: legacySecurity, platform: legacyPlatform }, { workflow: clientEmail03 }]) {
       for (const tool of ["publish", "check"]) {
         const answer = await call(tool, { owner: ana.username, slug: "dinners", ...files }, ana.token);
-        expect(answer, `${tool} ${Object.keys(files)}`).toMatchObject({ isError: true, text: WORKFLOW_IS_NOT_04 });
+        expect(answer, `${tool} ${Object.keys(files)}`).toMatchObject({ isError: true, text: WORKFLOW_IS_TOO_OLD });
       }
     }
     expect((await call("get", { owner: ana.username, slug: "dinners" }, ana.token)).text).toBe("Not found.");
   });
 
-  it("takes one 0.4 file as workflow, or alone as security, as awml push 0.4.0 sends it", async () => {
+  it("takes one 0.5 file as workflow, or alone as security, as awml push 0.4.0 sends it", async () => {
     const ana = await person("ana");
     const as = { token: ana.token };
+    expect(dinners).toMatch(/^awml: "0\.5"$/m);
     expect(await push(ana.username, "dinners", as, { workflow: dinners })).toMatchObject({ status: 201, body: { number: 1 } });
     expect(await push(ana.username, "dinners", as, { security: dinners })).toMatchObject({ status: 201, body: { number: 2 } });
     const stored = await (await request("GET", `/api/v1/${ana.username}/dinners/v/2`)).json();
@@ -133,7 +135,23 @@ describe("pushing a workflow", () => {
     expect(stored.check).toEqual({ workflow: [] });
   });
 
-  it("publishes and checks one 0.4 file through MCP", async () => {
+  it("still takes a 0.4 file, through the API and the MCP tools", async () => {
+    const ana = await person("ana");
+    expect(dinners04).toMatch(/^awml: "0\.4"$/m);
+    expect(example("dinners-04.check.txt").trim()).toBe("dinners-04.yaml: ok");
+    expect(await push(ana.username, "dinners", { token: ana.token }, { workflow: dinners04 })).toMatchObject({
+      status: 201,
+      body: { number: 1 },
+    });
+    const stored = await (await request("GET", `/api/v1/${ana.username}/dinners/v/1`)).json();
+    expect(stored.files).toEqual({ workflow: dinners04 });
+    expect(stored.check).toEqual({ workflow: [] });
+    expect(await call("check", { workflow: dinners04 }, ana.token)).toMatchObject({ isError: false, text: "No mistakes." });
+    const published = await call("publish", { owner: ana.username, slug: "dinners", workflow: dinners04 }, ana.token);
+    expect(published).toMatchObject({ isError: false, data: { number: 2 } });
+  });
+
+  it("publishes and checks one 0.5 file through MCP", async () => {
     const ana = await person("ana");
     expect(await call("check", { workflow: twoPlaces }, ana.token)).toMatchObject({ isError: false, text: "No mistakes." });
     const published = await call("publish", { owner: ana.username, slug: "dinners", workflow: twoPlaces }, ana.token);
@@ -155,7 +173,7 @@ describe("pushing a workflow", () => {
     const as = { token: ana.token };
     expect(await push(ana.username, "two", as, { workflow: dinners, security: dinners })).toEqual({
       status: 422,
-      body: { errors: ["Send one file, as workflow: an AWML 0.4 workflow holds its design and its implementations."] },
+      body: { errors: ["Send one file, as workflow: an AWML 0.4 or 0.5 workflow holds its design and its implementations."] },
     });
     expect(await push(ana.username, "box", as, { workflow: descriptions.worker })).toEqual({
       status: 422,
@@ -163,7 +181,7 @@ describe("pushing a workflow", () => {
     });
     expect(await push(ana.username, "none", as, {})).toEqual({
       status: 422,
-      body: { errors: ["Send the workflow's AWML 0.4 file as workflow."] },
+      body: { errors: ["Send the workflow's AWML 0.4 or 0.5 file as workflow."] },
     });
   });
 });
@@ -178,28 +196,46 @@ describe("pushing a platform description", () => {
       json: { description: old },
     });
     expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ errors: [PLATFORM_IS_NOT_04] });
+    expect(await res.json()).toEqual({ errors: [PLATFORM_IS_TOO_OLD] });
     expect(await call("add_platform", { owner: ana.username, slug: "worker", description: old }, ana.token)).toMatchObject({
       isError: true,
-      text: PLATFORM_IS_NOT_04,
+      text: PLATFORM_IS_TOO_OLD,
     });
     expect((await request("GET", `/api/v1/platforms/${ana.username}/worker`)).status).toBe(404);
   });
 
-  it("takes a 0.4 one, and refuses a 0.4 workflow sent as one", async () => {
+  it("takes a 0.4 or a 0.5 one, and refuses a workflow sent as one", async () => {
     const ana = await person("ana");
     const pushTo = (slug: string, description: string) =>
       request("POST", `/api/v1/platforms/${ana.username}/${slug}/versions`, { as: { token: ana.token }, json: { description } });
     expect((await pushTo("worker", descriptions.worker)).status).toBe(201);
+    expect((await pushTo("worker", descriptions.worker.replace('awml: "0.4"', 'awml: "0.5"'))).status).toBe(201);
     const wrong = await pushTo("dinners", dinners);
     expect(wrong.status).toBe(422);
     expect(await wrong.json()).toEqual({
       errors: ["description: this is a workflow, not a platform description. Push it as a workflow."],
     });
   });
+
+  it("takes a 0.5 one whose id is its own address, owner/platforms/slug, and refuses one that names another", async () => {
+    const ana = await person("ana");
+    const named = (id: string) =>
+      descriptions.worker.replace('awml: "0.4"', 'awml: "0.5"').replace("id: worker,", `id: ${id},`);
+    const pushTo = (slug: string, description: string) =>
+      request("POST", `/api/v1/platforms/${ana.username}/${slug}/versions`, { as: { token: ana.token }, json: { description } });
+    expect((await pushTo("worker", named(`${ana.username}/platforms/worker`))).status).toBe(201);
+    for (const id of [`${ana.username}/platforms/other`, "someone/platforms/worker"]) {
+      const res = await pushTo("worker", named(id));
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({
+        errors: [`description: the platform id "${id}" must be ${ana.username}/platforms/worker, where it is pushed, or a bare id.`],
+      });
+    }
+    expect((await request("GET", `/api/v1/platforms/${ana.username}/worker`).then((r) => r.json())).number).toBe(1);
+  });
 });
 
-describe("a 0.4 workflow's page", () => {
+describe("a workflow's page", () => {
   it("draws the design on the security tab, and an implementation on the platform tab", async () => {
     const ana = await person("ana");
     const o = ana.username;
@@ -225,6 +261,19 @@ describe("a 0.4 workflow's page", () => {
     expect(choice(platform.html)).toEqual([]);
     expect(text(platform.html)).toContain("At home");
     expect(text(platform.html)).toContain(`awml push ${o}/dinners workflow.yaml`);
+  });
+
+  it("draws and checks a 0.4 file as the native awml does", async () => {
+    const ana = await person("ana");
+    const o = ana.username;
+    expect((await push(o, "dinners", { token: ana.token }, { workflow: dinners04 })).status).toBe(201);
+    const page = await renderPage(WorkflowPage, { owner: o, slug: "dinners" });
+    expect(drawing(page.html)).toBe(example("dinners-04.mmd").trimEnd());
+    expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" })).html)).toBe(
+      await engine.draw(dinners04, "home"),
+    );
+    const checks = await renderPage(WorkflowChecksPage, { owner: o, slug: "dinners" });
+    expect(text(checks.html)).toContain(`workflow.yaml Checked by AWML ${engine.version.tag} awml check No mistakes`);
   });
 
   it("orders the side panel as every workflow page does", async () => {
@@ -315,7 +364,7 @@ describe("a 0.4 workflow's page", () => {
     expect(files((await renderPage(VersionYamlPage, { owner: o, slug: "dinners", n: "1" })).html)).toEqual({ "workflow-yaml": dinners });
   });
 
-  it("checks the one file with AWML 0.4 on the Checks tab", async () => {
+  it("checks the one file with AWML 0.5 on the Checks tab", async () => {
     const ana = await person("ana");
     const o = ana.username;
     await push(o, "dinners", { token: ana.token }, { workflow: dinners });
@@ -327,7 +376,7 @@ describe("a 0.4 workflow's page", () => {
       expect(text(page.html)).toContain(`workflow.yaml Checked by AWML ${engine.version.tag} awml check No mistakes`);
       expect(text(page.html)).not.toContain("security.yaml");
     }
-    expect(engine.version.tag).toMatch(/^v0\.4\./);
+    expect(engine.version.tag).toMatch(/^v0\.5\./);
   });
 });
 
@@ -384,7 +433,7 @@ describe("0.4 workflows in the gallery and an inventory", () => {
   });
 });
 
-describe("fitting a 0.4 workflow", () => {
+describe("fitting a workflow", () => {
   type FitResult = { platform: string; judged: boolean; fits: boolean; reasons: string[]; models: Record<string, string[]> };
   const native = JSON.parse(example("client-email.fit.json")) as { results: FitResult[]; gaps: string[] };
   const nativeFor = (id: string) => {
@@ -415,7 +464,7 @@ describe("fitting a 0.4 workflow", () => {
     return { status: res.status, body: await res.json() };
   };
 
-  it("judges the design of a stored 0.4 workflow, or of one sent as file, as the native fit does", async () => {
+  it("judges the design of a stored 0.5 workflow, or of one sent as file, as the native fit does", async () => {
     const { username } = await ana();
     for (const body of [{ workflow: `${username}/client-email` }, { file: clientEmail }]) {
       const res = await fit({ ...body, platforms: [`${username}/worker`, `${username}/scripts-mac-mini`] });
@@ -475,17 +524,126 @@ describe("fitting a 0.4 workflow", () => {
       status: 422,
       body: { errors: [`${username}/client-email v1 has no implementation "home".`] },
     });
-    expect(await fit({ file: clientEmail03 })).toEqual({ status: 400, body: { errors: [WORKFLOW_IS_NOT_04] } });
-    expect(await fit({ security: clientEmail03 })).toEqual({ status: 400, body: { errors: [WORKFLOW_IS_NOT_04] } });
+    expect(await fit({ file: clientEmail03 })).toEqual({ status: 400, body: { errors: [WORKFLOW_IS_TOO_OLD] } });
+    expect(await fit({ security: clientEmail03 })).toEqual({ status: 400, body: { errors: [WORKFLOW_IS_TOO_OLD] } });
   });
 
-  it("takes the 0.4 file and an implementation through the MCP fit tool", async () => {
+  it("takes the 0.5 file and an implementation through the MCP fit tool", async () => {
     const a = await ana();
     const answer = await call("fit_workflow", { file: placed, implementation: "office" }, a.token);
     expect(answer.isError).toBe(false);
     expect(answer.data.implementation).toBe("office");
     expect(answer.text).toContain(`cowork on ${a.username}/scripts-mac-mini v1 fits`);
     expect(answer.text).toContain("files isn't judged: it names no platform");
+  });
+
+  describe("a block that names a registered platform as owner/platforms/slug", () => {
+    const placedAt = (platform: string, file = clientEmail) =>
+      file.replace(
+        '{ id: cowork, label: "Claude Cowork, Mac mini", parts',
+        `{ id: cowork, label: "Claude Cowork, Mac mini", platform: ${platform}, parts`,
+      );
+    const clientEmail04 = clientEmail.replace('awml: "0.5"', 'awml: "0.4"');
+    // Acme's ops runner: the Mac mini's description, under a bare id, as a 0.4
+    // description stored before 0.5 has it.
+    const opsRunner = descriptions["scripts-mac-mini"].replace("id: scripts-mac-mini,", "id: ops-runner,");
+    // What the native fit says of the Mac mini block on that description.
+    const native = async () => {
+      const [{ platform: _, ...answer }] = (await engine.fit(placedAt("ops-runner"), [opsRunner], "office")).results;
+      expect(answer.judged).toBe(true);
+      return answer;
+    };
+
+    async function acme(description = opsRunner) {
+      const olive = await person("olive");
+      await orgWith("acme", olive);
+      const res = await request("POST", "/api/v1/platforms/acme/ops-runner/versions", {
+        as: { token: olive.token },
+        json: { description },
+      });
+      expect(res.status).toBe(201);
+      return olive;
+    }
+
+    it("fits a 0.5 workflow's block named acme/platforms/ops-runner against acme's stored ops-runner, with no network", async () => {
+      const olive = await acme();
+      const file = placedAt("acme/platforms/ops-runner");
+      expect(file).toMatch(/^awml: "0\.5"$/m);
+      expect(await engine.check(file)).toEqual([]);
+      const expected = {
+        block: "cowork",
+        platform: "acme/ops-runner",
+        number: 1,
+        id: "acme/platforms/ops-runner",
+        label: "Scheduled scripts on a Mac mini",
+        ...(await native()),
+      };
+      for (const body of [
+        { file, implementation: "office" },
+        { file, implementation: "office", platforms: ["acme/ops-runner"] },
+      ]) {
+        const res = await fit(body, { token: olive.token });
+        expect(res.status).toBe(200);
+        expect(res.body.gaps).toEqual([]);
+        expect(res.body.results[0]).toEqual(expected);
+      }
+      // And so does a stored workflow.
+      expect((await push("acme", "client-email", { token: olive.token }, { workflow: file })).status).toBe(201);
+      const stored = await fit({ workflow: "acme/client-email", implementation: "office" });
+      expect(stored.body.results[0]).toEqual(expected);
+    });
+
+    it("fits it against a stored 0.5 description whose own id is acme/platforms/ops-runner", async () => {
+      await acme(opsRunner.replace('awml: "0.4"', 'awml: "0.5"').replace("id: ops-runner,", "id: acme/platforms/ops-runner,"));
+      const res = await fit({ file: placedAt("acme/platforms/ops-runner"), implementation: "office" });
+      expect(res.body.results[0]).toEqual({
+        block: "cowork",
+        platform: "acme/ops-runner",
+        number: 1,
+        id: "acme/platforms/ops-runner",
+        label: "Scheduled scripts on a Mac mini",
+        ...(await native()),
+      });
+    });
+
+    it("still fits a 0.4 workflow's block by the description's bare id", async () => {
+      await acme();
+      const file = placedAt("ops-runner", clientEmail04);
+      expect(await engine.check(file)).toEqual([]);
+      const res = await fit({ file, implementation: "office" });
+      expect(res.body.results[0]).toEqual({
+        block: "cowork",
+        platform: "acme/ops-runner",
+        number: 1,
+        id: "ops-runner",
+        label: "Scheduled scripts on a Mac mini",
+        ...(await native()),
+      });
+    });
+
+    it("refuses owner/platforms/slug in a 0.4 workflow, as awml check does", async () => {
+      await acme();
+      const file = placedAt("acme/platforms/ops-runner", clientEmail04);
+      const found = await engine.check(file);
+      expect(found.length).toBeGreaterThan(0);
+      expect(await fit({ file, implementation: "office" })).toEqual({ status: 422, body: { errors: found.map((e) => `file: ${e}`) } });
+    });
+
+    it("gives the engine's gap, saying to pull it, when no such platform is stored", async () => {
+      await acme();
+      const res = await fit({ file: placedAt("acme/platforms/nothing-here"), implementation: "office" });
+      expect(res).toEqual({
+        status: 200,
+        body: {
+          workflow: null,
+          implementation: "office",
+          results: [],
+          gaps: [
+            'group "cowork" names platform "acme/platforms/nothing-here", but its description wasn\'t given: pull it with awml pull acme/platforms/nothing-here',
+          ],
+        },
+      });
+    });
   });
 });
 
