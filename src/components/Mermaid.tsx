@@ -33,14 +33,21 @@ export async function drawMermaid(id: string, text: string) {
 }
 
 // Draws Mermaid text in the browser. The text stays visible until it is drawn.
-export function Mermaid({ text }: { text: string }) {
+// `onDrawn` is told when the drawing has replaced it.
+export function Mermaid({ text, onDrawn }: { text: string; onDrawn?: (drawing: HTMLDivElement) => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  const drawn = useRef(onDrawn);
   const id = "m" + useId().replace(/[^a-zA-Z0-9]/g, "");
+  useEffect(() => {
+    drawn.current = onDrawn;
+  });
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const svg = await drawMermaid(id, text);
-      if (!cancelled && ref.current) ref.current.innerHTML = svg;
+      if (cancelled || !ref.current) return;
+      ref.current.innerHTML = svg;
+      drawn.current?.(ref.current);
     })();
     return () => {
       cancelled = true;
