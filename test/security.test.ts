@@ -855,9 +855,13 @@ describe("A user's own private workflows", () => {
   });
 
   describe("The edition's limit", () => {
-    it("the default edition sets no limit", async () => {
+    it("an edition with no limit lets a user keep any number of private workflows", async () => {
       const ana = await person("ana");
-      expect(await edition.privateWorkflowLimit({ id: ana.id, username: ana.username })).toBeNull();
+      await withEdition({ privateWorkflowLimit: async () => null }, async () => {
+        for (const slug of ["diary", "letters", "accounts"]) {
+          expect((await push(ana.username, slug, { token: ana.token }, "private")).status).toBe(201);
+        }
+      });
     });
 
     it("allows the push that reaches the limit and refuses the one over it, saying the limit and the count", async () => {
