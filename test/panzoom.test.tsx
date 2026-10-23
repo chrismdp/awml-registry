@@ -1,8 +1,10 @@
 // The frame on a workflow page that a reader zooms and moves the drawing in,
 // like a map. Its maths is in test/viewport.test.ts.
+import fs from "node:fs";
+import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { FRAME_LABEL, PanZoomControls } from "@/components/PanZoom";
+import { FRAME_LABEL, onControl, PanZoomControls } from "@/components/PanZoom";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
 import GalleryPage from "@/app/gallery/page";
@@ -48,6 +50,17 @@ describe("zooming and moving a workflow's drawing", () => {
     expect(html).toContain(">−<");
     expect(html).toContain(">Fit<");
     expect(html).toContain(">100%<");
+  });
+
+  it("keeps the arrow pad in a group the phone layout hides, and lets presses in the gaps through", () => {
+    const html = renderToStaticMarkup(<PanZoomControls onMove={() => {}} onZoom={() => {}} onFit={() => {}} onActual={() => {}} />);
+    expect(html).toMatch(/<div class="panzoom-pad">(?:<button[^]*?<\/button>){4}<\/div>/);
+    const css = fs.readFileSync(path.join(__dirname, "../src/app/site.css"), "utf8");
+    expect(css).toMatch(/@media \(max-width: 600px\)[^\n]*\.panzoom-pad \{ display: none; \}/);
+    // A stand-in for an element: only a button inside the controls matches.
+    const at = (inButton: boolean) => ({ closest: (sel: string) => (inButton && sel === ".panzoom-controls button" ? {} : null) }) as unknown as Element;
+    expect(onControl(at(true))).toBe(true);
+    expect(onControl(at(false))).toBe(false);
   });
 
   it("puts a workflow page's drawing in a focusable frame, without controls until it is drawn", async () => {

@@ -148,15 +148,17 @@ pre, code { font-family: var(--mono); }
 .panzoom:focus-visible { outline: 3px solid var(--link); outline-offset: 3px; }
 .panzoom.drawn { overflow: hidden; padding: 0; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
 .panzoom.grabbing { cursor: grabbing; }
-.panzoom.drawn .panzoom-drawing { position: absolute; top: 0; left: 0; width: max-content; transform-origin: 0 0; will-change: transform; }
+.panzoom.drawn .panzoom-drawing { position: absolute; top: 0; left: 0; width: max-content; transform-origin: 0 0; }
+/* Only while a drag or pinch is under way: a standing will-change layer can stay rasterised at an old scale, so a zoom looks blurry. */
+.panzoom.grabbing .panzoom-drawing { will-change: transform; }
 .panzoom.drawn .drawing svg { max-width: none; margin: 0; }
-.panzoom-controls { position: absolute; right: 16px; bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 10px; cursor: default; }
+.panzoom-controls { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: none; }
 .panzoom-pad { display: grid; grid-template-columns: repeat(3, 40px); grid-template-rows: repeat(3, 40px); gap: 2px; }
 .panzoom-pad .up { grid-area: 1 / 2; } .panzoom-pad .left { grid-area: 2 / 1; } .panzoom-pad .right { grid-area: 2 / 3; } .panzoom-pad .down { grid-area: 3 / 2; }
 .panzoom-zoom { display: flex; flex-direction: column; gap: 6px; }
-.panzoom-controls .button { min-height: 40px; min-width: 40px; padding: 0 10px; background: var(--paper); font-size: 14px; }
+.panzoom-controls .button { min-height: 40px; min-width: 40px; padding: 0 10px; background: var(--paper); font-size: 14px; pointer-events: auto; cursor: default; }
 .panzoom-zoom .button { width: 60px; }
-@media (max-width: 600px) { .figure { padding: 20px; border-radius: 22px; } .panzoom { padding: 20px; } .panzoom-controls { right: 10px; bottom: 10px; } .tabs { border-radius: 24px; } .tabs a { padding: 10px 14px; font-size: 14px; } }
+@media (max-width: 600px) { .figure { padding: 20px; border-radius: 22px; } .panzoom { padding: 20px; } .panzoom-pad { display: none; } .panzoom-controls .button { min-height: 32px; height: 32px; } .tabs { border-radius: 24px; } .tabs a { padding: 10px 14px; font-size: 14px; } }
 /* The YAML and Checks views: full width, under the tabs. */
 .full { padding-bottom: 80px; }
 /* The YAML view: only the files, each scrolling inside its own box. */

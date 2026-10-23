@@ -28,6 +28,10 @@ const TAP_SLOP_PX = 8;
 
 const KEYS: Record<string, Direction> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
 
+// Whether a press landed on one of the controls' buttons. The gaps between them
+// belong to the frame, so a finger there still drags or pinches.
+export const onControl = (target: EventTarget | null) => (target as Element | null)?.closest?.(".panzoom-controls button") != null;
+
 const sizeOf = (el: HTMLElement | null): Size => ({ width: el?.clientWidth ?? 0, height: el?.clientHeight ?? 0 });
 
 // A workflow's drawing in a frame the reader zooms and moves like a map: by
@@ -68,7 +72,7 @@ export function PanZoom({ text }: { text: string }) {
     const box = frame.current!.getBoundingClientRect();
     return { x: e.clientX - box.left, y: e.clientY - box.top };
   };
-  const onControls = (e: { target: EventTarget }) => (e.target as Element).closest?.(".panzoom-controls") != null;
+  const onControls = (e: { target: EventTarget }) => onControl(e.target);
 
   // Shows the SVG at the size Mermaid drew it, so 100% means that size, then fits it.
   const onDrawn = useCallback(
