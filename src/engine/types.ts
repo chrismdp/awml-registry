@@ -42,6 +42,19 @@ export type FitResult = {
 };
 export type FitReport = { results: FitResult[]; gaps: string[] };
 
+// One check `awml check --json` lists for a file, in the order AWML's spec
+// gives them: its stable id, its name, what it guards, and its result. A
+// failed check gives its mistakes, a warning its warnings, and a skipped
+// check why it did not apply.
+export type ListedCheck = {
+  id: string;
+  name: string;
+  about: string;
+  result: "pass" | "fail" | "skipped" | "warn";
+  skippedBecause?: string;
+  mistakes: string[];
+};
+
 export interface Engine {
   // The AWML it was built from: its release, as `git describe --tags` names
   // it, and its commit (vendor/awml/VERSION).
@@ -51,6 +64,8 @@ export interface Engine {
   // The warnings `awml check` gives for one file, such as a do step AI
   // decides. A warning is not a mistake and fails nothing.
   warnings(yaml: string): Promise<string[]>;
+  // Every check AWML runs on one file, with the result of each.
+  checks(yaml: string): Promise<ListedCheck[]>;
   // One workflow's summary from its files. The files must pass check.
   summarise(files: Files): Promise<Summary>;
   // Mermaid text for one file that passes check, drawn in the browser: its

@@ -1,17 +1,30 @@
+import type { ListedCheck } from "@/engine";
 import type { FileName } from "@/server/registry";
 import { count } from "./words";
 
 // One check AWML ran on a file, the mistakes it found, none when it passed,
-// and its warnings, which fail nothing.
-export type CheckRow = { name: string; mistakes: string[]; warnings: string[] };
+// and its warnings, which fail nothing. A check AWML listed at push also has
+// its id, what it guards and its result; the one row of a file checked again
+// with `awml check` has none of those.
+export type CheckRow = {
+  name: string;
+  mistakes: string[];
+  warnings: string[];
+  listed?: Pick<ListedCheck, "id" | "about" | "result" | "skippedBecause">;
+};
 
-// A file and the checks run on it. AWML's check gives only the mistakes it
-// finds, not each rule it ran, so today each file has one row, `awml check`
-// itself. When AWML lists its checks, each takes a row of its own here.
-export type CheckedFile = { name: FileName; rows: CheckRow[] };
+// A file, the checks run on it and the AWML that ran them. `listed` when
+// they are the checks AWML listed at push, one row each; otherwise the file
+// was checked again here by `awml check`, which gives only the mistakes it
+// finds, so it has one row.
+export type CheckedFile = { name: FileName; rows: CheckRow[]; checkedBy: { tag: string; commit: string }; listed: boolean };
 
+// The mistakes a row found; a listed check that failed found at least one.
+const mistakesOf = (row: CheckRow) => Math.max(row.mistakes.length, row.listed?.result === "fail" ? 1 : 0);
+
+// How many mistakes the files' checks found. None means no check failed.
 export const mistakesIn = (files: CheckedFile[]) =>
-  files.reduce((sum, f) => sum + f.rows.reduce((n, row) => n + row.mistakes.length, 0), 0);
+  files.reduce((sum, f) => sum + f.rows.reduce((n, row) => n + mistakesOf(row), 0), 0);
 
 export function Tick() {
   return (
@@ -21,37 +34,64 @@ export function Tick() {
   );
 }
 
+// What a check's result says beside its name.
+function Result({ row }: { row: CheckRow }) {
+  if (row.listed?.result === "skipped") return <span className="badge skipped">Skipped</span>;
+  if (mistakesOf(row) > 0) return <span className="badge bad">{count(mistakesOf(row), "mistake", "mistakes")}</span>;
+  if (row.listed?.result === "warn") return null;
+  return (
+    <span className="badge good">
+      <Tick />
+      {row.listed ? "Passed" : "No mistakes"}
+    </span>
+  );
+}
+
 // What checking a version's files found, file by file, and the AWML that checked them.
-export function Checks({ title, files, checkedBy }: { title: string; files: CheckedFile[]; checkedBy: { tag: string; commit: string } }) {
+export function Checks({ title, files }: { title: string; files: CheckedFile[] }) {
+  const listed = files.every((f) => f.listed);
+  const spec = `https://github.com/chrismdp/awml/blob/${files[0]?.checkedBy.commit}/SPEC.md#the-file-format`;
   return (
     <div className="checks" role="tabpanel" aria-label={`${title}, checks`}>
       <p className="checks-intro">
-        AWML checked each file when it was pushed, and the registry refuses a push with any mistake. Each file is
-        checked again here, by the AWML this registry runs.
+        {listed ? (
+          <>
+            AWML checked this file when it was pushed, and the registry refuses a push with any mistake. Here is each
+            check it ran, in the order its spec gives them.
+          </>
+        ) : (
+          <>
+            AWML checked each file when it was pushed, and the registry refuses a push with any mistake. Each file is
+            checked again here, by the AWML this registry runs.
+          </>
+        )}
       </p>
       {files.map((f) => (
         <section key={f.name}>
           <div className="check-head">
             <h2>{f.name}.yaml</h2>
-            <p>Checked by AWML {checkedBy.tag}</p>
+            <p>Checked by AWML {f.checkedBy.tag}</p>
           </div>
           <ul className="check-rows">
             {f.rows.map((row) => (
-              <li key={row.name}>
+              <li key={row.listed?.id ?? row.name} data-check={row.listed?.id}>
                 <div className="check-row">
-                  <code>{row.name}</code>
-                  {row.mistakes.length === 0 ? (
-                    <span className="badge good">
-                      <Tick />
-                      No mistakes
+                  {row.listed ? (
+                    <span className="check-name">
+                      <strong>{row.name}</strong> <code>{row.listed.id}</code>
                     </span>
                   ) : (
-                    <span className="badge bad">{count(row.mistakes.length, "mistake", "mistakes")}</span>
+                    <code>{row.name}</code>
                   )}
-                  {row.warnings.length > 0 && (
-                    <span className="badge warn">{count(row.warnings.length, "warning", "warnings")}</span>
-                  )}
+                  <span className="check-result">
+                    <Result row={row} />
+                    {row.warnings.length > 0 && (
+                      <span className="badge warn">{count(row.warnings.length, "warning", "warnings")}</span>
+                    )}
+                  </span>
                 </div>
+                {row.listed && <p className="check-about">{row.listed.about}</p>}
+                {row.listed?.skippedBecause && <p className="check-skipped">Skipped because {row.listed.skippedBecause}.</p>}
                 {row.mistakes.length > 0 && (
                   <ul className="check-mistakes">
                     {row.mistakes.map((m) => (
@@ -75,10 +115,13 @@ export function Checks({ title, files, checkedBy }: { title: string; files: Chec
         </section>
       ))}
       <p className="checks-end">
-        AWML lists the mistakes it finds, not each rule it checks.{" "}
-        <a href={`https://github.com/chrismdp/awml/blob/${checkedBy.commit}/SPEC.md#the-file-format`}>
-          Its spec says what it checks for.
-        </a>
+        {listed ? (
+          <a href={spec}>AWML&apos;s spec says what each check is for.</a>
+        ) : (
+          <>
+            AWML lists the mistakes it finds, not each rule it checks. <a href={spec}>Its spec says what it checks for.</a>
+          </>
+        )}
       </p>
     </div>
   );

@@ -17,9 +17,12 @@ import { readVersion, VIEWS, type FileName, type View } from "@/server/registry"
 // implementation it does not have, and for a view a version stored before
 // has no file for.
 //
-// Each file is checked again here by the AWML the registry runs, so the page
-// can name that AWML truly. A push with a mistake is refused, so the check
-// saved at push found none; a newer AWML can find some.
+// A workflow file pushed since AWML listed its checks shows the list stored
+// at push, one row per check, named by the AWML that ran them. Every other
+// file is checked again here by the AWML the registry runs, so the page can
+// name that AWML truly, and so is a listed file the AWML here finds mistakes
+// in: a push with a mistake is refused, so only a newer AWML can find some,
+// and then the page shows them.
 export async function loadVersion(
   owner: string,
   slug: string,
@@ -44,10 +47,28 @@ export async function loadVersion(
   const shown = asked ?? views[0];
   const files = (workflow ? (["workflow"] as const) : views).map((name) => ({ name, text: v.files[name]! }));
   const checks: CheckedFile[] = await Promise.all(
-    files.map(async (f) => ({
-      name: f.name,
-      rows: [{ name: "awml check", mistakes: await engine.check(f.text), warnings: await engine.warnings(f.text) }],
-    })),
+    files.map(async (f) => {
+      const mistakes = await engine.check(f.text);
+      const list = f.name === "workflow" ? v.checks : null;
+      if (list && mistakes.length === 0)
+        return {
+          name: f.name,
+          checkedBy: list.awml,
+          listed: true,
+          rows: list.checks.map(({ name, mistakes, ...listed }) => ({
+            name,
+            mistakes: listed.result === "fail" ? mistakes : [],
+            warnings: listed.result === "warn" ? mistakes : [],
+            listed,
+          })),
+        };
+      return {
+        name: f.name,
+        checkedBy: engine.version,
+        listed: false,
+        rows: [{ name: "awml check", mistakes, warnings: await engine.warnings(f.text) }],
+      };
+    }),
   );
 
   // The file the shown view is drawn from, and for a 0.4 or 0.5 platform view, the
@@ -74,7 +95,6 @@ export async function loadVersion(
     nowhere,
     files,
     checks,
-    checkedBy: engine.version,
     mermaid: drawable ? await engine.draw(v.files[source]!, workflow ? placed : undefined) : "",
     summary: v.summary,
     versions: v.versions,

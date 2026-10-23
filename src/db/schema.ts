@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import type { Summary } from "@/engine/types";
+import type { ListedCheck, Summary } from "@/engine/types";
 
 const id = () => text("id").primaryKey().$defaultFn(() => crypto.randomUUID());
 const createdAt = () =>
@@ -312,6 +312,9 @@ export const version = sqliteTable(
     security: text("security"),
     platform: text("platform"),
     check: text("check", { mode: "json" }).notNull().$type<CheckResult>(),
+    // Every check AWML ran on the workflow file at push, and the AWML that ran
+    // them. Versions pushed before AWML listed its checks have none.
+    checks: text("checks", { mode: "json" }).$type<CheckList>(),
     summary: text("summary", { mode: "json" }).notNull().$type<Summary>(),
   },
   (t) => [uniqueIndex("version_workflow_number_idx").on(t.workflowId, t.number)],
@@ -400,3 +403,5 @@ export const auditEvent = sqliteTable(
 );
 
 export type CheckResult = { workflow?: string[]; security?: string[]; platform?: string[] };
+
+export type CheckList = { awml: { tag: string; commit: string }; checks: ListedCheck[] };
