@@ -1,24 +1,30 @@
 # Resolves open pull requests that conflict when a commit lands on main. This is the workflow drawn
 # at https://awml.io/chrismdp/rebase-conflicting-pull-requests.
 #
-# Only pull requests from this repository and its own people are considered. Claude works with a
-# read-only token and returns the rebased branch as a bundle, so it never holds the credentials that
-# can push its change. The checks run in another job that can only read. A separate push job runs
-# nothing from the branch and force-pushes it only if the branch hasn't moved. The old commit stays
-# on GitHub and the comment names it, so the replacement can be undone with one push. Pushes made by
-# the Actions token don't start CI, so the read-only job's checks are the checks for the rebase.
+# Only pull requests from branches in this repository, opened by its own people or by the build
+# workflow, are considered. Claude works with a read-only token and returns the rebased branch as a
+# bundle, so it never holds the credentials that can push its change. The checks run in another job
+# that can only read. A separate push job runs nothing from the branch and force-pushes it only if
+# the branch hasn't moved. The old commit stays on GitHub and the comment names it, so the
+# replacement can be undone with one push.
 #
 # The checks are the same as ci.yml's: npm ci, typecheck, lint and test.
 #
+# The push goes through the repository's GitHub App: the push job mints a token for this repository
+# alone and gives it only to the step that pushes. GitHub starts CI from an app's push, though not
+# from one by the Actions token, so CI runs on the rebased branch and shows on the pull request, and
+# main's rule holds the merge until it passes. The comments stay on the Actions token. A merge the
+# app sets starts this workflow too, as a person's merge would.
+#
 # It needs the same CLAUDE_CODE_OAUTH_TOKEN secret as build.yml, made with `claude setup-token`, so
-# the runs come out of the maintainer's subscription rather than a metered API key. It needs no
+# the runs come out of the maintainer's subscription rather than a metered API key, and the same
+# FACTORY_APP_ID and FACTORY_APP_KEY secrets, with the app installed on this repository. It needs no
 # label of its own.
 name: Rebase conflicting pull requests
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 
 concurrency:
   group: resolve-main
@@ -44,7 +50,7 @@ jobs:
           while read -r number; do
             mergeable=UNKNOWN
             head_sha=
-            for attempt in 1 2 3 4 5; do
+            for _ in 1 2 3 4 5; do
               details="$(gh pr view "$number" --repo "$GITHUB_REPOSITORY" \
                 --json mergeable,headRefOid)"
               mergeable="$(jq -r '.mergeable' <<< "$details")"
@@ -61,7 +67,7 @@ jobs:
               ((.author_association == "OWNER" or
                 .author_association == "MEMBER" or
                 .author_association == "COLLABORATOR") or
-               .user.login == "github-actions[bot]")
+               (.user.type == "Bot" and (.head.ref | startswith("build/issue-"))))
             ' <<< "$pull")"
             [ "$eligible" = true ] || continue
 
@@ -270,7 +276,7 @@ jobs:
             "$MAIN_SHA"..refs/rebased -- .github/workflows/ | sed '/^$/d')"
           if [ -n "$workflow_files" ]; then
             printf '%s\n' "$workflow_files"
-            echo "The rebased commits change a workflow file, which the Actions token cannot push. Rebase this pull request by hand." \
+            echo "The rebased commits change a workflow file, which this workflow doesn't push. Rebase this pull request by hand." \
               > "$RUNNER_TEMP/result/result.txt"
             exit 1
           fi
@@ -320,8 +326,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      actions: write
-      contents: write
+      contents: read
       pull-requests: write
     steps:
       - name: Prepare the failure reason
@@ -407,21 +412,29 @@ jobs:
             exit 1
           fi
 
+      - name: Mint the app's token
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.FACTORY_APP_ID }}
+          private-key: ${{ secrets.FACTORY_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - name: Push the rebased branch
         env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
           BRANCH: ${{ matrix.pull.branch }}
-          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ matrix.pull.head_sha }}
         run: |
           if ! git -c core.hooksPath=/dev/null \
-            -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)" \
             push --force-with-lease="refs/heads/$BRANCH:$HEAD_SHA" origin \
               "refs/rebased:refs/heads/$BRANCH"; then
             echo "The branch moved while this ran; nothing was changed." \
               > "$RUNNER_TEMP/resolve-failure.txt"
             exit 1
           fi
-          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
 
       - name: Comment on the pull request
         env:
