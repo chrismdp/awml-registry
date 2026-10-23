@@ -1,7 +1,7 @@
-# Type checks, lints and tests every push and pull request. The factory pushes and merges through
-# the repository's GitHub App, and GitHub starts this workflow from what an app does, so it runs on
-# the factory's branches and on main after a merge with no help. Deploying is up to whoever runs a
-# registry: scripts/deploy.sh deploys to Cloudflare.
+# Type checks, lints and tests every push and pull request: npm ci, typecheck, lint and test. The
+# build and rebase workflows push and merge with the repository's GitHub App, so their pushes start
+# it as a person's would. Deploying is up to whoever runs a registry: scripts/deploy.sh deploys to
+# Cloudflare.
 #
 # When a check fails on main, a last job reports it. This is the workflow drawn at
 # https://awml.io/chrismdp/fix-failing-main. If an issue labelled failing-main is already open, it
@@ -9,15 +9,17 @@
 # build. Otherwise the app opens an issue with the end of the failing output, labelled failing-main
 # and build, and GitHub starts the build from that label as it would from a person's. The build
 # retries and merges by the same rules as any other. The report job checks out nothing and runs none
-# of the code it reports on: it reads the failed jobs' log with gh. It reads and comments with the
-# Actions token, and mints the app's token, for this repository alone, only to open the issue. That
-# needs the FACTORY_APP_ID and FACTORY_APP_KEY secrets, the app installed on this repository with
-# read and write access to issues, and the failing-main and build labels.
+# of the code it reports on: it reads the failed jobs' log with gh. It mints the app's token, for
+# this repository alone, from the FACTORY_APP_ID and FACTORY_APP_KEY secrets only to open the issue,
+# and comments with the Actions token. That needs the app installed on this repository with read and
+# write access to issues, and the failing-main and build labels.
 name: CI
 
 on:
   push:
   pull_request:
+  # For running the checks by hand.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -49,7 +51,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - name: Report the failure on an open issue, or write a new one
+      - name: Report the failure on the open issue, or write a new one
         id: report
         env:
           GH_TOKEN: ${{ github.token }}
@@ -85,24 +87,24 @@ jobs:
             --json number --jq '.[0].number // empty')"
           if [ -n "$open" ]; then
             gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body-file "$here/failure.md"
-            echo "open=true" >> "$GITHUB_OUTPUT"
+            echo "new=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if [ "${#subject}" -gt 60 ]; then
             subject="${subject:0:57}..."
           fi
+          echo "Main is failing: $subject" > "$here/title.txt"
           {
             cat "$here/failure.md"
             echo
-            echo "A build of this issue has started. A fix the build rule finds straightforward merges by itself."
+            echo "The build label starts a build of this issue. A fix the build rule finds straightforward merges by itself once CI passes."
           } > "$here/issue.md"
-          printf 'Main is failing: %s\n' "$subject" > "$here/title.txt"
-          echo "open=false" >> "$GITHUB_OUTPUT"
+          echo "new=true" >> "$GITHUB_OUTPUT"
 
-      - name: Mint the app's token
+      - name: Make the app's token
         id: app
-        if: steps.report.outputs.open == 'false'
+        if: steps.report.outputs.new == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.FACTORY_APP_ID }}
@@ -112,7 +114,7 @@ jobs:
 
       # The app opens the issue, so GitHub starts the build from its build label.
       - name: Open an issue labelled build
-        if: steps.report.outputs.open == 'false'
+        if: steps.report.outputs.new == 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
