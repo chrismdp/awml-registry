@@ -606,6 +606,24 @@ describe("fitting a workflow", () => {
       });
     });
 
+    it("takes an owner that starts with a digit: 42labs pushes a 0.5 description and a block fits it", async () => {
+      const olive = await person("olive");
+      await orgWith("42labs", olive);
+      const id = "42labs/platforms/ops-runner";
+      const description = opsRunner.replace('awml: "0.4"', 'awml: "0.5"').replace("id: ops-runner,", `id: ${id},`);
+      const pushed = await request("POST", "/api/v1/platforms/42labs/ops-runner/versions", {
+        as: { token: olive.token },
+        json: { description },
+      });
+      expect(pushed.status).toBe(201);
+      const file = placedAt(id);
+      expect(await engine.check(file)).toEqual([]);
+      const res = await fit({ file, implementation: "office" });
+      expect(res.status).toBe(200);
+      expect(res.body.gaps).toEqual([]);
+      expect(res.body.results[0]).toMatchObject({ block: "cowork", platform: "42labs/ops-runner", number: 1, id, judged: true });
+    });
+
     it("still fits a 0.4 workflow's block by the description's bare id", async () => {
       await acme();
       const file = placedAt("ops-runner", clientEmail04);
