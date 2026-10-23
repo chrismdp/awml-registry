@@ -48,7 +48,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 | Organisation | Slug, name, created at |
 | Membership | A user in an organisation, as `owner` or `member` |
 | Workflow | Owner (a user or an organisation, never both), slug, title, `public` or `private` |
-| Version | Workflow, number, who pushed it and when, the AWML 0.4 or 0.5 workflow file (YAML text), the check result, the summary as JSON. A version stored before the registry took only 0.4 files has no workflow file, and at most one security file and one platform file instead |
+| Version | Workflow, number, who pushed it and when, the AWML 0.4 or 0.5 workflow file (YAML text), the check result, every check AWML listed at push with the AWML that ran them (from 2026-10-23; none before), the summary as JSON. A version stored before the registry took only 0.4 files has no workflow file, and at most one security file and one platform file instead |
 | Platform | Owner (a user or an organisation, never both), slug, label (from the latest description), `public` or `private` |
 | Platform version | Platform, number, who pushed it and when, the platform description (YAML text) and the install recipe (Markdown text), if any |
 | Token | User, name, SHA-256 hash of the secret (the secret is shown once), created at, last used at |
@@ -74,7 +74,7 @@ Platforms have a namespace of their own, under `/{owner}/platforms` and `/api/v1
 | `/{owner}/{slug}/platform` | The latest version with the platform view of its first implementation drawn, under that implementation's label. With more than one implementation, a choice of them, each linked to its own address. With none, it says "This workflow doesn't say where it runs yet." |
 | `/{owner}/{slug}/platform/{implementation}` | The platform view of that implementation, the same way. 404 when the version has no such implementation |
 | `/{owner}/{slug}/yaml` | The latest version's file as text, `workflow.yaml`, full width with a Copy button and a Download link. The page keeps its header and its tabs, and shows nothing generated: no drawing, no summary, no versions, no Change it box |
-| `/{owner}/{slug}/checks` | The latest version's checks (see "Checks"). Its tab, after YAML, carries a tick when the file passes, or the number of mistakes |
+| `/{owner}/{slug}/checks` | The latest version's checks (see "Checks"). Its tab, after YAML, carries a tick when no check failed, or the number of mistakes |
 | `/{owner}/{slug}/v/{n}`, `/{owner}/{slug}/v/{n}/security`, `/platform`, `/platform/{implementation}`, `/yaml`, `/checks` | One version, the same ways |
 | `/{owner}/{slug}?view={view}`, `/{owner}/{slug}/v/{n}?view={view}` | Where the views were. Redirect permanently (308) to the view's own address, such as `/{owner}/{slug}/platform`, whether or not the workflow is there, so the redirect tells nobody anything |
 | `/{owner}/{slug}/v/{n}/workflow.yaml` | The version's file as YAML |
@@ -112,11 +112,13 @@ The API takes `Authorization: Bearer <token>` or a browser session. The CLI talk
 
 ## Checks
 
-Added on 2026-10-22. A push with any mistake is refused, so every version passed `awml check` when it was pushed. The Checks tab checks each file again, with the AWML the registry runs, and shows for each file: its name, the AWML that checked it (the release and commit in `vendor/awml/version.json`, which `npm run engine:update` writes beside `vendor/awml/VERSION`), and each check with its result, "No mistakes" or the mistakes it found. A file with mistakes is not drawn: its view says how many it has and links to Checks. A 0.4 or 0.5 version has one file, `workflow.yaml`, which AWML's check checks with the security rules for its design and the platform rules for each implementation; a version stored before has its security and platform files.
+Added on 2026-10-22. A push with any mistake is refused, so every version passed `awml check` when it was pushed. The Checks tab checks each file again, with the AWML the registry runs (a version pushed since AWML listed its checks shows the list stored at push instead; see "Every check" below), and shows for each file: its name, the AWML that checked it (the release and commit in `vendor/awml/version.json`, which `npm run engine:update` writes beside `vendor/awml/VERSION`), and each check with its result, "No mistakes" or the mistakes it found. A file with mistakes is not drawn: its view says how many it has and links to Checks. A 0.4 or 0.5 version has one file, `workflow.yaml`, which AWML's check checks with the security rules for its design and the platform rules for each implementation; a version stored before has its security and platform files.
 
 AWML 0.4.0's check also gives warnings, such as a `do` step that AI decides. The Checks tab lists a file's warnings under its mistakes, with their count beside the result, and says they don't fail the check: a file with only warnings passes, is drawn, and its tab still carries the tick. A push is never refused for a warning.
 
-AWML 0.4.0's check gives only the mistakes it finds. It names no rule and does not list the checks it ran, so each file has one row, `awml check` itself, and the page says so, with a link to the part of AWML's spec that says what `awml check` reports. When AWML lists its checks with a result for each, each becomes a row of its own.
+AWML 0.4.0's check gives only the mistakes it finds. It names no rule and does not list the checks it ran, so each file has one row, `awml check` itself, and the page says so, with a link to the part of AWML's spec that says what `awml check` reports.
+
+**Every check, from AWML 0.5.1.** Decided 2026-10-23. AWML 0.5.1 lists every check it runs (chrismdp/awml#38), in its spec's order, each with a stable id, a name, what it guards and a result: `pass`, `fail`, `skipped` or `warn`. A push stores that list for the workflow file with the version, with the AWML that ran it (the release and commit in `vendor/awml/version.json`). The Checks tab of such a version shows one row per check: its name and id, "Passed", the mistakes it found, "Skipped" with why it did not apply, or its warnings, marked as warnings that don't fail the check; then what the check guards. The file is headed with the AWML that made the list, not the one the registry runs now, and the tab carries its tick only when no check failed. A file whose list has a failed check is not drawn. The API's answers are as they were; the list is not in them. Versions stored before have no list, so their Checks tab stays as above, checked again with one `awml check` row. So does a listed file the AWML the registry runs now finds mistakes in, which only a newer AWML can: the tab shows those mistakes, as for a version stored before.
 
 ## Access
 

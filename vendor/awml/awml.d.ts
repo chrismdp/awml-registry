@@ -2,6 +2,9 @@
 export interface AWML {
   check(source: string): string[];
   warnings(source: string): string[];
+  // Every check, as awml check --json lists them, for files given as { file, source }.
+  checksJSON(files: { file: string; source: string } | { file: string; source: string }[]): string;
+  checks(files: { file: string; source: string } | { file: string; source: string }[]): unknown;
   summaryJSON(sources: string | string[]): string;
   summary(sources: string | string[]): unknown;
   // The workflow first, then platform descriptions. With an implementation,

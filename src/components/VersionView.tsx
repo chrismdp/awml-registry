@@ -29,9 +29,8 @@ export type VersionViewProps = {
   // A 0.4 or 0.5 workflow's platform view when it has no implementations.
   nowhere: boolean;
   files: { name: FileName; text: string }[];
-  // What checking each file found, and the AWML that checked them.
+  // What checking each file found, and the AWML that checked it.
   checks: CheckedFile[];
-  checkedBy: { tag: string; commit: string };
   // The shown file drawn, or "" when it is not a drawing view or the file has mistakes.
   mermaid: string;
   summary: Summary;
@@ -92,7 +91,7 @@ export function VersionView(p: VersionViewProps) {
       {p.shown === "checks" ? (
         <div className="full">
           {tablist}
-          <Checks title={p.title} files={p.checks} checkedBy={p.checkedBy} />
+          <Checks title={p.title} files={p.checks} />
         </div>
       ) : p.shown === "yaml" ? (
         <div className="full yaml">

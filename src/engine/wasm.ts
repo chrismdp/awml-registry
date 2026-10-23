@@ -4,7 +4,7 @@
 import { createAWML, type AWML } from "../../vendor/awml/awml.js";
 import version from "../../vendor/awml/version.json";
 import { loadAwmlModule } from "@/engine/module";
-import type { Engine, Files, FitReport, Summary } from "./types";
+import type { Engine, Files, FitReport, ListedCheck, Summary } from "./types";
 
 // One Go runtime per process or Worker isolate, started on first use.
 let started: Promise<AWML> | undefined;
@@ -21,6 +21,22 @@ export const wasmEngine: Engine = {
   },
   async warnings(yaml) {
     return (await awml()).warnings(yaml);
+  },
+  async checks(yaml) {
+    const listed = JSON.parse((await awml()).checksJSON([{ file: "workflow.yaml", source: yaml }])) as {
+      checks: (Omit<ListedCheck, "skippedBecause" | "mistakes"> & {
+        skipped_because?: string;
+        mistakes: { message: string }[];
+      })[];
+    };
+    return listed.checks.map((c) => ({
+      id: c.id,
+      name: c.name,
+      about: c.about,
+      result: c.result,
+      ...(c.skipped_because === undefined ? {} : { skippedBecause: c.skipped_because }),
+      mistakes: c.mistakes.map((m) => m.message),
+    }));
   },
   async summarise(files: Files) {
     const sources = [files.workflow, files.security, files.platform].filter((f): f is string => f !== undefined);

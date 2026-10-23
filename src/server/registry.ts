@@ -142,6 +142,7 @@ export async function pushVersion(
   if (errors.length) return refuse(422, ...errors);
 
   const summary = await engine.summarise({ workflow: file });
+  const checks = { awml: engine.version, checks: await engine.checks(file) };
   let w = existing;
   if (!w) {
     [w] = await db
@@ -175,6 +176,7 @@ export async function pushVersion(
         pushedBy: viewer.id,
         workflow: file,
         check,
+        checks,
         summary,
       })
       .onConflictDoNothing()
@@ -247,6 +249,7 @@ export async function readVersion(
       security: version.security,
       platform: version.platform,
       check: version.check,
+      checks: version.checks,
       summary: version.summary,
     })
     .from(version)
@@ -271,6 +274,7 @@ export async function readVersion(
     pushedBy: v.pushedBy,
     files,
     check: v.check,
+    checks: v.checks,
     summary: v.summary,
     versions: await versionList(db, w.id),
   };

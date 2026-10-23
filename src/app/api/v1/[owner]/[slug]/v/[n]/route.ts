@@ -12,6 +12,6 @@ export async function GET(req: Request, { params }: Params<"owner" | "slug" | "n
   if (!asker.ok) return refusal(asker);
   const found = await readVersion(await getDb(), asker.viewer, owner, slug, n);
   if (!found) return notFound();
-  const { ownerType: _, versions: __, ...body } = found;
+  const { ownerType: _, versions: __, checks: ___, ...body } = found;
   return json(body);
 }
