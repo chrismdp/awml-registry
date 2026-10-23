@@ -1,22 +1,23 @@
-# Type checks, lints and tests every push and pull request. The build workflow also starts it by
-# dispatch after it pushes a branch or merges a change, because pushes and merges by the Actions
-# token start no other workflow. Deploying is up to whoever runs a registry: scripts/deploy.sh
-# deploys to Cloudflare.
+# Type checks, lints and tests every push and pull request. The factory pushes and merges through
+# the repository's GitHub App, and GitHub starts this workflow from what an app does, so it runs on
+# the factory's branches and on main after a merge with no help. Deploying is up to whoever runs a
+# registry: scripts/deploy.sh deploys to Cloudflare.
 #
 # When a check fails on main, a last job reports it. This is the workflow drawn at
 # https://awml.io/chrismdp/fix-failing-main. If an issue labelled failing-main is already open, it
 # adds this run to that issue and starts nothing, so a main that fails on several pushes starts one
-# build. Otherwise it opens an issue with the end of the failing output, labelled build so it reads
-# like any other build, and starts the build by dispatch, since a label added by the Actions token
-# starts nothing. The build retries and merges by the same rules as any other. The report job checks
-# out nothing and runs none of the code it reports on: it reads the failed jobs' log with gh.
+# build. Otherwise the app opens an issue with the end of the failing output, labelled failing-main
+# and build, and GitHub starts the build from that label as it would from a person's. The build
+# retries and merges by the same rules as any other. The report job checks out nothing and runs none
+# of the code it reports on: it reads the failed jobs' log with gh. It reads and comments with the
+# Actions token, and mints the app's token, for this repository alone, only to open the issue. That
+# needs the FACTORY_APP_ID and FACTORY_APP_KEY secrets, the app installed on this repository with
+# read and write access to issues, and the failing-main and build labels.
 name: CI
 
 on:
   push:
   pull_request:
-  # The factory starts this by hand, because pushes made with the Actions token start nothing.
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -44,11 +45,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      actions: write
+      actions: read
       contents: read
       issues: write
     steps:
-      - name: Report the failure on an issue, and start a build of a new one
+      - name: Report the failure on an open issue, or write a new one
+        id: report
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -83,6 +85,7 @@ jobs:
             --json number --jq '.[0].number // empty')"
           if [ -n "$open" ]; then
             gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body-file "$here/failure.md"
+            echo "open=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -94,11 +97,29 @@ jobs:
             echo
             echo "A build of this issue has started. A fix the build rule finds straightforward merges by itself."
           } > "$here/issue.md"
-          if ! url="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "Main is failing: $subject" \
+          printf 'Main is failing: %s\n' "$subject" > "$here/title.txt"
+          echo "open=false" >> "$GITHUB_OUTPUT"
+
+      - name: Mint the app's token
+        id: app
+        if: steps.report.outputs.open == 'false'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.FACTORY_APP_ID }}
+          private-key: ${{ secrets.FACTORY_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      # The app opens the issue, so GitHub starts the build from its build label.
+      - name: Open an issue labelled build
+        if: steps.report.outputs.open == 'false'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          here="$RUNNER_TEMP/report"
+          if ! url="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$(cat "$here/title.txt")" \
             --label failing-main --label build --body-file "$here/issue.md")"; then
             echo "::error::Could not open an issue about the failing main. Check that the failing-main and build labels exist."
             exit 1
           fi
-          number="${url##*/}"
           echo "Opened $url"
-          gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main -f issue="$number"
