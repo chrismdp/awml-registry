@@ -1,29 +1,11 @@
-import { notFound } from "next/navigation";
-import type { PlatformViewProps } from "@/components/PlatformView";
-import { followOldName, pageContext, platformPath, underOwner, type PlatformTab } from "@/server/page";
-import { describePlatform } from "@/server/platform-description";
-import { readPlatformVersion } from "@/server/platforms";
+import { permanentRedirect } from "next/navigation";
+import { platformPath, type PlatformTab } from "@/server/page";
 
-// One platform version for its page, `n` or "latest", with the tab asked
-// for. A 404 for anyone who may not see it.
-export async function loadPlatform(owner: string, slug: string, n: string, tab: PlatformTab): Promise<PlatformViewProps> {
-  const { db, viewer } = await pageContext();
-  const v = await readPlatformVersion(db, viewer, owner, slug, n === "latest" ? "latest" : n);
-  if (!v) {
-    await followOldName(db, owner, underOwner(slug, n, tab === "offers" ? undefined : tab), "/platforms");
-    notFound();
-  }
-  return {
-    owner: v.owner,
-    slug: v.slug,
-    label: v.label,
-    visibility: v.visibility,
-    number: v.number,
-    address: platformPath(v.owner, v.slug, n === "latest" ? "latest" : v.number),
-    tab,
-    description: v.description,
-    described: describePlatform(v.description),
-    recipe: v.recipe,
-    versions: v.versions,
-  };
+// A platform's pages were here, at /platforms/{owner}/{slug}, until
+// 2026-10-22, when they moved to /{owner}/platforms/{slug}, the reference
+// AWML 0.5 gives a platform. Each old address sends the visitor for good
+// (308) to the same page there, without looking, so it says nothing about
+// whether the platform exists. The page there makes its own check.
+export function movedPlatform(owner: string, slug: string, n: string, tab: PlatformTab): never {
+  permanentRedirect(platformPath(owner, slug, n, tab));
 }

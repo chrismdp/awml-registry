@@ -19,7 +19,7 @@ export function PlatformList({ platforms, linkOwner = false }: { platforms: Plat
     <ul className="pf-list">
       {platforms.map((p) => {
         const address = `${p.owner}/${p.slug}`;
-        const page = `/platforms/${address}`;
+        const page = `/${p.owner}/platforms/${p.slug}`;
         return (
           <li key={address} className="pf">
             <div className="label">

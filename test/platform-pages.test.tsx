@@ -6,13 +6,19 @@ import OwnerPage from "@/app/[owner]/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import OwnerPlatformsPage from "@/app/[owner]/platforms/page";
 import SharedPlatformsPage from "@/app/platforms/page";
-import PlatformPage from "@/app/platforms/[owner]/[slug]/page";
-import PlatformRecipePage from "@/app/platforms/[owner]/[slug]/recipe/page";
-import PlatformYamlPage from "@/app/platforms/[owner]/[slug]/yaml/page";
-import PlatformVersionPage from "@/app/platforms/[owner]/[slug]/v/[n]/page";
-import PlatformVersionRecipePage from "@/app/platforms/[owner]/[slug]/v/[n]/recipe/page";
-import PlatformVersionYamlPage from "@/app/platforms/[owner]/[slug]/v/[n]/yaml/page";
-import { example, orgWith, person, request, type Who } from "./helpers";
+import PlatformPage from "@/app/[owner]/platforms/[slug]/page";
+import PlatformRecipePage from "@/app/[owner]/platforms/[slug]/recipe/page";
+import PlatformYamlPage from "@/app/[owner]/platforms/[slug]/yaml/page";
+import PlatformVersionPage from "@/app/[owner]/platforms/[slug]/v/[n]/page";
+import PlatformVersionRecipePage from "@/app/[owner]/platforms/[slug]/v/[n]/recipe/page";
+import PlatformVersionYamlPage from "@/app/[owner]/platforms/[slug]/v/[n]/yaml/page";
+import OldPlatformPage from "@/app/platforms/[owner]/[slug]/page";
+import OldPlatformRecipePage from "@/app/platforms/[owner]/[slug]/recipe/page";
+import OldPlatformYamlPage from "@/app/platforms/[owner]/[slug]/yaml/page";
+import OldPlatformVersionPage from "@/app/platforms/[owner]/[slug]/v/[n]/page";
+import OldPlatformVersionRecipePage from "@/app/platforms/[owner]/[slug]/v/[n]/recipe/page";
+import OldPlatformVersionYamlPage from "@/app/platforms/[owner]/[slug]/v/[n]/yaml/page";
+import { BASE, example, orgWith, person, request, type Who } from "./helpers";
 import { call } from "./mcp-client";
 import { renderPage, type Page } from "./pages";
 
@@ -77,11 +83,11 @@ describe("an owner's platforms page", () => {
     expect(words).toContain("acme's platforms");
     expect(words).toContain("Acme's back office acme/back-office Private · Version 1 Description Install recipe");
     expect(words).toContain("A code worker acme/worker Public · Version 2 Description No install recipe");
-    expect(shown.html).toMatch(/<a href="\/platforms\/acme\/back-office">Acme&#x27;s back office<\/a>/);
-    expect(shown.html).toMatch(/<a href="\/platforms\/acme\/back-office">Description<\/a>/);
-    expect(shown.html).toMatch(/<a href="\/platforms\/acme\/back-office\/recipe">Install recipe<\/a>/);
-    expect(shown.html).toMatch(/<a href="\/platforms\/acme\/worker">A code worker<\/a>/);
-    expect(shown.html).not.toContain('href="/platforms/acme/worker/recipe"');
+    expect(shown.html).toMatch(/<a href="\/acme\/platforms\/back-office">Acme&#x27;s back office<\/a>/);
+    expect(shown.html).toMatch(/<a href="\/acme\/platforms\/back-office">Description<\/a>/);
+    expect(shown.html).toMatch(/<a href="\/acme\/platforms\/back-office\/recipe">Install recipe<\/a>/);
+    expect(shown.html).toMatch(/<a href="\/acme\/platforms\/worker">A code worker<\/a>/);
+    expect(shown.html).not.toContain('href="/acme/platforms/worker/recipe"');
   });
 
   it("gives the pages it links to", async () => {
@@ -224,7 +230,7 @@ describe("the shared platforms page", () => {
     expect(words).toContain("Shared platforms Public platforms from every owner.");
     expect(words.indexOf("beta/open-box")).toBeLessThan(words.indexOf("acme/worker"));
     expect(shown.html).toContain('href="/beta/platforms"');
-    expect(shown.html).toContain('href="/platforms/beta/open-box"');
+    expect(shown.html).toContain('href="/beta/platforms/open-box"');
     expect(shown.html).toContain('action="/platforms"');
   });
 
@@ -263,7 +269,7 @@ describe("Private platforms on the platform pages", () => {
         expect(html).not.toContain("back-office");
         expect(text(html)).not.toContain("Acme's back office");
       }
-      expect((await request("GET", "/platforms/acme/back-office/v/1/description.yaml", { as })).status).toBe(404);
+      expect((await request("GET", "/acme/platforms/back-office/v/1/description.yaml", { as })).status).toBe(404);
     }
   });
 
@@ -350,9 +356,9 @@ describe("a platform's page", () => {
     expect(page.html).toContain(`<a href="/${o}">${o}</a> / <a href="/${o}/platforms">platforms</a> / laptop`);
     expect(page.html).toContain('<a href="https://example.com/codex-setup">https://example.com/codex-setup</a>');
     expect(tabsOf(page.html)).toEqual([
-      { href: `/platforms/${o}/laptop`, label: "What it offers", selected: true },
-      { href: `/platforms/${o}/laptop/recipe`, label: "Install recipe", selected: false },
-      { href: `/platforms/${o}/laptop/yaml`, label: "YAML", selected: false },
+      { href: `/${o}/platforms/laptop`, label: "What it offers", selected: true },
+      { href: `/${o}/platforms/laptop/recipe`, label: "Install recipe", selected: false },
+      { href: `/${o}/platforms/laptop/yaml`, label: "YAML", selected: false },
     ]);
     for (const P of [PlatformRecipePage, PlatformYamlPage]) {
       const other = await show(P, o, "laptop");
@@ -360,7 +366,7 @@ describe("a platform's page", () => {
       expect(headOf(other.html)).toBe(headOf(page.html));
     }
     expect(tabsOf((await show(PlatformYamlPage, o, "laptop")).html).filter((t) => t.selected).map((t) => t.href)).toEqual([
-      `/platforms/${o}/laptop/yaml`,
+      `/${o}/platforms/laptop/yaml`,
     ]);
   });
 
@@ -433,7 +439,7 @@ holds: []
     const pre = page.html.match(/<pre id="description-yaml">([^]*?)<\/pre>/)![1];
     expect(pre.replace(/&#x27;/g, "'").replace(/&quot;/g, '"')).toBe(commented);
     expect(page.html).toContain('<button type="button" class="button outline" aria-controls="description-yaml">Copy</button>');
-    expect(page.html).toContain(`<a href="/platforms/${o}/laptop/v/1/description.yaml" class="button outline" download="">Download</a>`);
+    expect(page.html).toContain(`<a href="/${o}/platforms/laptop/v/1/description.yaml" class="button outline" download="">Download</a>`);
     expect(text(page.html)).not.toContain("Check a workflow against it");
   });
 
@@ -447,14 +453,14 @@ holds: []
     expect(headOf(old.html)).toContain("Codex on a laptop Platform · Public · Version 1 of 2");
     expect(text(old.html)).toContain("Off for up to 14 days");
     expect(tabsOf(old.html).map((t) => t.href)).toEqual([
-      `/platforms/${o}/laptop/v/1`,
-      `/platforms/${o}/laptop/v/1/recipe`,
-      `/platforms/${o}/laptop/v/1/yaml`,
+      `/${o}/platforms/laptop/v/1`,
+      `/${o}/platforms/laptop/v/1/recipe`,
+      `/${o}/platforms/laptop/v/1/yaml`,
     ]);
-    expect(old.html).toContain(`href="/platforms/${o}/laptop">#2</a>`);
+    expect(old.html).toContain(`href="/${o}/platforms/laptop">#2</a>`);
     expect(text((await show(PlatformPage, o, "laptop")).html)).toContain("Off for up to 7 days");
     expect(text((await renderPage(PlatformVersionRecipePage, v1)).html)).toContain("Install on the laptop");
-    expect((await renderPage(PlatformVersionYamlPage, v1)).html).toContain(`href="/platforms/${o}/laptop/v/1/description.yaml"`);
+    expect((await renderPage(PlatformVersionYamlPage, v1)).html).toContain(`href="/${o}/platforms/laptop/v/1/description.yaml"`);
     expect((await renderPage(PlatformVersionPage, { ...v1, n: "3" })).status).toBe(404);
   });
 
@@ -466,16 +472,90 @@ holds: []
     const ana = await laptopFor();
     const res = await request("PATCH", "/api/v1/me", { as: { token: ana.token }, json: { username: "ana-new" } });
     expect(res.status).toBe(200);
-    expect(await show(PlatformPage, ana.username, "laptop")).toMatchObject({ status: 308, location: "/platforms/ana-new/laptop" });
+    expect(await show(PlatformPage, ana.username, "laptop")).toMatchObject({ status: 308, location: "/ana-new/platforms/laptop" });
     expect(await show(PlatformYamlPage, ana.username, "laptop")).toMatchObject({
       status: 308,
-      location: "/platforms/ana-new/laptop/yaml",
+      location: "/ana-new/platforms/laptop/yaml",
     });
     expect(await renderPage(PlatformVersionRecipePage, { owner: ana.username, slug: "laptop", n: "1" })).toMatchObject({
       status: 308,
-      location: "/platforms/ana-new/laptop/v/1/recipe",
+      location: "/ana-new/platforms/laptop/v/1/recipe",
     });
     expect((await show(PlatformPage, "ana-new", "laptop")).status).toBe(200);
+  });
+
+  it("sends an old address under a name its person gave up on to the new form under the new name", async () => {
+    const ana = await laptopFor();
+    await request("PATCH", "/api/v1/me", { as: { token: ana.token }, json: { username: "ana-new" } });
+    const moved = await openOld(`/platforms/${ana.username}/laptop/v/1/recipe`);
+    expect(moved).toMatchObject({ status: 308, location: `/${ana.username}/platforms/laptop/v/1/recipe` });
+    expect(await openMoved(moved.location!)).toMatchObject({ status: 308, location: "/ana-new/platforms/laptop/v/1/recipe" });
+    const file = await request("GET", `/platforms/${ana.username}/laptop/v/1/description.yaml`);
+    const next = await request("GET", new URL(file.headers.get("location")!).pathname);
+    expect([next.status, next.headers.get("location")]).toEqual([308, `${BASE}/ana-new/platforms/laptop/v/1/description.yaml`]);
+  });
+});
+
+// A platform page's address, /{owner}/platforms/{slug} or the old
+// /platforms/{owner}/{slug}, with /v/{n} and a tab after it, as Next.js
+// would route it.
+function openPage(path: string, as: Who, pattern: RegExp, latest: Page<{ owner: string; slug: string }>[], version: Page<{ owner: string; slug: string; n: string }>[]) {
+  const m = path.match(pattern);
+  if (!m) throw new Error(`not a platform page: ${path}`);
+  const { owner, slug, n, tab } = m.groups!;
+  const at = ["offers", "recipe", "yaml"].indexOf(tab ?? "offers");
+  return n ? renderPage(version[at], { owner, slug, n }, { as }) : renderPage(latest[at], { owner, slug }, { as });
+}
+
+const openMoved = (location: string, as?: Who) =>
+  openPage(
+    new URL(location, BASE).pathname,
+    as,
+    /^\/(?<owner>[^/]+)\/platforms\/(?<slug>[^/]+)(?:\/v\/(?<n>[^/]+))?(?:\/(?<tab>recipe|yaml))?$/,
+    [PlatformPage, PlatformRecipePage, PlatformYamlPage],
+    [PlatformVersionPage, PlatformVersionRecipePage, PlatformVersionYamlPage],
+  );
+
+const openOld = (path: string, as?: Who) =>
+  openPage(
+    path,
+    as,
+    /^\/platforms\/(?<owner>[^/]+)\/(?<slug>[^/]+)(?:\/v\/(?<n>[^/]+))?(?:\/(?<tab>recipe|yaml))?$/,
+    [OldPlatformPage, OldPlatformRecipePage, OldPlatformYamlPage],
+    [OldPlatformVersionPage, OldPlatformVersionRecipePage, OldPlatformVersionYamlPage],
+  );
+
+// Platforms' pages were at /platforms/{owner}/{slug} until 2026-10-22.
+describe("a platform's old address", () => {
+  const pages = ["", "/recipe", "/yaml", "/v/1", "/v/1/recipe", "/v/1/yaml"];
+
+  it("sends every page for good (308) to the same page under /{owner}/platforms/{slug}, which loads", async () => {
+    const ana = await laptopFor();
+    const o = ana.username;
+    for (const tail of pages) {
+      const moved = await openOld(`/platforms/${o}/laptop${tail}`);
+      expect(moved, tail).toMatchObject({ status: 308, location: `/${o}/platforms/laptop${tail}` });
+      expect((await openMoved(moved.location!)).status, tail).toBe(200);
+    }
+  });
+
+  it("sends each file for good (308) to the same file there, query kept", async () => {
+    const ana = await laptopFor();
+    const o = ana.username;
+    for (const file of ["description.yaml", "recipe.md"]) {
+      const res = await request("GET", `/platforms/${o}/laptop/v/1/${file}?download=1`);
+      expect([res.status, res.headers.get("location")]).toEqual([308, `${BASE}/${o}/platforms/laptop/v/1/${file}?download=1`]);
+    }
+    const file = await request("GET", `/${o}/platforms/laptop/v/1/description.yaml`);
+    expect([file.status, await file.text()]).toEqual([200, commented]);
+  });
+
+  it("keeps each part inside its own segment", async () => {
+    expect((await renderPage(OldPlatformVersionPage, { owner: "a/b", slug: "c?d", n: "1" })).location).toBe(
+      "/a%2Fb/platforms/c%3Fd/v/1",
+    );
+    const file = await request("GET", "/platforms/a%2Fb/c%3Fd/v/1/description.yaml");
+    expect(file.headers.get("location")).toBe(`${BASE}/a%2Fb/platforms/c%3Fd/v/1/description.yaml`);
   });
 });
 
@@ -506,5 +586,45 @@ describe("Private platforms on a platform's page", () => {
     expect((await show(PlatformPage, "beta", "vault", { cookie: mo.cookie })).status).toBe(404);
     expect((await show(PlatformPage, "acme", "back-office", { cookie: bea.cookie })).status).toBe(404);
     expect((await show(PlatformPage, "beta", "open-box", { cookie: mo.cookie })).status).toBe(200);
+  });
+
+  // The old addresses, /platforms/{owner}/{slug}, redirect without looking,
+  // so a private platform's old address answers as a missing one's does,
+  // and the page it leads to makes the check.
+  const oldTails = ["", "/recipe", "/yaml", "/v/1", "/v/1/recipe", "/v/1/yaml"];
+
+  it("positive: the owner and a member follow a private platform's old address to its page", async () => {
+    const { olive, mo } = await platforms();
+    for (const who of [olive, mo])
+      for (const tail of oldTails) {
+        const moved = await openOld(`/platforms/acme/back-office${tail}`, { cookie: who.cookie });
+        expect(moved.status).toBe(308);
+        expect((await openMoved(moved.location!, { cookie: who.cookie })).status, tail).toBe(200);
+      }
+  });
+
+  it("negative: a private platform's old address gives a non-member and a signed-out visitor the 404 a missing one gives", async () => {
+    const { nell } = await platforms();
+    for (const as of [undefined, { cookie: nell.cookie }])
+      for (const tail of oldTails) {
+        const hidden = await openOld(`/platforms/acme/back-office${tail}`, as);
+        const missing = await openOld(`/platforms/acme/nothing-here${tail}`, as);
+        expect(hidden.status).toBe(missing.status);
+        expect(hidden.location!.replace("back-office", "nothing-here")).toBe(missing.location);
+        expect(await openMoved(hidden.location!, as), tail).toEqual(await openMoved(missing.location!, as));
+        expect((await openMoved(hidden.location!, as)).status, tail).toBe(404);
+      }
+  });
+
+  it("cross-tenant: a member of one organisation follows another's private platform's old address to a 404", async () => {
+    const { mo, bea } = await platforms();
+    for (const [who, path] of [
+      [mo, "/platforms/beta/vault"],
+      [bea, "/platforms/acme/back-office/v/1/yaml"],
+    ] as const) {
+      const moved = await openOld(path, { cookie: who.cookie });
+      expect(moved.status).toBe(308);
+      expect((await openMoved(moved.location!, { cookie: who.cookie })).status).toBe(404);
+    }
   });
 });
