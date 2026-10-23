@@ -674,3 +674,219 @@ describe("Private platforms", () => {
     });
   });
 });
+
+// A user's own private workflows. Ana keeps "diary" private on her own
+// account; Olive owns organisation "acme", with Ana and Mo as members; Nell
+// belongs to nothing.
+describe("A user's own private workflows", () => {
+  async function anaDiary() {
+    const ana = await person("ana");
+    const olive = await person("olive");
+    const mo = await person("mo");
+    const nell = await person("nell");
+    await orgWith("acme", olive, [ana, mo]);
+    const pushed = await push(ana.username, "diary", { token: ana.token }, "private");
+    expect(pushed.status).toBe(201);
+    return { ana, olive, mo, nell };
+  }
+
+  const limitMessage = (username: string, limit: number, has: number) =>
+    `${username} can keep ${limit} private workflows and has ${has}. An organisation has no such limit: push it to one of yours, or make it public.`;
+
+  describe("Positive boundary", () => {
+    it("the owner reads, pushes and sees every view of their private workflow, and it is listed on their page", async () => {
+      const { ana } = await anaDiary();
+      expect(await everyRead({ cookie: ana.cookie }, ana.username, "diary")).toEqual(all(200));
+      expect(await everyRead({ token: ana.token }, ana.username, "diary")).toMatchObject({
+        yaml: 200,
+        api: 200,
+        versionApi: 200,
+      });
+      const read = await (await request("GET", `/api/v1/${ana.username}/diary`, { as: { token: ana.token } })).json();
+      expect(read.visibility).toBe("private");
+      const res = await push(ana.username, "diary", { token: ana.token });
+      expect([res.status, (await res.json()).number]).toEqual([201, 2]);
+      const own = await renderPage(OwnerPage, { owner: ana.username }, { as: { cookie: ana.cookie } });
+      expect(own.html).toContain("diary");
+    });
+
+    it("records nothing in any audit log", async () => {
+      const { ana } = await anaDiary();
+      await request("GET", `/api/v1/${ana.username}/diary`, { as: { token: ana.token } });
+      await push(ana.username, "diary", { token: ana.token });
+      const db = await getDb();
+      const rows = await db.select().from(auditEvent);
+      expect(rows.filter((r) => r.target.includes("diary"))).toEqual([]);
+    });
+
+    it("the owner fits it against public platforms and their organisations' private ones", async () => {
+      const { ana, olive } = await anaDiary();
+      const bea = await person("bea");
+      await orgWith("beta", bea);
+      for (const [owner, slug, as, body] of [
+        ["acme", "back-office", olive, { description: backOffice, visibility: "private" }],
+        ["beta", "vault", bea, { description: betaVault, visibility: "private" }],
+        ["beta", "open-box", bea, { description: example("platforms/worker.yaml") }],
+      ] as const)
+        expect((await pushPlatform(owner, slug, { token: as.token }, body)).status).toBe(201);
+      const letters = await request("POST", `/api/v1/${ana.username}/letters/versions`, {
+        as: { token: ana.token },
+        json: { workflow: clientEmail, visibility: "private" },
+      });
+      expect(letters.status).toBe(201);
+      const res = await request("POST", "/api/v1/fit", {
+        as: { token: ana.token },
+        json: { workflow: `${ana.username}/letters` },
+      });
+      expect(res.status).toBe(200);
+      const results = (await res.json()).results as { platform: string }[];
+      expect(results.map((r) => r.platform).sort()).toEqual(["acme/back-office", "beta/open-box"]);
+    });
+  });
+
+  describe("Negative boundary", () => {
+    it("another user and a signed-out visitor get 404 on its pages, views, files, versions and API", async () => {
+      const { ana, nell } = await anaDiary();
+      expect(await everyRead({ cookie: nell.cookie }, ana.username, "diary")).toEqual(all(404));
+      expect(await everyRead({ token: nell.token }, ana.username, "diary")).toMatchObject({
+        yaml: 404,
+        api: 404,
+        versionApi: 404,
+      });
+      expect(await everyRead(undefined, ana.username, "diary")).toEqual(all(404));
+    });
+
+    it("answers exactly as a missing workflow does, and is never listed to anyone else", async () => {
+      const { ana, nell } = await anaDiary();
+      for (const as of [{ token: nell.token }, undefined]) {
+        for (const [hidden, missing] of [
+          [`/api/v1/${ana.username}/diary`, `/api/v1/${ana.username}/nothing-here`],
+          [`/api/v1/${ana.username}/diary/v/1`, `/api/v1/${ana.username}/nothing-here/v/1`],
+          [`/${ana.username}/diary/v/1/workflow.yaml`, `/${ana.username}/nothing-here/v/1/workflow.yaml`],
+        ]) {
+          const a = await request("GET", hidden, { as });
+          const b = await request("GET", missing, { as });
+          expect([a.status, await a.text()]).toEqual([b.status, await b.text()]);
+        }
+      }
+      for (const as of [{ cookie: nell.cookie }, undefined]) {
+        const page = await renderPage(OwnerPage, { owner: ana.username }, { as });
+        expect(page.status).toBe(200);
+        expect(page.html).not.toContain("diary");
+      }
+      for (const search of [{}, { q: "dinners" }] as Record<string, string>[])
+        expect((await renderPage(GalleryPage, {}, { search })).html).not.toContain("diary");
+    });
+
+    it("an old ?view= address sends anyone else on exactly as a missing workflow's does", async () => {
+      const { ana, nell } = await anaDiary();
+      for (const who of [{ cookie: nell.cookie }, undefined])
+        for (const slug of ["diary", "nothing-here"])
+          expect(
+            await renderPage(WorkflowPage, { owner: ana.username, slug }, { as: who, search: { view: "yaml" } }),
+          ).toEqual({ status: 308, html: "", location: `/${ana.username}/${slug}/yaml` });
+    });
+  });
+
+  describe("Cross-tenant boundary", () => {
+    it("another user's token can neither read nor push it", async () => {
+      const { ana, nell } = await anaDiary();
+      const reads = await tokenReads(ana.username, "diary", nell.token);
+      expect([reads.api.status, reads.versionApi.status, reads.yaml.status]).toEqual([404, 404, 404]);
+      expect((await push(ana.username, "diary", { token: nell.token })).status).toBe(404);
+      expect((await push(ana.username, "diary", { cookie: nell.cookie })).status).toBe(404);
+    });
+
+    it("the owner and a member of an organisation its owner belongs to can neither read nor push it", async () => {
+      const { ana, olive, mo } = await anaDiary();
+      for (const who of [olive, mo]) {
+        expect(await everyRead({ cookie: who.cookie }, ana.username, "diary")).toEqual(all(404));
+        const reads = await tokenReads(ana.username, "diary", who.token);
+        expect([reads.api.status, reads.versionApi.status, reads.yaml.status]).toEqual([404, 404, 404]);
+        expect((await push(ana.username, "diary", { token: who.token })).status).toBe(404);
+      }
+      const read = await (await request("GET", `/api/v1/${ana.username}/diary`, { as: { token: ana.token } })).json();
+      expect(read.versions).toHaveLength(1);
+    });
+
+    it("nobody can keep a private workflow on another user's account", async () => {
+      const { ana, nell } = await anaDiary();
+      expect((await push(nell.username, "notes", { token: ana.token }, "private")).status).toBe(403);
+      expect((await request("GET", `/api/v1/${nell.username}/notes`, { as: { token: nell.token } })).status).toBe(404);
+    });
+  });
+
+  describe("Roles boundary", () => {
+    it("a role in an organisation gives nothing on a user's own account; the user alone reads and pushes", async () => {
+      const { ana, olive } = await anaDiary();
+      expect(await everyRead({ cookie: olive.cookie }, ana.username, "diary")).toEqual(all(404));
+      expect((await push(ana.username, "diary", { token: olive.token })).status).toBe(404);
+      expect((await push(ana.username, "diary", { token: ana.token })).status).toBe(201);
+    });
+
+    it("private platforms still belong to organisations only", async () => {
+      const { ana } = await anaDiary();
+      const res = await pushPlatform(ana.username, "box", { token: ana.token }, {
+        description: backOffice,
+        visibility: "private",
+      });
+      expect([res.status, (await res.json()).errors]).toEqual([
+        422,
+        ["Private platforms belong to organisations. Push it to one of yours."],
+      ]);
+    });
+  });
+
+  describe("A token that is not valid", () => {
+    it("gets the same 401 for a user's private, public and missing workflow, on reads and a push", async () => {
+      const { ana } = await anaDiary();
+      await push(ana.username, "open", { token: ana.token }, "public");
+      const madeUp = ana.token.slice(0, -2) + "xx";
+      const hidden = await tokenReads(ana.username, "diary", madeUp);
+      expect(hidden.api.status).toBe(401);
+      expect(hidden.api.body).toMatch(/token is not valid/);
+      expect(await tokenReads(ana.username, "open", madeUp)).toEqual(hidden);
+      expect(await tokenReads(ana.username, "nothing-here", madeUp)).toEqual(hidden);
+      await revoke(ana);
+      expect(await tokenReads(ana.username, "diary", ana.token)).toEqual(hidden);
+      const pushed = await push(ana.username, "diary", { token: ana.token });
+      expect([pushed.status, await pushed.text()]).toEqual([401, hidden.api.body]);
+    });
+  });
+
+  describe("The edition's limit", () => {
+    it("the default edition sets no limit", async () => {
+      const ana = await person("ana");
+      expect(await edition.privateWorkflowLimit({ id: ana.id, username: ana.username })).toBeNull();
+    });
+
+    it("allows the push that reaches the limit and refuses the one over it, saying the limit and the count", async () => {
+      const { ana } = await anaDiary();
+      const asked: string[] = [];
+      const limit = async (user: { username: string }) => {
+        asked.push(user.username);
+        return 2;
+      };
+      await withEdition({ privateWorkflowLimit: limit }, async () => {
+        expect((await push(ana.username, "letters", { token: ana.token }, "private")).status).toBe(201);
+        const over = await push(ana.username, "accounts", { token: ana.token }, "private");
+        expect([over.status, (await over.json()).errors]).toEqual([403, [limitMessage(ana.username, 2, 2)]]);
+        expect((await request("GET", `/api/v1/${ana.username}/accounts`, { as: { token: ana.token } })).status).toBe(404);
+        // New versions of the private ones, public workflows and an
+        // organisation's private ones are not limited.
+        expect((await push(ana.username, "diary", { token: ana.token })).status).toBe(201);
+        expect((await push(ana.username, "open", { token: ana.token })).status).toBe(201);
+        expect((await push("acme", "payroll", { token: ana.token }, "private")).status).toBe(201);
+      });
+      expect(asked).toContain(ana.username);
+    });
+
+    it("a limit of 0 refuses every private workflow on a user's account", async () => {
+      const ana = await person("ana");
+      await withEdition({ privateWorkflowLimit: async () => 0 }, async () => {
+        const res = await push(ana.username, "diary", { token: ana.token }, "private");
+        expect([res.status, (await res.json()).errors]).toEqual([403, [limitMessage(ana.username, 0, 0)]]);
+      });
+    });
+  });
+});

@@ -25,6 +25,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 | The fit | Only the AWML engine judges where a workflow can run, the same Go package as `awml fit`, so the registry and the CLI give the same answer. Decided 2026-10-22. |
 | Usernames | A person sets their own username, by the rules of an organisation's slug. Workflows and platforms are stored against the account, so they move with the name. A name given up redirects to the new one until a person or an organisation takes it (see "Usernames"). Decided 2026-10-22. |
 | AWML 0.4 only | The registry takes only AWML 0.4 files: one file per workflow version, holding the design and any implementations, and platform descriptions marked `"0.4"`. Anything marked as an older AWML is refused with a 400 that says how to convert it. Versions stored before stay readable as history, and are never rewritten. Decided 2026-10-22, when AWML 0.4 kept each workflow in one file. |
+| A user's private workflows | A person may keep private workflows on their own account, seen by them alone, up to a limit the edition sets. This repo's default edition sets no limit; awml.io's limit lives in chrismdp/awml-cloud's edition. An organisation has no such limit. Private platforms stay organisations only. Decided 2026-10-22. |
 | Drawings' font | AWML's drawings ask for Inter. The registry serves Inter itself, as a WOFF2 under the SIL Open Font License, so a drawing looks the same in every browser. Decided 2026-10-22. |
 
 ## What v1 does
@@ -33,6 +34,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 - **A page per version.** Each view drawn behind its own tab, at its own address (Mermaid, drawn in the browser from the text the AWML package produces, in the Inter font the registry serves, loaded before Mermaid measures the labels), and the summary worked out from the file at push. The drawing sits in a frame the width of the column and `min(70vh, 720px)` tall, which the reader zooms and moves like a map: it opens at Fit, the whole drawing centred at the largest size that fits but never above 100%; controls in its bottom-right corner give an arrow pad that moves a fifth of the frame, and + and − (×1.25 around the centre), Fit and 100%; a mouse drags, double-clicks to zoom in and zooms with Ctrl or ⌘ and the wheel, while a plain wheel still scrolls the page; one finger drags, two pinch, a double-tap zooms in; the frame takes focus and the arrow keys, `+`/`=`, `-`, `0` and `f` do the same as the controls. Zoom runs from 10% to 400%, a quarter of the frame always holds part of the drawing, and a resize fits again only when the reader is still at Fit. Until Mermaid has drawn it, the frame holds the text with no controls. The gallery's thumbnails are not framed. Decided 2026-10-23. A YAML tab shows the file itself and nothing else, with a Copy button and a Download link. A Checks tab says what checking the file found (see "Checks").
 - **A public gallery.** Anyone can browse public workflows and search them by title. Anyone signed in can publish one, free.
 - **Private workflows for an organisation.** Only its members can see them. In this repo's default edition every organisation may keep private workflows; the hosted edition limits that to paying organisations.
+- **Private workflows on a person's own account.** Only that person can see them, up to the number the edition allows (see "Access"). Added on 2026-10-22.
 - **An inventory for each organisation.** Every workflow in one table with its summary counts, plus totals across them all.
 - **An audit log for each organisation.** Who pushed, who viewed a private workflow or platform, who joined or left, and which member changed their username. Owners can read it; nobody can change it.
 - **Platforms, and where a workflow can run.** Added after v1 (see "Platforms and the fit").
@@ -64,7 +66,7 @@ Platforms have a namespace of their own, under `/platforms` and `/api/v1/platfor
 | `/` | In this repo: the gallery. The hosted edition puts its home page here |
 | `/gallery` | The gallery of public workflows, newest first, with search by title |
 | `/explore` | Where the gallery was. Redirects permanently (308) to `/gallery`, keeping the search |
-| `/{owner}` | A user's or organisation's workflows: the public ones to everyone, the private ones to members too |
+| `/{owner}` | A user's or organisation's workflows: the public ones to everyone, the private ones to members, or to the user, too |
 | `/{owner}/{slug}` | The latest version: its security view drawn, the summary, the list of versions, and the command to push the next one, `awml push {owner}/{slug} workflow.yaml`. The header gives the owner / slug, the title, public or private and the version, and nothing more |
 | `/{owner}/{slug}/security` | The latest version the same way, the security view drawn from the design |
 | Versions list | On a workflow's page and a platform's page, when there is more than one version: one line each, as `#8 · chrismdp · Today 4:43pm · 0.4`. The number links to that version, or is bold when it is the one shown; who pushed it links to their page; the time is in UK time, "Today" or "Yesterday" for those days and otherwise as `18 Oct 2026, 9:12am`; and last comes the AWML its file's `awml:` field gives, which for a version stored before is its security or platform file's |
@@ -114,13 +116,13 @@ AWML 0.4.0's check gives only the mistakes it finds. It names no rule and does n
 
 ## Access
 
-A private workflow is visible to its organisation's members and to nobody else.
+A private workflow is visible to its organisation's members and to nobody else, or, on a user's own account, to that user and to nobody else.
 
 - **Public workflows** can be read by anyone, signed in or not. Only their owner can push to them: the user, or the organisation's members.
-- **Private workflows** can be read only by members. Anyone else gets a 404, the same as for a workflow that doesn't exist, so a private workflow's name never leaks.
+- **Private workflows** can be read only by members, or by the user whose own they are. Anyone else gets a 404, the same as for a workflow that doesn't exist, so a private workflow's name never leaks.
 - **Owners** manage members. **Members** read and push. A token acts as its user and can do nothing more. So does an AI client's OAuth token, on `/mcp` only.
 - **A token that is not valid**, revoked or mistyped, gets a 401 that says to log in again, from the API, the YAML downloads and the organisation forms alike. It gets the same answer whatever it asks for, so it never learns whether a private workflow exists. A request with no `Authorization` header is anonymous. Decided 2026-10-22, after a self-hosting trial found a revoked token silently read as nobody.
-- A user's own workflows (owner is a user) are public only in v1; private workflows belong to organisations.
+- **A user's own private workflows** (owner is a user). A user's first push may set `private`, through the API, `awml push --private` and the MCP `publish` tool. Only that user reads and pushes it: another user, a signed-out visitor, and the owners and members of any organisation the user belongs to all get the same 404 as for a missing workflow. The edition's `privateWorkflowLimit` says how many a user may keep; a first push that would go over it is refused with a 403 that says the limit, how many the user has and that an organisation has no such limit, such as `ana can keep 20 private workflows and has 20. An organisation has no such limit: push it to one of yours, or make it public.` New versions of a private workflow already kept are never refused for the limit. A workflow cannot yet be made public or deleted, so neither frees a place; the limit counts the user's private workflows as they are, so either would once it can. Nothing about a user's own workflows goes in any audit log; they are theirs alone. Private platforms still belong to organisations only, and a user's private workflow is fitted against public platforms and their organisations' private ones, as any of theirs is. Until 2026-10-22 a user's own workflows were public only; decided 2026-10-22.
 
 Each boundary has a test:
 
@@ -131,6 +133,17 @@ Each boundary has a test:
 | Cross-tenant | A token from a member of organisation A can neither read nor push organisation B's workflows, public pushes included. A member of A gets 404 on B's private workflow's pages and every view of them, which B's members see |
 | Invalid token | A revoked or made-up token gets the same 401 for a private, a public and a missing workflow; a valid token still reads as before |
 | Roles | An owner can do everything a member can, and manage members. A member cannot manage members or read the audit log |
+
+A user's own private workflows have the same boundaries, under "A user's own private workflows" in `test/security.test.ts`, and their publishing through `/mcp` in `test/mcp.test.ts`:
+
+| Boundary | Test |
+|---|---|
+| Positive | The user reads and pushes their private workflow, sees its pages at every view's address, finds it on their own page and fits it against public platforms and their organisations' private ones; nothing is recorded in any audit log |
+| Negative | Another user and a signed-out visitor get 404 on its pages, every view, its files, its versions and its API, exactly as for a missing workflow; it is not listed on the user's page to them, nor in the gallery; an old `?view=` address redirects as a missing one's does |
+| Cross-tenant | Another user's token, and the owner and a member of an organisation the user belongs to, can neither read nor push it; nobody can make a private workflow on another user's account |
+| Roles | A role in an organisation gives nothing on a user's own account; a private platform on a user's account is still refused |
+| Invalid token | A revoked or made-up token gets the same 401 for the user's private, public and missing workflow, on reads and a push |
+| The limit | A first private push that reaches the edition's limit is allowed and the one over it refused with the message above, while new versions, public workflows and an organisation's private ones are not limited; the default edition has no limit |
 
 Private platforms follow exactly these rules, through the same push rules (`src/server/push.ts`) and the same member check. Their tests are under "Private platforms" in `test/security.test.ts`:
 
@@ -181,6 +194,7 @@ The platform pages, `/{owner}/platforms` and `/platforms`, list a private platfo
 
 - `canKeepPrivate(org): Promise<boolean>`: whether the organisation may push a private workflow or platform. Default: `true`.
 - `canPush(org): Promise<boolean>`: whether the organisation may push at all (the hosted edition says no after a lapsed payment; reading stays allowed). Default: `true`.
+- `privateWorkflowLimit(user): Promise<number | null>`: how many private workflows the user may keep on their own account, given `{ id, username }`, or `null` for no limit. Default: `null`. awml.io allows 20, set in its own edition. Added 2026-10-22.
 - `homePage`: optional React component for `/`. Default: the gallery.
 - `legalLinks`: optional addresses of the terms and the privacy policy, `{ terms, privacy }`, which the sign-in page links to. Default: none, and the sign-in page names neither. The hosted edition sets `/terms` and `/privacy`, its own pages.
 

@@ -92,13 +92,16 @@ describe("pushing a workflow through the API", () => {
     expect(res.status).toBe(403);
   });
 
-  it("keeps a user's own workflows public", async () => {
+  it("lets a user keep a private workflow on their own account", async () => {
     const ana = await person("ana");
     const res = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
       as: { token: ana.token },
       json: { workflow, visibility: "private" },
     });
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(201);
+    const read = await request("GET", `/api/v1/${ana.username}/dinners`, { as: { token: ana.token } });
+    expect((await read.json()).visibility).toBe("private");
+    expect((await request("GET", `/api/v1/${ana.username}/dinners`)).status).toBe(404);
   });
 
   it("answers 404 for an owner that does not exist", async () => {

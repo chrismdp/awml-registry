@@ -1,6 +1,7 @@
-import { and, desc, eq, inArray, max, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, max, sql } from "drizzle-orm";
 import type { Db } from "@/db/client";
 import { user, version, workflow } from "@/db/schema";
+import { edition } from "@/edition";
 import { engine, type Files } from "@/engine";
 import { record } from "./audit";
 import { measures, total } from "./summary";
@@ -92,6 +93,22 @@ async function notePrivateView(db: Db, viewer: Viewer, owner: Owner, w: Workflow
     await record(db, owner.id, viewer.id, "private_view", target);
 }
 
+// Whether a user may make one more private workflow on their own account,
+// under the limit the edition sets them. An organisation has none.
+async function roomForPrivate(db: Db, owner: Owner & { type: "user" }): Promise<Result<{}>> {
+  const limit = await edition.privateWorkflowLimit({ id: owner.id, username: owner.slug });
+  if (limit === null) return { ok: true };
+  const [{ has }] = await db
+    .select({ has: count() })
+    .from(workflow)
+    .where(and(eq(workflow.ownerUserId, owner.id), eq(workflow.visibility, "private")));
+  if (has < limit) return { ok: true };
+  return refuse(
+    403,
+    `${owner.slug} can keep ${limit} private workflows and has ${has}. An organisation has no such limit: push it to one of yours, or make it public.`,
+  );
+}
+
 export async function pushVersion(
   db: Db,
   viewer: Viewer,
@@ -116,6 +133,10 @@ export async function pushVersion(
   const pushed = await pushedVisibility(owner, existing, body.visibility, "workflow");
   if (!pushed.ok) return pushed;
   const { visibility } = pushed;
+  if (!existing && visibility === "private" && owner.type === "user") {
+    const room = await roomForPrivate(db, owner);
+    if (!room.ok) return room;
+  }
 
   const { errors, check, title } = await checkFile(file);
   if (errors.length) return refuse(422, ...errors);

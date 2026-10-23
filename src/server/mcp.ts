@@ -206,7 +206,7 @@ function server(person: Person) {
     {
       title: "Publish a workflow",
       description:
-        "Save a new version of the workflow owner/slug from its one AWML 0.4 file. The file is checked first and refused if it has mistakes, and an older AWML is refused: convert a 0.3 pair with `awml convert security.yaml platform.yaml > workflow.yaml` first. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private, and only an organisation can keep a private one. Gives the workflow's page and the new version number.",
+        "Save a new version of the workflow owner/slug from its one AWML 0.4 file. The file is checked first and refused if it has mistakes, and an older AWML is refused: convert a 0.3 pair with `awml convert security.yaml platform.yaml > workflow.yaml` first. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private. A private one on your own account is seen by you alone; one on an organisation's, by its members. Gives the workflow's page and the new version number.",
       inputSchema: z.object({
         owner,
         slug,
@@ -216,7 +216,7 @@ function server(person: Person) {
         visibility: z
           .enum(["public", "private"])
           .optional()
-          .describe("Only for the first version. Default public. Private needs an organisation."),
+          .describe("Only for the first version. Default public. Private on your own account is seen by you alone."),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
