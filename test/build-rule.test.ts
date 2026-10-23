@@ -87,17 +87,14 @@ describe("judging a staged change", () => {
     expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
   });
 
+  // The pull request quotes the note as Claude wrote it, so the reason only points to it.
   it("sends a change to review when Claude's note asks for it", () => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
     const note = join(tempDir(), "review.md");
-    writeFileSync(note, "I chose the slower option.\nThe issue did not settle it.\n");
+    writeFileSync(note, "- I chose the slower option.\n- The issue did not settle it.\n");
 
-    expectVerdict(
-      evaluate(repo, plain, note),
-      true,
-      "Claude's note: I chose the slower option. The issue did not settle it.",
-    );
+    expectVerdict(evaluate(repo, plain, note), true, "Claude asked for a review: see Claude's note.");
   });
 
   it("sends a change to review when Claude's note is empty", () => {

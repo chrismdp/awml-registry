@@ -78,9 +78,11 @@ export function evaluate(repo: string, config: Config, reviewPath = ""): Verdict
 
   if (reviewPath !== "") {
     const note = readNote(reviewPath);
+    // The pull request quotes a note in full, so the reason only points to it.
     if (note !== undefined) {
-      const text = note.split(/\s+/).filter(Boolean).join(" ");
-      reasons.push(text === "" ? "Claude asked for the maintainer's review." : `Claude's note: ${text}`);
+      reasons.push(
+        note.trim() === "" ? "Claude asked for the maintainer's review." : "Claude asked for a review: see Claude's note.",
+      );
     }
   }
 
