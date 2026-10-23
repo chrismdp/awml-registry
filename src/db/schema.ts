@@ -306,7 +306,7 @@ export const version = sqliteTable(
     number: integer("number").notNull(),
     pushedBy: text("pushed_by").notNull().references(() => user.id),
     pushedAt: integer("pushed_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
-    // An AWML 0.4 workflow is one file. Versions pushed before the registry
+    // An AWML 0.4 or 0.5 workflow is one file. Versions pushed before the registry
     // took only 0.4 files hold a security file, a platform file or both.
     workflow: text("workflow"),
     security: text("security"),

@@ -23,10 +23,10 @@ export type VersionViewProps = {
   shown: PageView;
   // The file the shown view is drawn from.
   drawnFrom: FileName;
-  // A 0.4 workflow's implementations, each with the address of its platform
+  // A 0.4 or 0.5 workflow's implementations, each with the address of its platform
   // view and whether it is the one drawn. None for a version stored before.
   implementations: { id: string; label: string; href: string; shown: boolean }[];
-  // A 0.4 workflow's platform view when it has no implementations.
+  // A 0.4 or 0.5 workflow's platform view when it has no implementations.
   nowhere: boolean;
   files: { name: FileName; text: string }[];
   // What checking each file found, and the AWML that checked them.

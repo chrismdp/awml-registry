@@ -39,18 +39,18 @@ flowchart TB
     screen@{ shape: win-pane, label: "Kitchen screen" }
   end
 
-  favourites --> plan
-  plan --> mealplan
-  mealplan -->|"posted"| chat
-  mealplan --> fill
-  favourites --> fill
-  fill -->|"fills the basket"| shop
+  favourites -.-> plan
+  plan -.-> mealplan
+  mealplan -.->|"posted"| chat
+  mealplan -.-> fill
+  favourites -.-> fill
+  fill -.->|"fills the basket"| shop
   fill --> approve
-  approve -->|"#91;yes#93; checks out"| shop
-  copy <--> calendar
-  copy --> pickups
-  pickups --> screen
-  mealplan --> screen
+  approve -.->|"#91;yes#93; checks out"| shop
+  copy <-.-> calendar
+  copy -.-> pickups
+  pickups -.-> screen
+  mealplan -.-> screen
   screen_gap -.- screen
   plan -.- scored
   plan -.- tried
@@ -77,3 +77,4 @@ flowchart TB
   style calendars fill:#fbf3d9,stroke:#e8d9a6,color:#16171b
   style wall fill:#dff3ef,stroke:#b4ddd4,color:#16171b
   linkStyle 8 marker-end:none
+  linkStyle 12,13,14 stroke:#8a93a3

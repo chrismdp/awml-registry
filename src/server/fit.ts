@@ -3,7 +3,17 @@
 // never against any other.
 import type { Db } from "@/db/client";
 import { engine, type FitResult } from "@/engine";
-import { blockPlatforms, implementationsOf, isOlderAwml, readYaml, WORKFLOW_IS_NOT_04 } from "./awml-file";
+import {
+  blockPlatforms,
+  descriptionId,
+  implementationsOf,
+  isOlderAwml,
+  platformAddress,
+  readYaml,
+  REGISTERED_PLATFORM,
+  withDescriptionId,
+  WORKFLOW_IS_TOO_OLD,
+} from "./awml-file";
 import type { Owner } from "./owners";
 import { findReadablePlatformVersion, notePrivatePlatformView, visiblePlatforms } from "./platforms";
 import { readVersion } from "./registry";
@@ -41,8 +51,8 @@ function reference(text: string) {
   return match ? { owner: match[1], slug: match[2], n: match[3] ?? ("latest" as const) } : null;
 }
 
-// The workflow the fit judges: a stored version's 0.4 file, or the security
-// view of one stored before; or a 0.4 file sent as YAML, as `file`, or as
+// The workflow the fit judges: a stored version's 0.4 or 0.5 file, or the
+// security view of one stored before; or such a file sent as YAML, as `file`, or as
 // `security` as clients of the 0.3 API send it. With an implementation, it
 // must be one the workflow has.
 async function design(
@@ -80,7 +90,7 @@ async function design(
     };
   }
   if (typeof yaml === "string") {
-    if (isOlderAwml(yaml)) return refuse(400, WORKFLOW_IS_NOT_04);
+    if (isOlderAwml(yaml)) return refuse(400, WORKFLOW_IS_TOO_OLD);
     const found = await engine.check(yaml);
     if (found.length) return refuse(422, ...found.map((e) => `file: ${e}`));
     if (readYaml(yaml)?.parts === undefined)
@@ -90,7 +100,7 @@ async function design(
     return { ok: true, source: yaml, workflow: null, implementation: implementation ?? null };
   }
   if (workflow !== undefined) return refuse(422, "Name the workflow as owner/slug or owner/slug@version.");
-  return refuse(422, "Send a workflow as owner/slug, or its AWML 0.4 file as file.");
+  return refuse(422, "Send a workflow as owner/slug, or its AWML 0.4 or 0.5 file as file.");
 }
 
 type Candidate = {
@@ -126,13 +136,14 @@ async function candidates(db: Db, viewer: Viewer, named: unknown): Promise<Resul
   return { ok: true, platforms };
 }
 
-// Fits a workflow, named as owner/slug[@version] or sent as its 0.4 file,
-// against the platforms named, or every platform the viewer may see.
+// Fits a workflow, named as owner/slug[@version] or sent as its 0.4 or 0.5
+// file, against the platforms named, or every platform the viewer may see.
 //
 // The design is judged against each platform on its own, so one platform's
 // description never touches another's answer. An implementation is judged
 // block by block, each against the platform whose description its block
-// names, found among those platforms by the description's id. Each private
+// names, found among those platforms: by its address when the block names
+// owner/platforms/slug, and otherwise by the description's id. Each private
 // platform judged is recorded as viewed in its organisation's audit log.
 export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promise<Result<{ fit: Fit }>> {
   const judged = await design(db, viewer, body);
@@ -146,7 +157,9 @@ export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promis
     const named = blockPlatforms(source, implementation);
     const used = new Map<string, Candidate>();
     for (const id of new Set(named.values())) {
-      const matching = found.platforms.filter((p) => descriptionId(p.description) === id);
+      const matching = found.platforms.filter((p) =>
+        REGISTERED_PLATFORM.test(id) ? platformAddress(p.owner.slug, p.slug) === id : descriptionId(p.description) === id,
+      );
       if (matching.length > 1)
         return refuse(
           422,
@@ -154,7 +167,10 @@ export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promis
         );
       if (matching.length === 1) used.set(id, matching[0]);
     }
-    const given = [...used.values()].map((p) => p.description);
+    // A platform named by its address is given to the engine under that id,
+    // whatever id its stored description has, so the engine pairs them with
+    // no network.
+    const given = [...used].map(([id, p]) => (descriptionId(p.description) === id ? p.description : withDescriptionId(p.description, id)));
     const report = await engine.fit(source, given.length ? given : [NO_DESCRIPTION], implementation);
     if (report.gaps.length) return answer([], report.gaps);
     const results: BlockFit[] = report.results.map(({ platform: block, ...rest }) => {
@@ -163,7 +179,7 @@ export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promis
         ? { block, platform: `${p.owner.slug}/${p.slug}`, number: p.number, id: named.get(block)!, label: p.label, ...rest }
         : { block, platform: null, number: null, id: null, label: null, ...rest };
     });
-    for (const p of used.values()) await notePrivatePlatformView(db, viewer, p.owner, p, p.number);
+    for (const p of new Set(used.values())) await notePrivatePlatformView(db, viewer, p.owner, p, p.number);
     return answer(results);
   }
 
@@ -190,6 +206,3 @@ agents: []
 calls: []
 holds: []
 `;
-
-// The id a platform description gives itself.
-const descriptionId = (text: string) => String((readYaml(text)?.platform as { id?: unknown } | undefined)?.id);

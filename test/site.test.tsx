@@ -474,12 +474,12 @@ describe("a workflow's Checks view", () => {
     expect(text(page.html)).toContain(
       `${o} / dinners The family's dinners Public · Version 1 of 1 Who may see each part Where each part runs YAML Checks No mistakes ` +
         `${CHECKS_INTRO} ` +
-        "security.yaml Checked by AWML v0.4.0 awml check No mistakes " +
-        "platform.yaml Checked by AWML v0.4.0 awml check No mistakes " +
+        "security.yaml Checked by AWML v0.5.0 awml check No mistakes " +
+        "platform.yaml Checked by AWML v0.5.0 awml check No mistakes " +
         CHECKS_END,
     );
     expect(page.html).toContain(
-      'href="https://github.com/chrismdp/awml/blob/73e8353265d7eb71559e50ac29961ff581343708/SPEC.md#the-file-format"',
+      'href="https://github.com/chrismdp/awml/blob/06a5ad5214535381748a18dc6b04ea892d6fb3a3/SPEC.md#the-file-format"',
     );
     expect(page.html).not.toContain("<figure");
     expect(page.html).not.toContain("<pre");
@@ -500,8 +500,8 @@ describe("a workflow's Checks view", () => {
     expect(page.status).toBe(200);
     expect(tabs(page.html)[3]).toEqual({ href: `/${o}/dinners/checks`, label: "Checks 1 mistake", selected: true });
     expect(text(page.html)).toContain(
-      `security.yaml Checked by AWML v0.4.0 awml check 1 mistake ${mistake} ` +
-        "platform.yaml Checked by AWML v0.4.0 awml check No mistakes",
+      `security.yaml Checked by AWML v0.5.0 awml check 1 mistake ${mistake} ` +
+        "platform.yaml Checked by AWML v0.5.0 awml check No mistakes",
     );
     expect(header(page.html)).toBe(`${o} / dinners The family's dinners Public · Version 1 of 1`);
 
@@ -529,7 +529,7 @@ describe("a workflow's Checks view", () => {
       `/${o}/bins/v/1/checks`,
     ]);
     expect(text(page.html)).toContain(
-      `${CHECKS_INTRO} security.yaml Checked by AWML v0.4.0 awml check No mistakes ${CHECKS_END}`,
+      `${CHECKS_INTRO} security.yaml Checked by AWML v0.5.0 awml check No mistakes ${CHECKS_END}`,
     );
   });
 });
@@ -722,7 +722,7 @@ describe("the tokens page", () => {
 describe("the engine", () => {
   it("names the AWML it was built from: the commit vendor/awml/VERSION gives, and its release", () => {
     const vendored = fs.readFileSync(path.join("vendor", "awml", "VERSION"), "utf8").split("\n")[0];
-    expect(engine.version).toEqual({ tag: "v0.4.0", commit: vendored.split(" ")[1] });
+    expect(engine.version).toEqual({ tag: "v0.5.0", commit: vendored.split(" ")[1] });
   });
 
   it("gives the verdict, summary and drawing the native awml gives", async () => {

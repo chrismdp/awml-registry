@@ -73,7 +73,7 @@ describe("a workflow's Versions list", () => {
     await db.update(version).set({ pushedAt: OCT_18 }).where(eq(version.number, 1));
 
     const latest = versionsOf((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html);
-    expect(latest.lines[0]).toMatch(new RegExp(`^#3 · ${o} · Today \\d{1,2}:\\d{2}(am|pm) · 0\\.4$`));
+    expect(latest.lines[0]).toMatch(new RegExp(`^#3 · ${o} · Today \\d{1,2}:\\d{2}(am|pm) · 0\\.5$`));
     expect(latest.lines[1]).toMatch(new RegExp(`^#2 · ${o} · (Today|Yesterday|\\d+ \\w{3} \\d{4},) .* · 0\\.3$`));
     expect(latest.lines[2]).toBe(`#1 · ${o} · 18 Oct 2026, 9:12am · 0.2`);
     // The version shown is bold, not a link; the others link to their pages,

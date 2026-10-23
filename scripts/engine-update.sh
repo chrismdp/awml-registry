@@ -35,7 +35,7 @@ dirty=$(git -C "$src" status --porcelain -- '*.go' go.mod go.sum cmd wasm | grep
 # nearest one and how far past it, and the commit.
 printf '{ "tag": "%s", "commit": "%s" }\n' "$(git -C "$src" describe --tags --always "$commit")$dirty" "$commit" > "$out/version.json"
 
-# What the native CLI says, for the tests to compare against: a 0.4 workflow,
+# What the native CLI says, for the tests to compare against: a 0.5 workflow,
 # drawn as its design and as its home implementation; AWML's own file with
 # mistakes, the registry's 0.4 one, fixtures/bad-04.yaml, and its 0.4 file
 # with a warning, fixtures/warning-04.yaml.
@@ -47,6 +47,13 @@ cp "$src/examples/dinners.yaml" "$src/wasm/testdata/bad.yaml" "$fixtures/"
 (cd "$fixtures" && "$tmp/awml" draw dinners.yaml > dinners.mmd)
 (cd "$fixtures" && "$tmp/awml" draw --implementation home dinners.yaml > dinners-home.mmd)
 
+# The same workflow marked 0.4, which the registry still takes, and what the
+# native CLI draws and checks of it. It uses nothing 0.5 added.
+sed 's/^awml: "0\.5"$/awml: "0.4"/' "$fixtures/dinners.yaml" > "$fixtures/dinners-04.yaml"
+grep -q '^awml: "0.4"$' "$fixtures/dinners-04.yaml"
+(cd "$fixtures" && "$tmp/awml" check dinners-04.yaml > dinners-04.check.txt)
+(cd "$fixtures" && "$tmp/awml" draw dinners-04.yaml > dinners-04.mmd)
+
 # Versions stored before the registry took only 0.4 files: a 0.2 pair and a
 # 0.3 security view, kept in fixtures/legacy, and what this AWML says of them.
 legacy="$fixtures/legacy"
@@ -57,7 +64,7 @@ legacy="$fixtures/legacy"
 (cd "$legacy" && "$tmp/awml" draw dinners-platform.yaml > dinners-platform.mmd)
 
 # The fit: a workflow that says what it needs, AWML's example platforms
-# marked 0.4, the only platform descriptions the registry takes, and what
+# marked 0.4, which the registry takes as it takes 0.5, and what
 # `awml fit --json` says of them, for the design and for its office
 # implementation; and the gaps it finds in a workflow that doesn't say.
 rm -rf "$fixtures/platforms"
