@@ -20,7 +20,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 | AI on customer content | None: the registry never sends a workflow to a model. Customers bring their own AI through the MCP server at `/mcp`, which acts as them (see "The MCP server"). |
 | Platforms | A platform is an item of its own, apart from workflows, with an owner, a slug, a visibility and numbered versions that never change. Anyone signed in may publish a public platform, as with a workflow. Private platforms belong to organisations only. Decided 2026-10-22. |
 | Install recipes | A recipe belongs to a platform version: optional Markdown pushed alongside the description. Recipes must not hold secrets. The registry does not scan them for secrets; it stores and serves them and never runs them. Decided 2026-10-22. |
-| Pulling platforms | The API serves every platform version, so a command line can pull them. Pulling platforms with `awml` is a separate change to the CLI. Decided 2026-10-22. |
+| Pulling platforms | The API serves every platform version, so a command line can pull them. Pulling platforms with `awml` is a separate change to the CLI. Decided 2026-10-22. AWML 0.5.0's `awml pull owner/platforms/slug` asks for `/api/v1/{owner}/platforms/{slug}`, so the API serves each platform there too, with the same answer and the same access rules, and keeps `/api/v1/platforms/{owner}/{slug}`. Decided 2026-10-23. |
 | Common platforms | Data, not code. This repo seeds no platforms, so a self-hosted registry starts with none, and nothing in the code knows which platforms are common. Tests use made-up platforms and AWML's example ones. Decided 2026-10-22. |
 | The fit | Only the AWML engine judges where a workflow can run, the same Go package as `awml fit`, so the registry and the CLI give the same answer. Decided 2026-10-22. |
 | Usernames | A person sets their own username, by the rules of an organisation's slug. Workflows and platforms are stored against the account, so they move with the name. A name given up redirects to the new one until a person or an organisation takes it (see "Usernames"). Decided 2026-10-22. |
@@ -58,7 +58,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 
 User slugs and organisation slugs share one namespace. Reserved slugs that no user or organisation may take: `api`, `explore`, `gallery`, `settings`, `login`, `logout`, `signup`, `auth`, `new`, `admin`, `pricing`, `security`, `docs`, `about`, `blog`, `terms`, `privacy`, `help`, `status`, `_next`, `static`, `assets`, `mcp`, `consent`, `platforms`. A workflow may not take the slugs of an owner's own pages: `inventory`, `settings` and `platforms`.
 
-Platforms have a namespace of their own, under `/{owner}/platforms` and `/api/v1/platforms`, so one owner may have a workflow and a platform with the same slug.
+Platforms have a namespace of their own, under `/{owner}/platforms` and `/api/v1/platforms`, so one owner may have a workflow and a platform with the same slug. `/api/v1/{owner}/platforms/{slug}`, where `awml pull` reads a platform, cannot clash with a workflow, as no workflow may take the slug `platforms`.
 
 ## Pages, API and CLI
 
@@ -89,6 +89,7 @@ Platforms have a namespace of their own, under `/{owner}/platforms` and `/api/v1
 | `POST /api/v1/platforms/{owner}/{slug}/versions` | Push a platform version. Body JSON `{"description": "<yaml>", "recipe": "<markdown>"?, "visibility": "public"\|"private"?}`. The description must be marked `awml: "0.4"` or `"0.5"`, and a 0.5 one whose id is `owner/platforms/slug` must give its own address. The first push makes the platform and sets its visibility (default public). Returns 201 with `{owner, slug, number, url}`, `url` being the version's page, `/{owner}/platforms/{slug}/v/{n}` (the API's address until 2026-10-22), 400 with `{errors: [...]}` for an older AWML, or 422 with `{errors: [...]}` |
 | `GET /api/v1/platforms/{owner}/{slug}` | The platform's latest version: label, visibility, number, who pushed it and when, `description`, `recipe` (or null), and the list of versions |
 | `GET /api/v1/platforms/{owner}/{slug}/v/{n}` | One platform version, the same way, without the list |
+| `GET /api/v1/{owner}/platforms/{slug}`, `GET /api/v1/{owner}/platforms/{slug}/v/{n}` | The same answers as `GET /api/v1/platforms/{owner}/{slug}` and its `/v/{n}`, at the address `awml pull owner/platforms/slug` asks for, under the same access rules. Added on 2026-10-23 |
 | `/platforms` | The shared platforms: every platform the viewer may see, newest first, searched by label or slug. Linked from an owner's platforms page when it has none |
 | `/{owner}/platforms/{slug}` | A platform's latest version, under a header of `{owner} / platforms / {slug}`, its label, public or private and the version, and the description's top comment. Its first tab, What it offers, gives each field in plain words with the comment above it in the file under it, its web addresses as links. Beside it, the `awml fit` command to check a workflow against it, and the list of versions. 404 to anyone who may not see it |
 | `/{owner}/platforms/{slug}/recipe`, `/{owner}/platforms/{slug}/yaml` | The latest version's install recipe as HTML, any raw HTML in it shown as text, or a line saying it has none; and its description as text, with a Copy button and a Download link |
@@ -101,6 +102,7 @@ Platforms have a namespace of their own, under `/{owner}/platforms` and `/api/v1
 | `awml login` | Asks for a token made on the website, and saves it in `~/.config/awml/credentials`, readable only by its owner |
 | `awml push owner/slug workflow.yaml [--private]` | Checks the file locally, then pushes it |
 | `awml pull owner/slug[@n] [-o dir]` | Downloads the files of the latest version, or of version n. awml 0.5.0 writes a 0.4 or 0.5 version, whose API answer has `files.workflow`, as `<slug>.yaml`, and a version stored before as `security.yaml` and `platform.yaml` |
+| `awml pull owner/platforms/slug [-o dir]` | awml 0.5.0 downloads a platform's latest description from `GET /api/v1/{owner}/platforms/{slug}` and writes it. Served from 2026-10-23 |
 | `/mcp` | The MCP server, streamable HTTP (see "The MCP server") |
 | `/.well-known/oauth-protected-resource[/mcp]` | Where `/mcp` says its sign-in lives (RFC 9728) |
 | `/.well-known/oauth-authorization-server[/api/auth]` | The sign-in server's metadata (RFC 8414): registration, authorisation and token endpoints under `/api/auth/oauth2/`, and `client_id_metadata_document_supported` |
@@ -147,7 +149,7 @@ A user's own private workflows have the same boundaries, under "A user's own pri
 | Invalid token | A revoked or made-up token gets the same 401 for the user's private, public and missing workflow, on reads and a push |
 | The limit | A first private push that reaches the edition's limit is allowed and the one over it refused with the message above, while new versions, public workflows and an organisation's private ones are not limited; the default edition has no limit |
 
-Private platforms follow exactly these rules, through the same push rules (`src/server/push.ts`) and the same member check. Their tests are under "Private platforms" in `test/security.test.ts`:
+Private platforms follow exactly these rules, through the same push rules (`src/server/push.ts`) and the same member check. Their tests are under "Private platforms" in `test/security.test.ts`. Each read is tested at both API addresses, `/api/v1/platforms/{owner}/{slug}` and `/api/v1/{owner}/platforms/{slug}`, with their versions, and "At the address awml pull asks for" shows the second answering exactly as the first for every reader (from 2026-10-23):
 
 | Boundary | Test |
 |---|---|
@@ -292,7 +294,9 @@ This repo seeds no platforms. AWML's example platforms are in `test/fixtures/pla
 
 **Pages.** `/{owner}/platforms` lists an owner's platforms, and `/platforms` the shared ones (see "Pages, API and CLI"). An owner with no platforms gets a page that says what a platform description is, field by field, and that `awml fit` checks workflows against it; to those who may add one there, it also gives the registry's MCP address with a request to ask their own AI (add a platform, then fit a workflow against it), the API command that pushes the file, and that each change is a new version and the fit uses the latest. Under a list, members get the same help in short. Added on 2026-10-22.
 
-Not yet: a page for where a workflow can run; pulling platforms with `awml pull`. AWML 0.5.0's `awml pull owner/platforms/slug` asks for `/api/v1/{owner}/platforms/{slug}`, which the registry does not serve: its platform API is at `/api/v1/platforms/{owner}/{slug}`.
+**Pulling.** AWML 0.5.0's `awml pull owner/platforms/slug` asks for `/api/v1/{owner}/platforms/{slug}`, and the registry answers there as it does at `/api/v1/platforms/{owner}/{slug}`: a private platform is a 404 to anyone outside its organisation, as a missing one is. Added on 2026-10-23.
+
+Not yet: a page for where a workflow can run.
 
 ## AWML 0.4 and 0.5 files
 

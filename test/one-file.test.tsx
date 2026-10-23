@@ -565,6 +565,20 @@ describe("fitting a workflow", () => {
       return olive;
     }
 
+    it("serves acme/platforms/ops-runner at /api/v1/acme/platforms/ops-runner, where awml pull asks for it", async () => {
+      const olive = await acme();
+      for (const [pull, old] of [
+        ["/api/v1/acme/platforms/ops-runner", "/api/v1/platforms/acme/ops-runner"],
+        ["/api/v1/acme/platforms/ops-runner/v/1", "/api/v1/platforms/acme/ops-runner/v/1"],
+      ]) {
+        const res = await request("GET", pull, { as: { token: olive.token } });
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body).toMatchObject({ owner: "acme", slug: "ops-runner", number: 1, description: opsRunner });
+        expect(body).toEqual(await (await request("GET", old, { as: { token: olive.token } })).json());
+      }
+    });
+
     it("fits a 0.5 workflow's block named acme/platforms/ops-runner against acme's stored ops-runner, with no network", async () => {
       const olive = await acme();
       const file = placedAt("acme/platforms/ops-runner");
