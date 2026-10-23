@@ -30,7 +30,30 @@ If the change needs the maintainer's eyes, write BUILD_DIR/review.md and say why
 eyes if you made a decision the issue and its comments didn't settle, chose between options,
 changed behaviour beyond what the issue asks, or aren't sure. Otherwise don't write that file.
 Your note can send a change to review, but it can never skip a review required by the build rules.
+Write it in GitHub Markdown for the reviewer, with each decision as its own bullet and what you'd
+like them to look at, and don't wrap lines by hand. It goes into the pull request as you wrote it.
 
-Finally, write BUILD_DIR/message.md: a first line under 70 characters saying what changed, a blank
-line, then plainly what changed and why, as a commit message in this repository would. Don't add
+If the change alters what any page shows, write BUILD_DIR/pictures.json, naming each page it
+alters, at most 20. A later job pictures each one on main and with your change, at desktop width
+and at phone width, in a registry filled by scripts/seed-pictures.ts: read that file for the
+people, organisation, workflows and platforms there are, and so which paths to name, such as
+`/acme/dinners` or `/acme/platforms/worker`. Each page is
+`{"path": "/acme/dinners", "as": "visitor"}`, where "as" is "visitor", someone signed out, or
+"owner", ana signed in, which pages such as `/settings` and private ones need. If what changed only
+shows when someone uses the page, such as a drawing being zoomed or a menu opening, also give
+"moves", at most 10, each one of `{"scroll": "<selector>"}`, `{"click": "<selector>"}`,
+`{"press": "<key>", "on": "<selector>"}`, `{"drag": "<selector>", "by": [x, y]}` or
+`{"wait": <milliseconds, up to 5000>}`; that page is then recorded as a GIF of those moves. If your
+change needs data the seed doesn't make to show, add it to scripts/seed-pictures.ts and its test.
+If the change alters no page, as a change to the server alone, the tests or the workflows doesn't,
+don't write the file.
+
+Write BUILD_DIR/message.md: a first line under 70 characters saying what changed, a blank line,
+then plainly what changed and why, as a commit message in this repository would. Don't add
 "Closes"; the next job adds it.
+
+Finally, write BUILD_DIR/pull-request.md, the pull request's description, in GitHub Markdown with
+no hard wrapping: each paragraph and each bullet on one line. Open with a short paragraph saying
+what the change does and why. Then `## What changed`, as bullets. Then `## Decisions`, as bullets,
+only if you made decisions the issue and its comments didn't settle. Leave out a title, review
+reasons, pictures, checks and "Closes": the next job adds them.

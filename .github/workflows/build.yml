@@ -5,23 +5,40 @@
 # Only people with write access and the repository's app can add a label, so the label is the
 # decision. Claude works in the first job with a read-only token, sees only the issue and the
 # comments of the repository's own people, and hands back a patch. A second read-only job applies
-# that patch and runs the same checks as ci.yml: npm ci, typecheck, lint and test. Both later jobs
+# that patch and runs the same checks as ci.yml: npm ci, typecheck, lint and test. The later jobs
 # start from the commit of main the draft started from, so the patch still applies when main moves
 # during a long draft, and the pull request catches up like any other. The write-capable job runs
 # none of the proposed code and installs nothing. It judges a passing patch against
 # .github/build-rules.yml with scripts/build-rule.ts, both as they are on main, and opens the pull
-# request. A change that needs review stays open, and the person who added the label is asked to
-# review it, or the repository's owner when the app added the label. A straightforward change is set
-# to merge by itself once CI passes, saying why and how to undo it. Main's rule holds every merge
-# until CI has passed on the branch.
+# request.
 #
-# The repository's GitHub App pushes the branch, opens the pull request and sets the merge, because
-# GitHub starts other workflows from what an app does but not from what the Actions token does. So
-# CI runs on the pull request and shows on it, and the merge starts CI on main and the conflict
-# rebase workflow, as a person's merge would. The job mints the app's token, for this repository
-# alone, from the FACTORY_APP_ID and FACTORY_APP_KEY secrets and gives it only to the steps that
-# write with it. Review requests, comments and the retry's dispatch use the Actions token. Claude's
-# job never gets the app's token.
+# A change that alters what a page shows is pictured, before and after. Claude names the pages in
+# pictures.json beside its patch. Once the checks pass, a third read-only job runs
+# .github/picture-pages.sh as it is on main. It builds and serves the registry from main and then
+# from the change, fills each with the same people, workflows and platforms from
+# scripts/seed-pictures.ts, and pictures each page at desktop width, 1280 pixels, and at phone
+# width, 390. A page that moves when someone uses it, such as a drawing being zoomed, is recorded
+# as a GIF of the moves Claude lists. Any other page is a still PNG of the whole page. A change for
+# which Claude names no pages, such as one to the server alone, the tests or the workflows, skips
+# that job. The write-capable job checks every picture, pushes them to the factory-media branch,
+# which holds only pictures, and shows them in the pull request. If a picture fails a check, or the
+# pictures job fails, all the pictures are left out and the description says why. The change
+# still goes ahead.
+#
+# Claude writes the pull request's description in Markdown. The write-capable job puts why the
+# change needs review, and Claude's note, above it, and the pictures and the checks below it. A
+# change that needs review stays open, and the person who added the label is asked to review it,
+# or the repository's owner when the app added the label. A straightforward change is set to merge
+# by itself once CI passes, saying why and how to undo it. Main's rule holds every merge until CI
+# has passed on the branch.
+#
+# The repository's GitHub App pushes the branch and the pictures, opens the pull request and sets
+# the merge, because GitHub starts other workflows from what an app does but not from what the
+# Actions token does. So CI runs on the pull request and shows on it, and the merge starts CI on
+# main and the conflict rebase workflow, as a person's merge would. The job mints the app's token,
+# for this repository alone, from the app's two secrets and gives it only to the steps that write
+# with it. Review requests, comments and the retry's dispatch use the Actions token. Claude's job
+# never gets the app's token.
 #
 # A build can also be started by hand, by dispatching this one with the issue's number. A build that
 # fails its checks, or whose draft fails or runs out of time, starts itself again by dispatch, up to
@@ -29,13 +46,17 @@
 # failing check's output, so Claude fixes what failed rather than starting over. After the third try
 # it comments on the issue with the reason instead. A draft in which Claude changed nothing isn't
 # tried again: it comments with Claude's message. The retry job only reads results and calls the
-# GitHub API, and runs nothing from the change.
+# GitHub API, and runs nothing from the change. Pictures that fail don't start another try.
 #
-# It needs a CLAUDE_CODE_OAUTH_TOKEN secret, made with `claude setup-token`, so the runs come out
-# of the maintainer's subscription rather than a metered API key. The app must be installed on this
-# repository with read and write access to contents, pull requests and issues. The `build` label
-# must exist, auto-merge must be allowed in the repository's settings, and main's ruleset must
-# require CI's checks, since that rule is what holds a merge the app sets.
+# Before it works, a repository needs:
+# - a GitHub App with read and write access to contents, pull requests and issues, installed on the
+#   repository, with its app id in a FACTORY_APP_ID secret and a private key in FACTORY_APP_KEY;
+# - a CLAUDE_CODE_OAUTH_TOKEN secret, made with `claude setup-token`, so the runs come out of the
+#   maintainer's subscription rather than a metered API key;
+# - a build label;
+# - "Allow auto-merge" turned on in the repository's general settings;
+# - a ruleset on main that requires CI's test check, since that rule is what holds a merge the app
+#   sets. It must cover main alone, so that the app can push the factory-media branch.
 name: Build from an issue
 
 on:
@@ -82,6 +103,7 @@ jobs:
       issues: read
     outputs:
       changed: ${{ steps.patch.outputs.changed }}
+      pictures: ${{ steps.patch.outputs.pictures }}
     steps:
       - name: Check the inputs
         run: |
@@ -154,6 +176,8 @@ jobs:
               "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" \
               "Bash(ls:*)" "Bash(cp:*)" "Bash(mkdir:*)"
 
+      # The pages are pictured unless Claude named none: no pictures.json, or an empty list. A
+      # pictures.json that isn't a list still starts the pictures job, which says what is wrong.
       - name: Make the patch
         id: patch
         run: |
@@ -165,6 +189,12 @@ jobs:
             echo "Claude changed nothing:"; cat "$RUNNER_TEMP/build/message.md" 2>/dev/null || true
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
+          pages="$RUNNER_TEMP/build/pictures.json"
+          if [ -f "$pages" ] && ! jq -e 'type == "array" and length == 0' "$pages" > /dev/null 2>&1; then
+            echo "pictures=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pictures=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -172,7 +202,9 @@ jobs:
           path: |
             ${{ runner.temp }}/build/change.patch
             ${{ runner.temp }}/build/message.md
+            ${{ runner.temp }}/build/pull-request.md
             ${{ runner.temp }}/build/review.md
+            ${{ runner.temp }}/build/pictures.json
 
   check:
     needs: draft
@@ -240,8 +272,51 @@ jobs:
           name: result
           path: ${{ runner.temp }}/result
 
-  open:
+  # Runs the registry itself, from main and from the change, so like the check job it can only
+  # read, and the open job checks every picture it hands back. It starts once the checks have
+  # passed, so it never pictures a change that won't be opened.
+  pictures:
     needs: [draft, check]
+    if: needs.check.result == 'success' && needs.draft.outputs.pictures == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: change
+          path: ${{ runner.temp }}/change
+
+      # The script applies the change to this checkout part way through, so main's copies run from
+      # outside it, the same for both sides.
+      - name: Take the picture scripts from main
+        run: cp .github/picture-pages.sh .github/picture-pages.mjs "$RUNNER_TEMP/"
+
+      - name: Picture the pages before and after
+        env:
+          CHROME: /usr/bin/google-chrome
+        run: |
+          bash "$RUNNER_TEMP/picture-pages.sh" "$RUNNER_TEMP/change/pictures.json" \
+            "$RUNNER_TEMP/change/change.patch" "$RUNNER_TEMP/pictures"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pictures
+          path: ${{ runner.temp }}/pictures
+
+  open:
+    needs: [draft, check, pictures]
     if: ${{ always() && needs.draft.result == 'success' && needs.draft.outputs.changed == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -291,6 +366,84 @@ jobs:
             exit 1
           fi
 
+      - uses: actions/download-artifact@v4
+        if: needs.pictures.result == 'success'
+        with:
+          name: pictures
+          path: ${{ runner.temp }}/pictures
+
+      # The pictures job ran the change's own code, so its pictures are taken on trust only as far
+      # as this: every field and path is checked, and only PNG and GIF files under the size cap are
+      # kept. If any picture fails, all are left out and the description says why, since the change
+      # itself is still good.
+      - name: Check the pictures
+        id: pictures
+        env:
+          PICTURES_JOB: ${{ needs.pictures.result }}
+        run: |
+          pictures="$RUNNER_TEMP/pictures/pictures"
+          media="$RUNNER_TEMP/media"
+          mkdir -p "$media"
+          : > "$RUNNER_TEMP/pictures.txt"
+          : > "$RUNNER_TEMP/pictures-left-out.txt"
+          leave_out() {
+            echo "::warning::$1"
+            echo "$1" > "$RUNNER_TEMP/pictures-left-out.txt"
+            : > "$RUNNER_TEMP/pictures.txt"
+            rm -rf "$media"
+            echo "count=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          safe_path() {
+            case "$1" in ''|/*|*..*|*[!A-Za-z0-9._/-]*) return 1 ;; esac
+          }
+          safe_page() {
+            case "$1" in /*) ;; *) return 1 ;; esac
+            case "$1" in *..*|*[!A-Za-z0-9._~/?=\&%-]*) return 1 ;; esac
+          }
+          # A picture the job couldn't take is "", and is shown as such.
+          take() {
+            [ -n "$1" ] || return 0
+            safe_path "$1" || return 1
+            case "$1" in
+              *.png) magic=89504e470d0a1a0a ;;
+              *.gif) magic=474946383961 ;;
+              *) return 1 ;;
+            esac
+            [ -f "$pictures/$1" ] && [ ! -L "$pictures/$1" ] || return 1
+            [ "$(stat -c %s "$pictures/$1")" -le $((5 * 1024 * 1024)) ] || return 1
+            [ "$(head -c $(( ${#magic} / 2 )) "$pictures/$1" | od -An -tx1 | tr -d ' \n')" = "$magic" ] || return 1
+            mkdir -p "$(dirname "$media/$1")"
+            cp "$pictures/$1" "$media/$1"
+          }
+          case "$PICTURES_JOB" in
+            skipped) echo "count=0" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            success) ;;
+            *) leave_out "The pictures job didn't finish, so no page was pictured." ;;
+          esac
+          [ -f "$pictures/manifest.json" ] || leave_out "The pictures job made no manifest."
+          # A bar can't be in a checked field, so it parts the fields where a tab, being blank, wouldn't.
+          rows="$(jq -r '
+            if type == "array" and all(.[]; type == "object" and
+                ([.page, .as, .width, .before, .after] | all(type == "string" and test("^[A-Za-z0-9._~/?=&%-]*$"))))
+            then .[] | [.page, .as, .width, .before, .after] | join("|")
+            else error("not a list of pictures") end
+          ' "$pictures/manifest.json")" || leave_out "The pictures' manifest could not be read."
+          count=0
+          while IFS='|' read -r page as width before after; do
+            [ -n "$page$as$width$before$after" ] || continue
+            safe_page "$page" || leave_out "The pictures' manifest names a page that isn't a plain path."
+            case "$as" in visitor|owner) ;; *) leave_out "The pictures' manifest names a viewer other than visitor or owner." ;; esac
+            case "$width" in desktop|phone) ;; *) leave_out "The pictures' manifest names a width other than desktop or phone." ;; esac
+            take "$before" || leave_out "A before picture of \`$page\` isn't a PNG or GIF under 5 MB at a plain path."
+            take "$after" || leave_out "An after picture of \`$page\` isn't a PNG or GIF under 5 MB at a plain path."
+            [ -z "$before" ] || count=$((count + 1))
+            [ -z "$after" ] || count=$((count + 1))
+            [ "$count" -le 80 ] || leave_out "There are more than 80 pictures, too many to show."
+            printf '%s|%s|%s|%s|%s\n' "$page" "$as" "$width" "$before" "$after" >> "$RUNNER_TEMP/pictures.txt"
+          done <<< "$rows"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
       - name: Make the app's token
         id: app
         uses: actions/create-github-app-token@v1
@@ -308,8 +461,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           id="$(gh api "users/$APP_SLUG%5Bbot%5D" --jq .id)"
-          echo "name=$APP_SLUG[bot]" >> "$GITHUB_OUTPUT"
-          echo "email=$id+$APP_SLUG[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+          echo "name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
+          echo "email=$id+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
 
       - name: Apply and commit the change
         id: commit
@@ -321,10 +474,10 @@ jobs:
           node --experimental-strip-types "$RUNNER_TEMP/build-rule.mts" --repo . \
             --rules "$RUNNER_TEMP/build-rules.yml" --review "$RUNNER_TEMP/change/review.md" \
             > "$RUNNER_TEMP/verdict.txt"
-          message="$RUNNER_TEMP/change/message.md"
+          message="$RUNNER_TEMP/commit.md"
+          cat "$RUNNER_TEMP/change/message.md" > "$message" 2> /dev/null || true
           [ -s "$message" ] || echo "Build #$ISSUE" > "$message"
           printf '\n\nCloses #%s\n' "$ISSUE" >> "$message"
-          cp "$message" "$RUNNER_TEMP/pull-request.md"
           branch="build/issue-$ISSUE"
           git config user.name "$BOT_NAME"
           git config user.email "$BOT_EMAIL"
@@ -341,22 +494,40 @@ jobs:
             -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
             push --force origin "HEAD:refs/heads/$BRANCH"
 
-      - name: Open or update the pull request
-        id: pull
+      # The pictures go to the factory-media branch, which holds nothing else and shares no history
+      # with main. Each try adds a commit with its own folder, so the links in older descriptions
+      # keep working.
+      - name: Push the pictures to the factory-media branch
+        if: steps.pictures.outputs.count != '0'
         env:
-          BRANCH: ${{ steps.commit.outputs.branch }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          title="$(head -n 1 "$RUNNER_TEMP/pull-request.md")"
-          if gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh pr edit "$BRANCH" --repo "$GITHUB_REPOSITORY" \
-              --title "$title" --body-file "$RUNNER_TEMP/pull-request.md"
-          else
-            gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" \
-              --title "$title" --body-file "$RUNNER_TEMP/pull-request.md"
-          fi
-          number="$(gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json number --jq .number)"
-          echo "number=$number" >> "$GITHUB_OUTPUT"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/media.index"
+          parent=""
+          status=0
+          git -c http.https://github.com/.extraheader="$auth" \
+            ls-remote --exit-code origin refs/heads/factory-media > /dev/null || status=$?
+          case "$status" in
+            0)
+              git -c http.https://github.com/.extraheader="$auth" \
+                fetch --no-tags --depth=1 origin refs/heads/factory-media
+              parent="$(git rev-parse FETCH_HEAD)"
+              git read-tree "$parent"
+              ;;
+            2) git read-tree --empty ;;
+            *) echo "Could not read the factory-media branch."; exit 1 ;;
+          esac
+          (cd "$RUNNER_TEMP/media" && find . -type f \( -name '*.png' -o -name '*.gif' \) | sed 's|^\./||') |
+          while IFS= read -r path; do
+            blob="$(git hash-object -w "$RUNNER_TEMP/media/$path")"
+            git update-index --add --cacheinfo "100644,$blob,issue-$ISSUE/attempt-$ATTEMPT/$path"
+          done
+          tree="$(git write-tree)"
+          commit="$(git commit-tree "$tree" ${parent:+-p "$parent"} \
+            -m "Pictures for #$ISSUE, attempt $ATTEMPT")"
+          git -c core.hooksPath=/dev/null -c http.https://github.com/.extraheader="$auth" \
+            push origin "$commit:refs/heads/factory-media"
 
       - name: Read the verdict
         id: verdict
@@ -373,23 +544,110 @@ jobs:
               ;;
           esac
 
+      # The description opens with why the change needs review, then Claude's note as written, or
+      # with one line saying it merges by itself. Then Claude's description, the pictures, the
+      # checks, and the issue it closes.
+      - name: Write the pull request's description
+        env:
+          VERDICT: ${{ steps.verdict.outputs.verdict }}
+        run: |
+          change="$RUNNER_TEMP/change"
+          media_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/raw/factory-media/issue-$ISSUE/attempt-$ATTEMPT"
+          title="$(head -n 1 "$change/message.md" 2> /dev/null || true)"
+          [ -n "$title" ] || title="Build #$ISSUE"
+          printf '%s\n' "$title" > "$RUNNER_TEMP/title.txt"
+          cell() {
+            if [ -n "$2" ]; then
+              printf '![%s](%s/%s)' "$1" "$media_url" "$2"
+            else
+              printf "Couldn't be pictured"
+            fi
+          }
+          {
+            if [ "$VERDICT" = review ]; then
+              echo "## Needs your review because"
+              echo
+              while IFS= read -r line; do
+                [ -n "$line" ] && printf -- '- %s\n' "$line"
+              done < "$RUNNER_TEMP/reasons.txt"
+              if [ -s "$change/review.md" ] && grep -q '[^[:space:]]' "$change/review.md"; then
+                echo
+                echo "### Claude's note"
+                echo
+                cat "$change/review.md"
+              fi
+            else
+              printf 'Merges by itself once CI passes, because the build rule found it straightforward: %s\n' \
+                "$(grep -v '^$' "$RUNNER_TEMP/reasons.txt" | paste -sd ' ')"
+            fi
+            echo
+            if [ -s "$change/pull-request.md" ]; then
+              cat "$change/pull-request.md"
+            else
+              tail -n +2 "$change/message.md" 2> /dev/null | sed '/./,$!d'
+            fi
+            if [ -s "$RUNNER_TEMP/pictures.txt" ]; then
+              echo
+              echo "## Pictures"
+              echo
+              echo "Before is main and after is this change, each filled with the data from \`scripts/seed-pictures.ts\`."
+              shown=""
+              while IFS='|' read -r page as width before after; do
+                if [ "$width" = desktop ] || [ "$page|$as" != "$shown" ]; then
+                  case "$as" in owner) who="signed in as ana" ;; *) who="signed out" ;; esac
+                  case "$before|$after" in *.gif*) who="$who, as someone uses it" ;; esac
+                  # shellcheck disable=SC2016 # The backticks are Markdown.
+                  printf '\n### `%s`, %s\n' "$page" "$who"
+                  shown="$page|$as"
+                fi
+                case "$width" in
+                  desktop) printf '\nDesktop, 1280 pixels wide:\n\n' ;;
+                  *) printf '\nPhone, 390 pixels wide:\n\n' ;;
+                esac
+                echo "| Before | After |"
+                echo "| --- | --- |"
+                printf '| %s | %s |\n' "$(cell Before "$before")" "$(cell After "$after")"
+              done < "$RUNNER_TEMP/pictures.txt"
+            elif [ -s "$RUNNER_TEMP/pictures-left-out.txt" ]; then
+              echo
+              echo "## Pictures"
+              echo
+              printf 'The pictures were left out. %s\n' "$(cat "$RUNNER_TEMP/pictures-left-out.txt")"
+            fi
+            echo
+            echo "## Checks"
+            echo
+            # shellcheck disable=SC2016 # The backticks are Markdown.
+            printf -- '- The check job applied this change to main at %s and ran `npm ci`, `npm run typecheck`, `npm run lint` and `npm test`. All passed.\n' "$GITHUB_SHA"
+            echo "- CI runs them again on this pull request, and main's rule holds the merge until they pass."
+            echo
+            printf 'Closes #%s\n' "$ISSUE"
+          } > "$RUNNER_TEMP/pull-request.md"
+          cat "$RUNNER_TEMP/pull-request.md"
+
+      - name: Open or update the pull request
+        id: pull
+        env:
+          BRANCH: ${{ steps.commit.outputs.branch }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          title="$(cat "$RUNNER_TEMP/title.txt")"
+          if gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --repo "$GITHUB_REPOSITORY" \
+              --title "$title" --body-file "$RUNNER_TEMP/pull-request.md"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" \
+              --title "$title" --body-file "$RUNNER_TEMP/pull-request.md"
+          fi
+          number="$(gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json number --jq .number)"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
       - name: Ask for a review
         if: steps.verdict.outputs.verdict == 'review'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pull.outputs.number }}
         run: |
-          {
-            cat "$RUNNER_TEMP/pull-request.md"
-            echo
-            echo "Needs your review because:"
-            echo
-            while IFS= read -r line; do
-              [ -n "$line" ] && printf -- '- %s\n' "$line"
-            done < "$RUNNER_TEMP/reasons.txt"
-          } > "$RUNNER_TEMP/review-pull-request.md"
-          gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --body-file "$RUNNER_TEMP/review-pull-request.md"
           reviewer="$REQUESTED_BY"
           case "$reviewer" in
             ''|*[!A-Za-z0-9-]*) reviewer="$GITHUB_REPOSITORY_OWNER" ;;
@@ -445,15 +703,17 @@ jobs:
           if [ "$DRAFT" = success ] && [ "$CHANGED" != true ]; then
             gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" -n change -D "$here/change" || true
             {
-              echo "The build changed nothing, so it won't be tried again. Claude said:"
+              echo "**The build changed nothing, so it won't be tried again.**"
               echo
               if [ -s "$here/change/message.md" ]; then
+                echo "- Claude left the code as it was, and said why:"
+                echo
                 cat "$here/change/message.md"
               else
-                echo "Nothing; it left no message."
+                echo "- Claude left the code as it was, and left no message saying why."
               fi
               echo
-              echo "The run: $run_url"
+              echo "[The run]($run_url)"
             } > "$here/comment.md"
             gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$here/comment.md"
             exit 0
@@ -480,23 +740,24 @@ jobs:
           fi
 
           {
-            echo "The build failed three times, so it has stopped. The last try failed because:"
+            echo "**The build failed three times, so it has stopped.**"
             echo
-            echo "$reason"
+            printf -- '- The last try failed because: %s\n' "$reason"
+            echo "- To start afresh, remove the build label and add it again."
             if [ -s "$here/result/output.txt" ]; then
               tail -n 50 "$here/result/output.txt" > "$here/output.txt"
               longest="$(grep -o '`*' "$here/output.txt" | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')"
               fence="$(printf '%*s' "$(( longest >= 3 ? longest + 1 : 3 ))" '' | tr ' ' '`')"
               echo
-              echo "The end of its output:"
+              echo "<details><summary>Output</summary>"
               echo
               echo "$fence"
               cat "$here/output.txt"
               echo "$fence"
+              echo
+              echo "</details>"
             fi
             echo
-            echo "The run: $run_url"
-            echo
-            echo "To start afresh, remove the build label and add it again."
+            echo "[The run]($run_url)"
           } > "$here/comment.md"
           gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$here/comment.md"
