@@ -14,7 +14,7 @@ working tree.
   package.json with both sides' dependencies, and add it.
 - Keep docs/SPEC.md and its "Access" rules true to both sides: a private workflow or platform stays
   visible only to its organisation's members, and the tests for each boundary stay.
-- Add the resolved files and run `GIT_EDITOR=true git rebase --continue`. Repeat this for every
+- Add the resolved files and run `git rebase --continue`. Repeat this for every
   commit that stops with conflicts, until the rebase finishes.
 - At the end, run `npm ci`, `npm run typecheck`, `npm run lint` and `npm test` until they all pass.
 - Don't push. A later job checks and pushes the rebased commits.
