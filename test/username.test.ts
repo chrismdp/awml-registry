@@ -417,6 +417,8 @@ describe("the old address", () => {
       "/api/v1/ana/dinners/v/1?view=security",
       "/api/v1/platforms/ana/worker",
       "/api/v1/platforms/ana/worker/v/1",
+      "/api/v1/ana/platforms/worker",
+      "/api/v1/ana/platforms/worker/v/1",
       "/ana/platforms/worker/v/1/description.yaml",
     ]) {
       const res = await request("GET", path);

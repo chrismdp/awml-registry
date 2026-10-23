@@ -459,12 +459,22 @@ async function platformReads(owner: string, slug: string, as: Who) {
   return {
     api: await status(`/api/v1/platforms/${owner}/${slug}`),
     versionApi: await status(`/api/v1/platforms/${owner}/${slug}/v/1`),
+    // The address awml pull asks for, owner/platforms/slug.
+    pullApi: await status(`/api/v1/${owner}/platforms/${slug}`),
+    pullVersionApi: await status(`/api/v1/${owner}/platforms/${slug}/v/1`),
     description: await status(`/${owner}/platforms/${slug}/v/1/description.yaml`),
     recipe: await status(`/${owner}/platforms/${slug}/v/1/recipe.md`),
   };
 }
 
-const allPlatformReads = (status: number) => ({ api: status, versionApi: status, description: status, recipe: status });
+const allPlatformReads = (status: number) => ({
+  api: status,
+  versionApi: status,
+  pullApi: status,
+  pullVersionApi: status,
+  description: status,
+  recipe: status,
+});
 
 async function auditRows(action: "push" | "private_view") {
   const db = await getDb();
@@ -512,6 +522,8 @@ describe("Private platforms", () => {
       for (const as of [{ token: nell.token }, undefined]) {
         for (const [hidden, missing] of [
           ["/api/v1/platforms/acme/back-office", "/api/v1/platforms/acme/nothing-here"],
+          ["/api/v1/acme/platforms/back-office", "/api/v1/acme/platforms/nothing-here"],
+          ["/api/v1/acme/platforms/back-office/v/1", "/api/v1/acme/platforms/nothing-here/v/1"],
           ["/acme/platforms/back-office/v/1/description.yaml", "/acme/platforms/nothing-here/v/1/description.yaml"],
         ]) {
           const a = await request("GET", hidden, { as });
@@ -544,6 +556,52 @@ describe("Private platforms", () => {
       expect(res.status).toBe(404);
       const read = await (await request("GET", "/api/v1/platforms/acme/back-office", { as: { token: olive.token } })).json();
       expect(read.versions).toHaveLength(1);
+    });
+  });
+
+  describe("At the address awml pull asks for", () => {
+    it("/api/v1/{owner}/platforms/{slug} answers as /api/v1/platforms/{owner}/{slug} does, for every reader", async () => {
+      const { mo, nell, bea } = await platforms();
+      const cases = [
+        ["beta", "open-box", undefined, 200],
+        ["beta", "open-box", { token: nell.token }, 200],
+        ["acme", "back-office", { token: mo.token }, 200],
+        ["acme", "back-office", { cookie: mo.cookie }, 200],
+        ["acme", "back-office", { token: nell.token }, 404],
+        ["acme", "back-office", { token: bea.token }, 404],
+        ["acme", "back-office", undefined, 404],
+        ["acme", "nothing-here", { token: mo.token }, 404],
+      ] as const;
+      for (const [owner, slug, as, status] of cases) {
+        for (const [old, pull] of [
+          [`/api/v1/platforms/${owner}/${slug}`, `/api/v1/${owner}/platforms/${slug}`],
+          [`/api/v1/platforms/${owner}/${slug}/v/1`, `/api/v1/${owner}/platforms/${slug}/v/1`],
+        ]) {
+          const a = await request("GET", old, { as });
+          const b = await request("GET", pull, { as });
+          expect([b.status, await b.text()]).toEqual([status, await a.text()]);
+        }
+      }
+    });
+
+    it("serves a platform named versions, while a push there is still a workflow push refused for its reserved slug", async () => {
+      const { olive } = await platforms();
+      expect((await pushPlatform("acme", "versions", { token: olive.token }, { description: backOffice })).status).toBe(201);
+      const read = await request("GET", "/api/v1/acme/platforms/versions", { as: { token: olive.token } });
+      expect([read.status, (await read.json()).slug]).toEqual([200, "versions"]);
+      const push = await request("POST", "/api/v1/acme/platforms/versions", {
+        as: { token: olive.token },
+        json: { workflow: clientEmail },
+      });
+      expect([push.status, (await push.json()).errors]).toEqual([422, ['"platforms" is reserved.']]);
+    });
+
+    it("gives a member the private platform's description, and records the view", async () => {
+      const { mo } = await platforms();
+      const res = await request("GET", "/api/v1/acme/platforms/back-office", { as: { token: mo.token } });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ description: backOffice, recipe, visibility: "private", number: 1 });
+      expect(await auditRows("private_view")).toEqual(["platforms/acme/back-office v1"]);
     });
   });
 
@@ -740,6 +798,9 @@ describe("Private platforms", () => {
         await answer("GET", "/api/v1/platforms/beta/open-box"),
         await answer("GET", "/api/v1/platforms/acme/nothing-here"),
         await answer("GET", "/api/v1/platforms/acme/back-office/v/1"),
+        await answer("GET", "/api/v1/acme/platforms/back-office"),
+        await answer("GET", "/api/v1/acme/platforms/back-office/v/1"),
+        await answer("GET", "/api/v1/beta/platforms/open-box"),
         await answer("POST", "/api/v1/platforms/acme/back-office/versions", { description: backOffice }),
         await answer("POST", "/api/v1/fit", { file: clientEmail }),
       ])
