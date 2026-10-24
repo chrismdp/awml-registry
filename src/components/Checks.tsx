@@ -13,11 +13,17 @@ export type CheckRow = {
   listed?: Pick<ListedCheck, "id" | "about" | "result" | "skippedBecause">;
 };
 
-// A file, the checks run on it and the AWML that ran them. `listed` when
-// they are the checks AWML listed at push, one row each; otherwise the file
-// was checked again here by `awml check`, which gives only the mistakes it
-// finds, so it has one row.
-export type CheckedFile = { name: FileName; rows: CheckRow[]; checkedBy: { tag: string; commit: string }; listed: boolean };
+// A file, the checks run on it and the AWML that ran them. Listed, one row
+// per check, "stored" when AWML listed them at push, or "now" when the AWML
+// the registry runs listed them here. Otherwise the file was checked again
+// here by `awml check`, which gives only the mistakes it finds, so it has
+// one row.
+export type CheckedFile = {
+  name: FileName;
+  rows: CheckRow[];
+  checkedBy: { tag: string; commit: string };
+  listed: "stored" | "now" | false;
+};
 
 // The mistakes a row found; a listed check that failed found at least one.
 const mistakesOf = (row: CheckRow) => Math.max(row.mistakes.length, row.listed?.result === "fail" ? 1 : 0);
@@ -50,14 +56,16 @@ function Result({ row }: { row: CheckRow }) {
 // What checking a version's files found, file by file, and the AWML that checked them.
 export function Checks({ title, files }: { title: string; files: CheckedFile[] }) {
   const listed = files.every((f) => f.listed);
+  const now = files.some((f) => f.listed === "now");
   const spec = `https://github.com/chrismdp/awml/blob/${files[0]?.checkedBy.commit}/SPEC.md#the-file-format`;
   return (
     <div className="checks" role="tabpanel" aria-label={`${title}, checks`}>
       <p className="checks-intro">
         {listed ? (
           <>
-            AWML checked this file when it was pushed, and the registry refuses a push with any mistake. Here is each
-            check it ran, in the order its spec gives them.
+            AWML checked this file when it was pushed, and the registry refuses a push with any mistake.{" "}
+            {now && "It is checked again here, by the AWML this registry runs. "}Here is each check it ran, in the order
+            its spec gives them.
           </>
         ) : (
           <>

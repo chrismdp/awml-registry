@@ -1,6 +1,7 @@
 // The registry takes AWML 0.4 and 0.5 files only: one file per workflow
 // version, holding the design and any implementations. Older files are
 // refused at push, and versions stored before stay readable as history.
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { getDb } from "@/db/client";
 import { version } from "@/db/schema";
@@ -545,34 +546,82 @@ describe("every check on the Checks tab", () => {
     expect(page.html).toContain('href="https://github.com/chrismdp/awml/blob/0123abc/SPEC.md#the-file-format"');
   });
 
-  it("leaves a version stored before with no list as it was: one row, awml check, checked again", async () => {
+  it("lists every check now, with the AWML the registry runs, for a version stored with no list, and never stores it", async () => {
     const ana = await person("ana");
     const o = ana.username;
     await push(o, "dinners", { token: ana.token }, { workflow: dinners });
     await (await getDb()).update(version).set({ checks: null });
-    const page = await renderPage(WorkflowChecksPage, { owner: o, slug: "dinners" });
-    expect(checkIds(page.html)).toEqual([]);
-    expect(text(page.html)).toContain(
-      `Each file is checked again here, by the AWML this registry runs. workflow.yaml Checked by AWML ${engine.version.tag} awml check No mistakes ` +
-        "AWML lists the mistakes it finds, not each rule it checks.",
-    );
-    expect(tabs(page.html).at(-1)?.label).toBe("Checks No mistakes");
+    const list = await engine.checks(dinners);
+    for (const page of [
+      await renderPage(WorkflowChecksPage, { owner: o, slug: "dinners" }),
+      await renderPage(VersionChecksPage, { owner: o, slug: "dinners", n: "1" }),
+    ]) {
+      expect(page.status).toBe(200);
+      expect(checkIds(page.html)).toEqual(list.map((c) => c.id));
+      const shown = text(page.html);
+      expect(shown).toContain(
+        `AWML checked this file when it was pushed, and the registry refuses a push with any mistake. ` +
+          `It is checked again here, by the AWML this registry runs. Here is each check it ran, in the order its spec gives them. ` +
+          `workflow.yaml Checked by AWML ${engine.version.tag} `,
+      );
+      for (const c of list.filter((c) => c.result === "pass")) expect(shown, c.id).toContain(`${c.name} ${c.id} Passed ${c.about}`);
+      expect(shown).not.toContain("awml check No mistakes");
+      expect(shown).not.toContain("not each rule it checks");
+      expect(page.html).toContain(`href="https://github.com/chrismdp/awml/blob/${engine.version.commit}/SPEC.md#the-file-format"`);
+      expect(tabs(page.html).at(-1)?.label).toBe("Checks No mistakes");
+    }
+    // The list made now is never written back into the old version.
+    expect(await stored()).toBeNull();
   });
 
-  it("shows what the AWML the registry runs finds when it finds mistakes the stored list did not", async () => {
+  it("keeps showing a stored list as stored, with the AWML that made it, beside a version listed now", async () => {
+    const ana = await person("ana");
+    const o = ana.username;
+    await push(o, "dinners", { token: ana.token }, { workflow: dinners });
+    await push(o, "dinners", { token: ana.token }, { workflow: dinners04 });
+    const db = await getDb();
+    const [first] = await db.select({ id: version.id, checks: version.checks }).from(version).where(eq(version.number, 1));
+    await db.update(version).set({ checks: { ...first.checks!, awml: { tag: "v0.5.0", commit: "0123abc" } } }).where(eq(version.id, first.id));
+    await db.update(version).set({ checks: null }).where(eq(version.number, 2));
+
+    const old = text((await renderPage(VersionChecksPage, { owner: o, slug: "dinners", n: "1" })).html);
+    expect(old).toContain("Here is each check it ran, in the order its spec gives them. workflow.yaml Checked by AWML v0.5.0 ");
+    expect(old).not.toContain("checked again here");
+    const now = text((await renderPage(VersionChecksPage, { owner: o, slug: "dinners", n: "2" })).html);
+    expect(now).toContain(`workflow.yaml Checked by AWML ${engine.version.tag} `);
+  });
+
+  it("shows each check that fails in a version stored with no list, with no tick on its tab", async () => {
     const ana = await person("ana");
     const o = ana.username;
     await push(o, "dinners", { token: ana.token }, { workflow: dinners });
     // Only a newer AWML finding mistakes in a stored file can be like this.
+    await (await getDb()).update(version).set({ workflow: bad, checks: null });
+    const page = await renderPage(WorkflowChecksPage, { owner: o, slug: "dinners" });
+    expect(tabs(page.html).at(-1)?.label).toBe("Checks 2 mistakes");
+    expect(checkIds(page.html)).toEqual((await engine.checks(bad)).map((c) => c.id));
+    const shown = text(page.html);
+    expect(shown).toContain(`Every reference names something in the file references.known 1 mistake`);
+    expect(shown).toContain(badMessages[0]);
+    expect(shown).toContain(badMessages[1]);
+    expect(shown).not.toContain("awml check");
+    expect(shown).not.toContain("not each rule it checks");
+    const drawn = await renderPage(WorkflowPage, { owner: o, slug: "dinners" });
+    expect(text(drawn.html)).toContain("workflow.yaml has 2 mistakes, so it cannot be drawn. See Checks.");
+  });
+
+  it("lists the checks now when the AWML the registry runs finds mistakes the stored list did not", async () => {
+    const ana = await person("ana");
+    const o = ana.username;
+    await push(o, "dinners", { token: ana.token }, { workflow: dinners });
     await (await getDb()).update(version).set({ workflow: bad });
     const page = await renderPage(WorkflowChecksPage, { owner: o, slug: "dinners" });
     expect(tabs(page.html).at(-1)?.label).toBe("Checks 2 mistakes");
-    expect(checkIds(page.html)).toEqual([]);
-    expect(text(page.html)).toContain(
-      `workflow.yaml Checked by AWML ${engine.version.tag} awml check 2 mistakes ${badMessages.join(" ")}`,
-    );
-    const drawn = await renderPage(WorkflowPage, { owner: o, slug: "dinners" });
-    expect(text(drawn.html)).toContain("workflow.yaml has 2 mistakes, so it cannot be drawn. See Checks.");
+    expect(checkIds(page.html)).toEqual((await engine.checks(bad)).map((c) => c.id));
+    expect(text(page.html)).toContain(`It is checked again here, by the AWML this registry runs.`);
+    expect(text(page.html)).toContain(`workflow.yaml Checked by AWML ${engine.version.tag} `);
+    // The stored list is left as it was.
+    expect(await stored()).toEqual({ awml: engine.version, checks: await engine.checks(dinners) });
   });
 });
 

@@ -18,11 +18,13 @@ import { readVersion, VIEWS, type FileName, type View } from "@/server/registry"
 // has no file for.
 //
 // A workflow file pushed since AWML listed its checks shows the list stored
-// at push, one row per check, named by the AWML that ran them. Every other
-// file is checked again here by the AWML the registry runs, so the page can
-// name that AWML truly, and so is a listed file the AWML here finds mistakes
+// at push, one row per check, named by the AWML that ran them. A workflow
+// file pushed before has its checks listed now, the same way, by the AWML
+// the registry runs, and so has a listed file the AWML here finds mistakes
 // in: a push with a mistake is refused, so only a newer AWML can find some,
-// and then the page shows them.
+// and then the page shows them. A list made now is never stored. A file
+// stored before 0.4 is checked again here with `awml check`, which lists no
+// checks, so the page can name that AWML truly.
 export async function loadVersion(
   owner: string,
   slug: string,
@@ -48,13 +50,13 @@ export async function loadVersion(
   const files = (workflow ? (["workflow"] as const) : views).map((name) => ({ name, text: v.files[name]! }));
   const checks: CheckedFile[] = await Promise.all(
     files.map(async (f) => {
-      const mistakes = await engine.check(f.text);
-      const list = f.name === "workflow" ? v.checks : null;
-      if (list && mistakes.length === 0)
+      if (f.name === "workflow") {
+        const stored = v.checks && (await engine.check(f.text)).length === 0 ? v.checks : null;
+        const list = stored ?? { awml: engine.version, checks: await engine.checks(f.text) };
         return {
           name: f.name,
           checkedBy: list.awml,
-          listed: true,
+          listed: stored ? "stored" : "now",
           rows: list.checks.map(({ name, mistakes, ...listed }) => ({
             name,
             mistakes: listed.result === "fail" ? mistakes : [],
@@ -62,11 +64,12 @@ export async function loadVersion(
             listed,
           })),
         };
+      }
       return {
         name: f.name,
         checkedBy: engine.version,
         listed: false,
-        rows: [{ name: "awml check", mistakes, warnings: await engine.warnings(f.text) }],
+        rows: [{ name: "awml check", mistakes: await engine.check(f.text), warnings: await engine.warnings(f.text) }],
       };
     }),
   );
