@@ -87,6 +87,9 @@ export async function loadVersion(
     visibility: v.visibility,
     number: v.number,
     address,
+    // The page's own address draws the security view whenever a version has
+    // one, so the security view's links leave it off, as the same page.
+    tab: (asked && asked !== "security" ? `/${asked}` : "") + (implementation ? `/${encodeURIComponent(implementation)}` : ""),
     views,
     shown,
     drawnFrom: source ?? "workflow",

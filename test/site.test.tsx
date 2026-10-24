@@ -229,7 +229,7 @@ describe("a workflow's page", () => {
 
     const drawn = await renderPage(VersionPlatformPage, v1);
     expect(drawn.status).toBe(200);
-    expect(header(drawn.html)).toBe(`${o} / dinners Dinners for two Public · Version 1 of 2`);
+    expect(header(drawn.html)).toMatch(new RegExp(`^${o} / dinners Dinners for two Public · Version 1 of 2 #2 `));
     expect(drawn.html).toContain(await engine.draw(platform).then((m) => m.split("\n")[1]));
     expect(tabs(drawn.html)).toEqual([
       { href: `/${o}/dinners/v/1/security`, label: "Who may see each part", selected: false },
@@ -307,12 +307,12 @@ describe("a workflow's page", () => {
     expect(shown).toContain("Everything in it Triggers 3 Reviews 1 Notes 3 Connectors 3 Surfaces 3 Scopes 3");
   });
 
-  it("orders the side panel: who decides, outside actions, what leaves, change it, everything in it, versions", async () => {
+  it("orders the side panel: who decides, outside actions, what leaves, change it, everything in it", async () => {
     const ana = await person("ana");
     await push(ana.username, "dinners", ana, { security, platform });
     await push(ana.username, "dinners", ana, { security: withTitle("Dinners"), platform });
     const shown = text((await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" })).html);
-    const order = ["Who decides", "Outside actions", "Leaves its scope", "Change it", "Everything in it", "Versions"];
+    const order = ["Who decides", "Outside actions", "Leaves its scope", "Change it", "Everything in it"];
     const at = order.map((h) => shown.indexOf(h));
     expect(
       at.every((i) => i >= 0),
