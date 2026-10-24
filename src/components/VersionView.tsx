@@ -6,7 +6,7 @@ import type { FileName, View } from "@/server/registry";
 import { names, stepCount } from "@/server/summary";
 import { Checks, mistakesIn, Tick, type CheckedFile } from "./Checks";
 import { CopyButton } from "./CopyButton";
-import { VersionList, type ListedVersion } from "./VersionList";
+import { Versions, type ListedVersion } from "./VersionList";
 import { PanZoom } from "./PanZoom";
 import { count } from "./words";
 
@@ -19,6 +19,10 @@ export type VersionViewProps = {
   // The page's address without a view: /owner/slug for the latest version,
   // /owner/slug/v/n for one version. Each view is at this address/view.
   address: string;
+  // What follows the address for the view asked for, such as "/checks" or
+  // "/platform/home", or "" for none or the security view, so another version
+  // opens on the same tab.
+  tab: string;
   views: View[];
   shown: PageView;
   // The file the shown view is drawn from.
@@ -81,9 +85,14 @@ export function VersionView(p: VersionViewProps) {
           </p>
           <h1>{p.title}</h1>
           <div className="meta">
-            <span className="note">
-              {p.visibility === "public" ? "Public" : "Private"} · Version {p.number} of {latest}
-            </span>
+            <div className="note">
+              {p.visibility === "public" ? "Public" : "Private"} ·{" "}
+              <Versions
+                versions={p.versions}
+                number={p.number}
+                href={(n) => `${n === latest ? base : `${base}/v/${n}`}${p.tab}`}
+              />
+            </div>
           </div>
         </div>
       </section>
@@ -208,17 +217,6 @@ export function VersionView(p: VersionViewProps) {
                 ))}
               </dl>
             </section>
-
-            {p.versions.length > 1 && (
-              <section className="side">
-                <h2>Versions</h2>
-                <VersionList
-                  versions={p.versions}
-                  shown={p.number}
-                  href={(n) => (n === latest ? base : `${base}/v/${n}`)}
-                />
-              </section>
-            )}
           </aside>
         </div>
       )}

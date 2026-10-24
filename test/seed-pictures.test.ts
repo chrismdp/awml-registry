@@ -58,11 +58,12 @@ describe("seeding a registry for the build's pictures", () => {
     expect((await read("/api/v1/ana/dinners", cookie)).body).toMatchObject({ visibility: "private" });
   });
 
-  it("pushes acme's platforms, the worker with its recipe and one kept private", async () => {
+  it("pushes acme's platforms, the worker at two versions with its recipe and one kept private", async () => {
     const { cookie } = await seeded();
     const worker = await read("/api/v1/acme/platforms/worker");
     expect(worker.body).toMatchObject({ label: "A code worker", visibility: "public" });
     expect(worker.body.recipe).toContain("# Install on a code worker");
+    expect(worker.body.versions).toHaveLength(2);
     expect((await read("/api/v1/acme/platforms/codex-laptop")).status).toBe(200);
     expect((await read("/api/v1/acme/platforms/cowork-mac-mini")).status).toBe(404);
     expect((await read("/api/v1/acme/platforms/cowork-mac-mini", cookie)).status).toBe(200);

@@ -4,7 +4,7 @@ import MarkdownIt from "markdown-it";
 import type { PlatformTab } from "@/server/page";
 import type { OfferRow } from "@/server/platform-description";
 import { CopyButton } from "./CopyButton";
-import { VersionList, type ListedVersion } from "./VersionList";
+import { Versions, type ListedVersion } from "./VersionList";
 
 export type PlatformViewProps = {
   owner: string;
@@ -53,9 +53,14 @@ export function PlatformView(p: PlatformViewProps) {
           </p>
           <h1>{p.label}</h1>
           <div className="meta">
-            <span className="note">
-              Platform · {p.visibility === "public" ? "Public" : "Private"} · Version {p.number} of {latest}
-            </span>
+            <div className="note">
+              Platform · {p.visibility === "public" ? "Public" : "Private"} ·{" "}
+              <Versions
+                versions={p.versions}
+                number={p.number}
+                href={(n) => `${n === latest ? base : `${base}/v/${n}`}${p.tab === "offers" ? "" : `/${p.tab}`}`}
+              />
+            </div>
           </div>
           {p.described.intro && (
             <div className="pf-intro">
@@ -114,17 +119,6 @@ export function PlatformView(p: PlatformViewProps) {
               <pre>awml fit workflow.yaml {p.slug}.yaml</pre>
               <p>awml fit says whether the workflow can run here, or every reason it can&apos;t.</p>
             </section>
-
-            {p.versions.length > 1 && (
-              <section className="side">
-                <h2>Versions</h2>
-                <VersionList
-                  versions={p.versions}
-                  shown={p.number}
-                  href={(n) => (n === latest ? base : `${base}/v/${n}`)}
-                />
-              </section>
-            )}
           </aside>
         </div>
       )}

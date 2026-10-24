@@ -290,7 +290,7 @@ describe("a workflow's page", () => {
     await push(o, "dinners", { token: ana.token }, { workflow: twoPlaces });
     for (const page of [WorkflowPage, WorkflowPlatformPage]) {
       const shown = text((await renderPage(page, { owner: o, slug: "dinners" })).html);
-      const at = ["Who decides", "Outside actions", "Leaves its scope", "Change it", "Everything in it", "Versions"].map((h) =>
+      const at = ["Who decides", "Outside actions", "Leaves its scope", "Change it", "Everything in it"].map((h) =>
         shown.indexOf(h),
       );
       expect(at.every((i) => i >= 0), String(at)).toBe(true);

@@ -13,7 +13,7 @@
 // - acme/dinners, public, at two versions: the AWML 0.4 file, then the 0.5 one;
 // - acme/client-email, public;
 // - ana/dinners, private;
-// - acme/platforms/worker, public, with an install recipe;
+// - acme/platforms/worker, public, at two versions: without an install recipe, then with one;
 // - acme/platforms/codex-laptop, public;
 // - acme/platforms/cowork-mac-mini, private.
 //
@@ -92,10 +92,8 @@ export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ c
     ["/api/v1/acme/dinners/versions", { workflow: fixture("dinners.yaml") }],
     ["/api/v1/acme/client-email/versions", { workflow: fixture("client-email.yaml"), visibility: "public" }],
     ["/api/v1/ana/dinners/versions", { workflow: fixture("dinners.yaml"), visibility: "private" }],
-    [
-      "/api/v1/platforms/acme/worker/versions",
-      { description: fixture("platforms/worker.yaml"), recipe, visibility: "public" },
-    ],
+    ["/api/v1/platforms/acme/worker/versions", { description: fixture("platforms/worker.yaml"), visibility: "public" }],
+    ["/api/v1/platforms/acme/worker/versions", { description: fixture("platforms/worker.yaml"), recipe }],
     [
       "/api/v1/platforms/acme/codex-laptop/versions",
       { description: fixture("platforms/codex-laptop.yaml"), visibility: "public" },
