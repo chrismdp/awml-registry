@@ -58,6 +58,12 @@ describe("seeding a registry for the build's pictures", () => {
     expect((await read("/api/v1/ana/dinners", cookie)).body).toMatchObject({ visibility: "private" });
   });
 
+  it("forks acme/dinners at version 1 to ana/family-dinners, so a fork and the original's forks show", async () => {
+    await seeded();
+    const fork = await read("/api/v1/ana/family-dinners");
+    expect(fork.body).toMatchObject({ visibility: "public", forkedFrom: { owner: "acme", slug: "dinners", number: 1 } });
+  });
+
   it("pushes acme's platforms, the worker at two versions with its recipe and one kept private", async () => {
     const { cookie } = await seeded();
     const worker = await read("/api/v1/acme/platforms/worker");

@@ -13,6 +13,8 @@ export const ENTRY_POINTS = [
   "readWorkflow",
   "readVersion",
   "pushVersion",
+  "forkWorkflow",
+  "forksOf",
   "ownerPage",
   "inventory",
   "readPlatformVersion",

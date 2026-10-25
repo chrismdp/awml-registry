@@ -13,6 +13,7 @@
 // - acme/dinners, public, at two versions: the AWML 0.4 file, then the 0.5 one;
 // - acme/client-email, public;
 // - ana/dinners, private;
+// - ana/family-dinners, public, a fork of acme/dinners at version 1;
 // - acme/platforms/worker, public, at two versions: without an install recipe, then with one;
 // - acme/platforms/codex-laptop, public;
 // - acme/platforms/cowork-mac-mini, private.
@@ -104,6 +105,7 @@ export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ c
     ],
   ];
   for (const [path, json] of pushes) await call("POST", path, { json }, ana);
+  await call("POST", "/api/v1/acme/dinners/fork", { json: { owner: "ana", slug: "family-dinners", version: 1 } }, ana);
 
   return { cookie: ana };
 }

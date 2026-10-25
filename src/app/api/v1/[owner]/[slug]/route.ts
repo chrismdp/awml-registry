@@ -12,6 +12,6 @@ export async function GET(req: Request, { params }: Params<"owner" | "slug">) {
   if (!asker.ok) return refusal(asker);
   const found = await readWorkflow(await getDb(), asker.viewer, owner, slug);
   if (!found) return notFound();
-  const { ownerType: _, ...body } = found;
+  const { ownerType: _, forked: __, ...body } = found;
   return json(body);
 }

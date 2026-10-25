@@ -282,6 +282,10 @@ export const workflow = sqliteTable(
     slug: text("slug").notNull(),
     title: text("title").notNull(),
     visibility: text("visibility", { enum: ["public", "private"] }).notNull(),
+    // A fork's source: the id of the version it was copied from. An id, not a
+    // name, so a rename of the original's owner is followed; and not a foreign
+    // key, so a fork of a deleted workflow still knows it is one.
+    forkedFrom: text("forked_from"),
     createdAt: createdAt(),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
   },
@@ -289,6 +293,7 @@ export const workflow = sqliteTable(
     uniqueIndex("workflow_user_slug_idx").on(t.ownerUserId, t.slug),
     uniqueIndex("workflow_org_slug_idx").on(t.ownerOrganisationId, t.slug),
     index("workflow_visibility_updated_idx").on(t.visibility, t.updatedAt),
+    index("workflow_forked_from_idx").on(t.forkedFrom),
     check(
       "workflow_one_owner",
       sql`(${t.ownerUserId} IS NULL) <> (${t.ownerOrganisationId} IS NULL)`,

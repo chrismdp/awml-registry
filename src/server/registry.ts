@@ -1,6 +1,6 @@
-import { and, count, desc, eq, inArray, max, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, max, or, sql } from "drizzle-orm";
 import type { Db } from "@/db/client";
-import { user, version, workflow } from "@/db/schema";
+import { membership, user, version, workflow } from "@/db/schema";
 import { edition } from "@/edition";
 import { engine, type Files } from "@/engine";
 import { record } from "./audit";
@@ -109,19 +109,38 @@ async function roomForPrivate(db: Db, owner: Owner & { type: "user" }): Promise<
   );
 }
 
+type Pushed = Result<{ owner: string; slug: string; number: number }>;
+
 export async function pushVersion(
   db: Db,
   viewer: Viewer,
   ownerSlug: string,
   slug: string,
   body: PushBody,
-): Promise<Result<{ owner: string; slug: string; number: number }>> {
+): Promise<Pushed> {
   if (!viewer) return refuse(401, SIGN_IN_TO_PUSH);
   const owner = await findOwner(db, ownerSlug);
   if (!owner) return refuse(404, "Not found.");
+  return saveVersion(db, viewer, owner, slug, body);
+}
+
+// A push, or with `forkedFrom`, the first version of a fork, which must make
+// a new workflow: a slug already taken in the owner is a 409. Whether the
+// caller may push there is asked as if the slug were free, so a fork tells
+// nobody about a private workflow they could not push to.
+async function saveVersion(
+  db: Db,
+  viewer: NonNullable<Viewer>,
+  owner: Owner,
+  slug: string,
+  body: PushBody,
+  forkedFrom?: string,
+): Promise<Pushed> {
   const existing = await findWorkflow(db, owner, slug);
-  const allowed = await mayPushTo(db, viewer, owner, existing);
+  const allowed = await mayPushTo(db, viewer, owner, forkedFrom ? null : existing);
   if (!allowed.ok) return allowed;
+  const taken = () => refuse(409, `${owner.slug}/${slug} is taken. Fork it under another slug.`);
+  if (forkedFrom && existing) return taken();
 
   const slugProblem = workflowSlugProblem(slug);
   if (slugProblem) return refuse(422, slugProblem);
@@ -153,9 +172,11 @@ export async function pushVersion(
         slug,
         title: title!,
         visibility,
+        forkedFrom: forkedFrom ?? null,
       })
       .onConflictDoNothing()
       .returning();
+    if (!w && forkedFrom) return taken();
     w ??= (await findWorkflow(db, owner, slug))!;
   }
 
@@ -189,6 +210,102 @@ export async function pushVersion(
   return { ok: true, owner: owner.slug, slug, number };
 }
 
+export type ForkBody = { owner?: unknown; slug?: unknown; visibility?: unknown; version?: unknown };
+
+// Copies one version of a public workflow, the latest unless `version` names
+// another, into an owner the caller may push to, as the first version of a
+// new workflow there, which records the version it came from. The file is
+// the source's, unchanged, and goes through a push's rules: its checks, the
+// visibility it asks for and the edition's limits. Anyone who may not read
+// the original gets the 404 a missing one gives.
+export async function forkWorkflow(db: Db, viewer: Viewer, ownerSlug: string, slug: string, body: ForkBody): Promise<Pushed> {
+  if (!viewer) return refuse(401, SIGN_IN_TO_PUSH);
+  const found = await readable(db, viewer, ownerSlug, slug);
+  if (!found) return refuse(404, "Not found.");
+  const { workflow: original } = found;
+  if (original.visibility !== "public")
+    return refuse(422, "Only public workflows can be forked. Copy a private one by hand and push it.");
+  const asked = body.version ?? undefined;
+  if (asked !== undefined && !(typeof asked === "number" && Number.isInteger(asked) && asked > 0))
+    return refuse(422, "version: a version number, such as 2.");
+  const [source] = await db
+    .select({ id: version.id, number: version.number, workflow: version.workflow })
+    .from(version)
+    .where(and(eq(version.workflowId, original.id), asked === undefined ? undefined : eq(version.number, asked)))
+    .orderBy(desc(version.number))
+    .limit(1);
+  if (!source) return refuse(404, "Not found.");
+  if (source.workflow === null)
+    return refuse(
+      422,
+      `Version ${source.number} was stored before the registry took AWML 0.4 files, so it can't be forked. Fork a later version, or convert it with awml convert and push it.`,
+    );
+
+  if (typeof body.owner !== "string" || !body.owner)
+    return refuse(422, "owner: the username or organisation to fork into.");
+  const into = body.slug ?? original.slug;
+  if (typeof into !== "string") return refuse(422, "slug: the fork's slug, as a string.");
+  const owner = await findOwner(db, body.owner);
+  if (!owner) return refuse(404, "Not found.");
+  return saveVersion(db, viewer, owner, into, { workflow: source.workflow, visibility: body.visibility }, source.id);
+}
+
+export type Origin = { owner: string; slug: string; number: number };
+
+// Where a fork came from, as the viewer may know it: the original's owner,
+// slug and version when they may read it, or null when it is private to them
+// or gone. `forked` says whether it is a fork at all.
+async function originOf(db: Db, viewer: Viewer, forkedFrom: string | null) {
+  if (!forkedFrom) return { forked: false, forkedFrom: null };
+  const [o] = await db
+    .select({ owner: ownerSlugSql, slug: workflow.slug, number: version.number, visibility: workflow.visibility })
+    .from(version)
+    .innerJoin(workflow, eq(workflow.id, version.workflowId))
+    .where(eq(version.id, forkedFrom))
+    .limit(1);
+  const owner = o?.visibility === "private" ? await findOwner(db, o.owner) : null;
+  const seen = o && (o.visibility === "public" || (owner && (await isOwnerOrMember(db, owner, viewer?.id))));
+  return { forked: true, forkedFrom: seen ? { owner: o.owner, slug: o.slug, number: o.number } : null };
+}
+
+// A workflow's forks that the viewer may see, of any of its versions: the
+// public ones, and the private ones of the viewer and their organisations.
+// How many there are, and the newest `limit` of them. Null for a workflow
+// the viewer may not read.
+export async function forksOf(db: Db, viewer: Viewer, ownerSlug: string, slug: string, limit = 20) {
+  const found = await readable(db, viewer, ownerSlug, slug);
+  if (!found) return null;
+  const theirs = viewer
+    ? (
+        await db
+          .select({ id: membership.organisationId })
+          .from(membership)
+          .where(eq(membership.userId, viewer.id))
+      ).map((m) => m.id)
+    : [];
+  const where = and(
+    eq(version.workflowId, found.workflow.id),
+    or(
+      eq(workflow.visibility, "public"),
+      viewer ? eq(workflow.ownerUserId, viewer.id) : undefined,
+      theirs.length ? inArray(workflow.ownerOrganisationId, theirs) : undefined,
+    ),
+  );
+  const [{ total }] = await db
+    .select({ total: count() })
+    .from(workflow)
+    .innerJoin(version, eq(version.id, workflow.forkedFrom))
+    .where(where);
+  const forks = await db
+    .select({ owner: ownerSlugSql, slug: workflow.slug, title: workflow.title, visibility: workflow.visibility, number: version.number })
+    .from(workflow)
+    .innerJoin(version, eq(version.id, workflow.forkedFrom))
+    .where(where)
+    .orderBy(desc(workflow.createdAt), desc(sql`${workflow}.rowid`))
+    .limit(limit);
+  return { total, forks };
+}
+
 // A workflow's versions, newest first: who pushed each and when, and the
 // AWML its file says it is, or for a version stored before, its security or
 // platform file.
@@ -219,6 +336,7 @@ export async function readWorkflow(db: Db, viewer: Viewer, ownerSlug: string, sl
     title: w.title,
     visibility: w.visibility,
     createdAt: w.createdAt,
+    ...(await originOf(db, viewer, w.forkedFrom)),
     versions: await versionList(db, w.id),
   };
 }
@@ -276,6 +394,7 @@ export async function readVersion(
     check: v.check,
     checks: v.checks,
     summary: v.summary,
+    ...(await originOf(db, viewer, w.forkedFrom)),
     versions: await versionList(db, w.id),
   };
 }

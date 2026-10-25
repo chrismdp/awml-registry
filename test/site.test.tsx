@@ -178,7 +178,7 @@ describe("a workflow's page", () => {
     await push(o, "dinners", ana, { security, platform });
     const page = await renderPage(WorkflowPage, { owner: o, slug: "dinners" });
     const shown = text(page.html);
-    expect(shown).toContain(`${o} / dinners The family's dinners Public · Version 1 of 1 Who may see each part`);
+    expect(shown).toContain(`${o} / dinners The family's dinners Public · Version 1 of 1 Fork Who may see each part`);
     expect(page.html).toContain(await engine.draw(security).then((m) => m.split("\n")[0]));
     expect(tabs(page.html)).toEqual([
       { href: `/${o}/dinners/security`, label: "Who may see each part", selected: true },
@@ -201,7 +201,7 @@ describe("a workflow's page", () => {
     ).toEqual([`/${o}/dinners/platform`]);
   });
 
-  it("keeps its header to the owner, title, visibility and version on every view: no buttons and no badge", async () => {
+  it("keeps its header to the owner, title, visibility, version and Fork on every view: no other buttons and no badge", async () => {
     const ana = await person("ana");
     const o = ana.username;
     await push(o, "dinners", ana, { security, platform });
@@ -214,7 +214,7 @@ describe("a workflow's page", () => {
       WorkflowChecksPage,
     ]) {
       const html = (await renderPage(page, params)).html;
-      expect(header(html), page.name).toBe(`${o} / dinners The family's dinners Public · Version 1 of 1`);
+      expect(header(html), page.name).toBe(`${o} / dinners The family's dinners Public · Version 1 of 1 Fork`);
       expect(html, page.name).not.toContain("Change this workflow");
       expect(html, page.name).not.toContain("Download YAML");
     }
@@ -366,7 +366,7 @@ describe("a workflow's YAML view", () => {
     expect(page.status).toBe(200);
     const shown = text(page.html);
     expect(shown).toContain(
-      `${o} / dinners Dinners <b>&</b> Public · Version 1 of 1 ` +
+      `${o} / dinners Dinners <b>&</b> Public · Version 1 of 1 Fork ` +
         "Who may see each part Where each part runs YAML Checks No mistakes security.yaml Copy Download # The family's dinners",
     );
     expect(
@@ -472,7 +472,7 @@ describe("a workflow's Checks view", () => {
     ]);
     expect(tabs(page.html)[3].href).toBe(`/${o}/dinners/checks`);
     expect(text(page.html)).toContain(
-      `${o} / dinners The family's dinners Public · Version 1 of 1 Who may see each part Where each part runs YAML Checks No mistakes ` +
+      `${o} / dinners The family's dinners Public · Version 1 of 1 Fork Who may see each part Where each part runs YAML Checks No mistakes ` +
         `${CHECKS_INTRO} ` +
         "security.yaml Checked by AWML v0.5.1 awml check No mistakes " +
         "platform.yaml Checked by AWML v0.5.1 awml check No mistakes " +
@@ -503,7 +503,7 @@ describe("a workflow's Checks view", () => {
       `security.yaml Checked by AWML v0.5.1 awml check 1 mistake ${mistake} ` +
         "platform.yaml Checked by AWML v0.5.1 awml check No mistakes",
     );
-    expect(header(page.html)).toBe(`${o} / dinners The family's dinners Public · Version 1 of 1`);
+    expect(header(page.html)).toBe(`${o} / dinners The family's dinners Public · Version 1 of 1 Fork`);
 
     const drawn = await renderPage(WorkflowPage, { owner: o, slug: "dinners" });
     expect(drawn.status).toBe(200);
