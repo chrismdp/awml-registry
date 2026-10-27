@@ -2,7 +2,8 @@ import Link from "next/link";
 import type { Summary } from "@/engine";
 import { mcpUrl } from "@/server/http";
 import type { PageView } from "@/server/page";
-import type { FileName, Origin, View } from "@/server/registry";
+import type { FileName, Origin, Referrer, View } from "@/server/registry";
+import type { ShownRef } from "@/server/refs";
 import { fork } from "@/app/[owner]/[slug]/actions";
 import { names, stepCount } from "@/server/summary";
 import { CURRENT_AWML } from "@/server/awml-file";
@@ -49,6 +50,10 @@ export type VersionViewProps = {
   files: { name: FileName; text: string; awml: string | null }[];
   // What checking each file found, and the AWML that checked it.
   checks: CheckedFile[];
+  // Each ref the workflow's file holds, as the viewer may know what it names.
+  refs: ShownRef[];
+  // The workflows the viewer may see whose latest version refers to this one.
+  referredBy: Referrer[];
   // The shown file drawn, or "" when it is not a drawing view or the file has mistakes.
   mermaid: string;
   summary: Summary;
@@ -143,7 +148,7 @@ export function VersionView(p: VersionViewProps) {
       {p.shown === "checks" ? (
         <div className="full">
           {tablist}
-          <Checks title={p.title} files={p.checks} />
+          <Checks title={p.title} files={p.checks} refs={p.refs} />
         </div>
       ) : p.shown === "yaml" ? (
         <div className="full yaml">
@@ -263,6 +268,25 @@ export function VersionView(p: VersionViewProps) {
                 ))}
               </dl>
             </section>
+
+            {p.referredBy.length > 0 && (
+              <section className="side">
+                <h2>
+                  Referred to by <span className="tab-count">{p.referredBy.length}</span>
+                </h2>
+                <ul className="forks">
+                  {p.referredBy.map((r) => (
+                    <li key={`${r.owner}/${r.slug}`}>
+                      <Link href={`/${r.owner}/${r.slug}`}>{`${r.owner}/${r.slug}`}</Link>
+                      <span className="note">
+                        {` · ${r.parts.join(", ")}`}
+                        {r.visibility === "private" ? " · private" : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
 
             {p.forks.total > 0 && (
               <section className="side">

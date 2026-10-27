@@ -325,6 +325,29 @@ export const version = sqliteTable(
   (t) => [uniqueIndex("version_workflow_number_idx").on(t.workflowId, t.number)],
 );
 
+// Each ref a version's file holds to another workflow's part, as the file
+// gives it after a push rewrote any path: owner/slug#id. Written at push, so a
+// workflow's page can list the workflows whose latest version refers to it.
+// The owner and slug are names, as in the file, since a ref may name a
+// workflow not pushed yet.
+export const workflowRef = sqliteTable(
+  "workflow_ref",
+  {
+    id: id(),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => version.id, { onDelete: "cascade" }),
+    part: text("part").notNull(),
+    targetOwner: text("target_owner").notNull(),
+    targetSlug: text("target_slug").notNull(),
+    targetPart: text("target_part").notNull(),
+  },
+  (t) => [
+    index("workflow_ref_target_idx").on(t.targetOwner, t.targetSlug),
+    index("workflow_ref_version_idx").on(t.versionId),
+  ],
+);
+
 // A platform a workflow can run on, described in AWML's platform description
 // format. Owned like a workflow, and versioned like one.
 export const platform = sqliteTable(

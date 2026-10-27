@@ -207,7 +207,7 @@ function server(person: Person) {
     {
       title: "Publish a workflow",
       description:
-        "Save a new version of the workflow owner/slug from its one AWML 0.6 file. The file is checked first and refused if it has mistakes, and an older AWML is refused: upgrade it with `awml convert workflow.yaml > upgraded.yaml` first. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private. A private one on your own account is seen by you alone; one on an organisation's, by its members. Gives the workflow's page and the new version number.",
+        "Save a new version of the workflow owner/slug from its one AWML 0.6 file. The file is checked first and refused if it has mistakes, and an older AWML is refused: upgrade it with `awml convert workflow.yaml > upgraded.yaml` first. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private. A private one on your own account is seen by you alone; one on an organisation's, by its members. A part's ref to a file alongside, such as shopping.yaml#list, is saved as owner/shopping#list, so publish each file under its name without .yaml; a public workflow may refer only to public ones. Gives the workflow's page, the new version number and each ref rewritten.",
       inputSchema: z.object({
         owner,
         slug,
@@ -226,11 +226,13 @@ function server(person: Person) {
       const pushed = await pushVersion(db, person, await current(db, owner), slug, { workflow, security, platform, visibility });
       if (!pushed.ok) return refused(pushed.errors);
       const url = page(pushed.owner, pushed.slug);
-      return answer(`Saved version ${pushed.number} of ${pushed.owner}/${pushed.slug}: ${url}`, {
+      const rewrote = pushed.rewrites.map((r) => `\nRewrote the ref of part ${r.part} from ${r.from} to ${r.to}.`);
+      return answer(`Saved version ${pushed.number} of ${pushed.owner}/${pushed.slug}: ${url}${rewrote.join("")}`, {
         owner: pushed.owner,
         slug: pushed.slug,
         number: pushed.number,
         url,
+        rewrites: pushed.rewrites,
       });
     },
   );

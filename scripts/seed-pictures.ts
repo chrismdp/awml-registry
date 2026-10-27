@@ -12,6 +12,8 @@
 // - acme, an organisation that ana owns, with ben as a member;
 // - acme/dinners, public, at two versions: the AWML 0.4 file, then the 0.5 one;
 // - acme/client-email, public;
+// - acme/shopping, public, whose favourites refer to dinners.yaml#favourites, stored as
+//   acme/dinners#favourites, so acme/dinners is referred to by it;
 // - ana/dinners, private;
 // - ana/family-dinners, public, a fork of acme/dinners at version 1;
 // - acme/platforms/worker, public, at two versions: without an install recipe, then with one;
@@ -96,6 +98,7 @@ export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ c
     ["/api/v1/acme/dinners/versions", { workflow: designOnly(fixture("dinners.yaml")), visibility: "public" }],
     ["/api/v1/acme/dinners/versions", { workflow: fixture("dinners.yaml") }],
     ["/api/v1/acme/client-email/versions", { workflow: fixture("client-email.yaml"), visibility: "public" }],
+    ["/api/v1/acme/shopping/versions", { workflow: fixture("shopping.yaml"), visibility: "public" }],
     ["/api/v1/ana/dinners/versions", { workflow: fixture("dinners.yaml"), visibility: "private" }],
     ["/api/v1/platforms/acme/worker/versions", { description: fixture("platforms/worker.yaml"), visibility: "public" }],
     ["/api/v1/platforms/acme/worker/versions", { description: fixture("platforms/worker.yaml"), recipe }],

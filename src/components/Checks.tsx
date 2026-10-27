@@ -1,4 +1,5 @@
 import type { ListedCheck } from "@/engine";
+import type { ShownRef } from "@/server/refs";
 import type { FileName } from "@/server/registry";
 import { count } from "./words";
 
@@ -53,8 +54,38 @@ function Result({ row }: { row: CheckRow }) {
   );
 }
 
+// What each of a workflow's refs names: a workflow the viewer may see,
+// linked; one not pushed yet; or a workflow they can't see, unnamed.
+function Refs({ refs }: { refs: ShownRef[] }) {
+  if (refs.length === 0) return null;
+  return (
+    <section className="refs">
+      <div className="check-head">
+        <h2>References</h2>
+        <p>Checked against the latest version of each workflow you can see</p>
+      </div>
+      <ul className="check-rows">
+        {refs.map((r) => (
+          <li key={r.part} data-ref={r.state}>
+            <code>{r.part}</code> refers to{" "}
+            {r.state === "found" ? (
+              <>
+                <a href={`/${r.owner}/${r.slug}`}>{`${r.owner}/${r.slug}`}</a>#{r.id}
+              </>
+            ) : r.state === "missing" ? (
+              `${r.owner}/${r.slug}#${r.id}, not pushed yet`
+            ) : (
+              "a workflow you can't see"
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 // What checking a version's files found, file by file, and the AWML that checked them.
-export function Checks({ title, files }: { title: string; files: CheckedFile[] }) {
+export function Checks({ title, files, refs = [] }: { title: string; files: CheckedFile[]; refs?: ShownRef[] }) {
   const listed = files.every((f) => f.listed);
   const now = files.some((f) => f.listed === "now");
   const spec = `https://github.com/chrismdp/awml/blob/${files[0]?.checkedBy.commit}/SPEC.md#the-file-format`;
@@ -74,6 +105,7 @@ export function Checks({ title, files }: { title: string; files: CheckedFile[] }
           </>
         )}
       </p>
+      <Refs refs={refs} />
       {files.map((f) => (
         <section key={f.name}>
           <div className="check-head">

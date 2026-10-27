@@ -57,6 +57,13 @@
       "when": 1792886400000,
       "tag": "0007_forks",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1793100822528,
+      "tag": "0008_refs",
+      "breakpoints": true
     }
   ]
 }

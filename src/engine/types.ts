@@ -5,6 +5,9 @@
 // registry took only 0.4 files, a security view, a platform view or both.
 export type Files = { workflow?: string; security?: string; platform?: string };
 
+// A file given to the engine with its path, which names it in the mistakes.
+export type Named = { file: string; source: string };
+
 // What `awml summary --json` gives for a workflow: the things an inventory
 // counts, and the names of its AI steps, people, scopes and platforms. The Go
 // package writes an empty list as null. Summaries saved before AWML named
@@ -74,6 +77,12 @@ export interface Engine {
   warnings(yaml: string): Promise<string[]>;
   // Every check AWML runs on one file, with the result of each.
   checks(yaml: string): Promise<ListedCheck[]>;
+  // Every check AWML runs on one workflow given with the workflows its refs
+  // name, each at a path ending owner/slug.yaml, so the engine follows an
+  // owner/slug#id ref to the file at that path. Only the first file's
+  // mistakes and warnings are given; a check that failed only in another
+  // file passes.
+  checksWith(file: Named, others: Named[]): Promise<ListedCheck[]>;
   // One workflow's summary from its files. The files must pass check.
   summarise(files: Files): Promise<Summary>;
   // Mermaid text for one file that passes check, drawn in the browser: its

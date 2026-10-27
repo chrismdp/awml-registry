@@ -2,6 +2,6 @@
 import { wasmEngine } from "./wasm";
 import type { Engine } from "./types";
 
-export type { Converted, Engine, Files, FitReport, FitResult, ListedCheck, Summary } from "./types";
+export type { Converted, Engine, Files, FitReport, FitResult, ListedCheck, Named, Summary } from "./types";
 
 export const engine: Engine = wasmEngine;
