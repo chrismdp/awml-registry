@@ -1,5 +1,5 @@
-# An AWML 0.4 workflow with no mistakes and one warning: AI decides a do step.
-awml: "0.4"
+# An AWML 0.6 workflow with no mistakes and one warning: AI decides a do step.
+awml: "0.6"
 title: Fill the basket
 scopes:
   - { id: family, label: "family: parents", processing: any }

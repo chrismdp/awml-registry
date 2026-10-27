@@ -35,44 +35,57 @@ dirty=$(git -C "$src" status --porcelain -- '*.go' go.mod go.sum cmd wasm | grep
 # nearest one and how far past it, and the commit.
 printf '{ "tag": "%s", "commit": "%s" }\n' "$(git -C "$src" describe --tags --always "$commit")$dirty" "$commit" > "$out/version.json"
 
-# What the native CLI says, for the tests to compare against: a 0.5 workflow,
+# What the native CLI says, for the tests to compare against: a 0.6 workflow,
 # drawn as its design and as its home implementation; AWML's own file with
-# mistakes, the registry's 0.4 one, fixtures/bad-04.yaml, and its 0.4 file
-# with a warning, fixtures/warning-04.yaml.
+# mistakes, the registry's, fixtures/bad-06.yaml, and its file with a
+# warning, fixtures/warning-06.yaml.
 cp "$src/examples/dinners.yaml" "$src/wasm/testdata/bad.yaml" "$fixtures/"
 (cd "$fixtures" && "$tmp/awml" summary --json dinners.yaml > dinners.summary.json)
 (cd "$fixtures" && { "$tmp/awml" check bad.yaml || true; } > bad.check.txt)
-(cd "$fixtures" && { "$tmp/awml" check bad-04.yaml || true; } > bad-04.check.txt)
-(cd "$fixtures" && "$tmp/awml" check warning-04.yaml > warning-04.check.txt)
+(cd "$fixtures" && { "$tmp/awml" check bad-06.yaml || true; } > bad-06.check.txt)
+(cd "$fixtures" && "$tmp/awml" check warning-06.yaml > warning-06.check.txt)
 (cd "$fixtures" && "$tmp/awml" draw dinners.yaml > dinners.mmd)
 (cd "$fixtures" && "$tmp/awml" draw --implementation home dinners.yaml > dinners-home.mmd)
 
-# The same workflow marked 0.4, which the registry still takes, and what the
-# native CLI draws and checks of it. It uses nothing 0.5 added.
-sed 's/^awml: "0\.5"$/awml: "0.4"/' "$fixtures/dinners.yaml" > "$fixtures/dinners-04.yaml"
-grep -q '^awml: "0.4"$' "$fixtures/dinners-04.yaml"
-(cd "$fixtures" && "$tmp/awml" check dinners-04.yaml > dinners-04.check.txt)
-(cd "$fixtures" && "$tmp/awml" draw dinners-04.yaml > dinners-04.mmd)
+# Versions stored in an AWML the registry no longer takes, kept in
+# fixtures/older as they were pushed: a 0.4 workflow, a 0.5 one and a 0.5
+# platform description. The registry converts each when it reads it, so this
+# is what the native CLI says of each file once `awml convert` has upgraded it.
+older="$fixtures/older"
+mkdir -p "$tmp/older"
+for file in dinners-04 client-email-05 scripts-mac-mini-05; do
+  "$tmp/awml" convert "$older/$file.yaml" > "$tmp/older/$file.yaml"
+done
+(cd "$tmp/older" && "$tmp/awml" check --json dinners-04.yaml > "$older/dinners-04.checks-now.json")
+(cd "$tmp/older" && "$tmp/awml" draw dinners-04.yaml > "$older/dinners-04.mmd")
+(cd "$tmp/older" && "$tmp/awml" draw --implementation home dinners-04.yaml > "$older/dinners-04-home.mmd")
+(cd "$tmp/older" && { "$tmp/awml" fit --json dinners-04.yaml scripts-mac-mini-05.yaml || true; } > "$older/dinners-04.fit.json")
+(cd "$tmp/older" && "$tmp/awml" check --json client-email-05.yaml > "$older/client-email-05.checks-now.json")
+(cd "$tmp/older" && "$tmp/awml" draw client-email-05.yaml > "$older/client-email-05.mmd")
+(cd "$tmp/older" && "$tmp/awml" draw --implementation office client-email-05.yaml > "$older/client-email-05-office.mmd")
+(cd "$tmp/older" && "$tmp/awml" fit --json client-email-05.yaml scripts-mac-mini-05.yaml > "$older/client-email-05.fit.json")
+(cd "$tmp/older" && "$tmp/awml" fit --json --implementation office client-email-05.yaml scripts-mac-mini-05.yaml > "$older/client-email-05-office.fit.json")
 
-# Versions stored before the registry took only 0.4 files: a 0.2 pair and a
-# 0.3 security view, kept in fixtures/legacy, and what this AWML says of them.
+# Versions stored before the registry took only 0.4 files, kept in
+# fixtures/legacy with the summaries worked out when they were stored: two 0.2
+# pairs and a 0.3 security view. A security view converts on its own, and a
+# platform view only joined with its security view. The dinners pair's views
+# differ, so its platform view does not convert; bin day's do, so its
+# platform view is drawn from the one implementation they join into.
 legacy="$fixtures/legacy"
-(cd "$legacy" && "$tmp/awml" summary --json dinners-security.yaml > dinners-security.summary.json)
-(cd "$legacy" && "$tmp/awml" summary --json dinners-platform.yaml > dinners-platform.summary.json)
-(cd "$legacy" && "$tmp/awml" summary --json dinners-security.yaml dinners-platform.yaml > dinners.summary.json)
-(cd "$legacy" && "$tmp/awml" draw dinners-security.yaml > dinners-security.mmd)
-(cd "$legacy" && "$tmp/awml" draw dinners-platform.yaml > dinners-platform.mmd)
+mkdir -p "$tmp/legacy"
+"$tmp/awml" convert "$legacy/dinners-security.yaml" > "$tmp/legacy/dinners-security.yaml"
+(cd "$tmp/legacy" && "$tmp/awml" draw dinners-security.yaml > "$legacy/dinners-security.mmd")
+"$tmp/awml" convert "$legacy/bin-day-security.yaml" "$legacy/bin-day-platform.yaml" > "$tmp/legacy/bin-day.yaml"
+(cd "$tmp/legacy" && "$tmp/awml" draw --implementation default bin-day.yaml > "$legacy/bin-day-platform.mmd")
 
-# The fit: a workflow that says what it needs, AWML's example platforms
-# marked 0.4, which the registry takes as it takes 0.5, and what
-# `awml fit --json` says of them, for the design and for its office
+# The fit: a workflow that says what it needs, AWML's example platforms, and
+# what `awml fit --json` says of them, for the design and for its office
 # implementation; and the gaps it finds in a workflow that doesn't say.
 rm -rf "$fixtures/platforms"
 mkdir -p "$fixtures/platforms"
 cp "$src/examples/client-email.yaml" "$fixtures/"
-for description in "$src/examples/platforms/"*.yaml; do
-  sed 's/^awml: "0\.3"$/awml: "0.4"/' "$description" > "$fixtures/platforms/$(basename "$description")"
-done
+cp "$src/examples/platforms/"*.yaml "$fixtures/platforms/"
 (cd "$fixtures" && "$tmp/awml" fit --json client-email.yaml platforms/*.yaml > client-email.fit.json)
 (cd "$fixtures" && "$tmp/awml" fit --json --implementation office client-email.yaml platforms/*.yaml > client-email-office.fit.json)
 (cd "$fixtures" && { "$tmp/awml" fit --json dinners.yaml platforms/worker.yaml || true; } > dinners.fit.json)

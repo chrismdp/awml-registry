@@ -418,7 +418,7 @@ describe("The edition hook", () => {
 // Private platforms follow the private workflow rules. Org "acme" keeps a
 // private platform, its back office, and org "beta" keeps one of its own,
 // which every workflow here would fit, so a fit that used it would show it.
-const backOffice = `awml: "0.4"
+const backOffice = `awml: "0.6"
 platform: { id: back-office, label: "Acme's back office" }
 off_for_up_to: PT0S
 steps: code
@@ -744,9 +744,7 @@ describe("Private platforms", () => {
 
     it("a platform cannot take another's address as its description's id, so it is never judged in its place", async () => {
       const { nell } = await platforms();
-      const posing = backOffice
-        .replace('awml: "0.4"', 'awml: "0.5"')
-        .replace("id: back-office,", "id: acme/platforms/back-office,");
+      const posing = backOffice.replace("id: back-office,", "id: acme/platforms/back-office,");
       const res = await pushPlatform(nell.username, "back-office", { token: nell.token }, { description: posing });
       expect(res.status).toBe(422);
       expect((await res.json()).errors).toEqual([

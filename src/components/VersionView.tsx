@@ -5,7 +5,9 @@ import type { PageView } from "@/server/page";
 import type { FileName, Origin, View } from "@/server/registry";
 import { fork } from "@/app/[owner]/[slug]/actions";
 import { names, stepCount } from "@/server/summary";
+import { CURRENT_AWML } from "@/server/awml-file";
 import { Checks, mistakesIn, Tick, type CheckedFile } from "./Checks";
+import { ConvertedNote } from "./ConvertedNote";
 import { CopyButton } from "./CopyButton";
 import { ForkForm } from "./ForkForm";
 import { Versions, type ListedVersion } from "./VersionList";
@@ -38,12 +40,13 @@ export type VersionViewProps = {
   shown: PageView;
   // The file the shown view is drawn from.
   drawnFrom: FileName;
-  // A 0.4 or 0.5 workflow's implementations, each with the address of its platform
-  // view and whether it is the one drawn. None for a version stored before.
+  // A workflow's implementations, each with the address of its platform view
+  // and whether it is the one drawn. None for a version stored before 0.4.
   implementations: { id: string; label: string; href: string; shown: boolean }[];
-  // A 0.4 or 0.5 workflow's platform view when it has no implementations.
+  // A workflow's platform view when it has no implementations.
   nowhere: boolean;
-  files: { name: FileName; text: string }[];
+  // Each file as it was pushed, and the AWML its `awml:` field gives.
+  files: { name: FileName; text: string; awml: string | null }[];
   // What checking each file found, and the AWML that checked it.
   checks: CheckedFile[];
   // The shown file drawn, or "" when it is not a drawing view or the file has mistakes.
@@ -157,6 +160,9 @@ export function VersionView(p: VersionViewProps) {
                     </a>
                   </div>
                 </div>
+                <ConvertedNote name={`${f.name}.yaml`} awml={f.awml}>
+                  The registry draws, checks and fits it converted to AWML {CURRENT_AWML}.
+                </ConvertedNote>
                 <pre id={`${f.name}-yaml`}>{f.text}</pre>
               </section>
             ))}

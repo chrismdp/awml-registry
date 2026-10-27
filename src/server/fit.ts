@@ -3,6 +3,7 @@
 // never against any other.
 import type { Db } from "@/db/client";
 import { engine, type FitResult } from "@/engine";
+import { asRead, descriptionAsRead } from "./as-read";
 import {
   blockPlatforms,
   descriptionId,
@@ -51,10 +52,11 @@ function reference(text: string) {
   return match ? { owner: match[1], slug: match[2], n: match[3] ?? ("latest" as const) } : null;
 }
 
-// The workflow the fit judges: a stored version's 0.4 or 0.5 file, or the
-// security view of one stored before; or such a file sent as YAML, as `file`, or as
-// `security` as clients of the 0.3 API send it. With an implementation, it
-// must be one the workflow has.
+// The workflow the fit judges: a stored version's file, or the security view
+// of one stored before 0.4, as the engine reads it, converted when it is in
+// an older AWML; or a 0.6 file sent as YAML, as `file`, or as `security` as
+// clients of the 0.3 API send it. With an implementation, it must be one the
+// workflow has.
 async function design(
   db: Db,
   viewer: Viewer,
@@ -78,8 +80,12 @@ async function design(
     const v = await readVersion(db, viewer, ref.owner, ref.slug, ref.n);
     if (!v) return refuse(404, `Not found: ${workflow}.`);
     const named = `${v.owner}/${v.slug} v${v.number}`;
-    const source = v.files.workflow ?? v.files.security;
-    if (source === undefined) return refuse(422, `${named} has no security view, which the fit needs.`);
+    const stored = v.files.workflow !== undefined ? "workflow" : v.files.security !== undefined ? "security" : null;
+    if (stored === null) return refuse(422, `${named} has no security view, which the fit needs.`);
+    const read = await asRead(v.files, stored);
+    const mistakes = "error" in read ? read.error : await engine.check(read.file);
+    if ("error" in read || mistakes.length) return refuse(422, ...mistakes.map((e) => `${named}: ${e}`));
+    const source = read.file;
     const missing = has(source, named);
     if (missing) return missing;
     return {
@@ -100,7 +106,7 @@ async function design(
     return { ok: true, source: yaml, workflow: null, implementation: implementation ?? null };
   }
   if (workflow !== undefined) return refuse(422, "Name the workflow as owner/slug or owner/slug@version.");
-  return refuse(422, "Send a workflow as owner/slug, or its AWML 0.4 or 0.5 file as file.");
+  return refuse(422, "Send a workflow as owner/slug, or its AWML 0.6 file as file.");
 }
 
 type Candidate = {
@@ -113,13 +119,21 @@ type Candidate = {
 };
 
 // The platforms to judge against: those named, each of which the viewer must
-// be able to read, or else every platform the viewer may see.
+// be able to read, or else every platform the viewer may see. Each
+// description is as the engine reads it, converted when it is stored in an
+// older AWML.
 async function candidates(db: Db, viewer: Viewer, named: unknown): Promise<Result<{ platforms: Candidate[] }>> {
   if (named === undefined) {
     const rows = await visiblePlatforms(db, viewer);
     return {
       ok: true,
-      platforms: rows.map((r) => ({ ...r, owner: { type: r.ownerType, id: r.ownerId, slug: r.owner } })),
+      platforms: await Promise.all(
+        rows.map(async (r) => ({
+          ...r,
+          owner: { type: r.ownerType, id: r.ownerId, slug: r.owner },
+          description: await descriptionAsRead(r.description),
+        })),
+      ),
     };
   }
   if (!Array.isArray(named) || named.some((n) => typeof n !== "string"))
@@ -131,13 +145,20 @@ async function candidates(db: Db, viewer: Viewer, named: unknown): Promise<Resul
     const found = await findReadablePlatformVersion(db, viewer, ref.owner, ref.slug, ref.n);
     if (!found) return refuse(404, `Not found: ${name}.`);
     const { owner, platform: p, version: v } = found;
-    platforms.push({ owner, slug: p.slug, label: v.label, visibility: p.visibility, number: v.number, description: v.description });
+    platforms.push({
+      owner,
+      slug: p.slug,
+      label: v.label,
+      visibility: p.visibility,
+      number: v.number,
+      description: await descriptionAsRead(v.description),
+    });
   }
   return { ok: true, platforms };
 }
 
-// Fits a workflow, named as owner/slug[@version] or sent as its 0.4 or 0.5
-// file, against the platforms named, or every platform the viewer may see.
+// Fits a workflow, named as owner/slug[@version] or sent as its 0.6 file,
+// against the platforms named, or every platform the viewer may see.
 //
 // The design is judged against each platform on its own, so one platform's
 // description never touches another's answer. An implementation is judged
@@ -198,7 +219,7 @@ export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promis
 // whose blocks name none the caller may see. This one stands in: no block
 // names it, so it judges nothing, and the engine still reports each block
 // that names no platform, and each whose description wasn't given.
-const NO_DESCRIPTION = `awml: "0.4"
+const NO_DESCRIPTION = `awml: "0.6"
 platform: { id: registry-gave-no-description, label: "No description" }
 off_for_up_to: PT0S
 steps: code

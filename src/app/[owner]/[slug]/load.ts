@@ -2,7 +2,8 @@ import { notFound, permanentRedirect } from "next/navigation";
 import { mistakesIn, type CheckedFile } from "@/components/Checks";
 import type { VersionViewProps } from "@/components/VersionView";
 import { engine } from "@/engine";
-import { implementationsOf } from "@/server/awml-file";
+import { asRead } from "@/server/as-read";
+import { awmlOf, implementationsOf } from "@/server/awml-file";
 import { followOldName, isPageView, pageContext, underOwner, workflowPath, type PageView } from "@/server/page";
 import { organisationsOf } from "@/server/organisations";
 import { forksOf, readVersion, VIEWS, type FileName, type View } from "@/server/registry";
@@ -12,11 +13,16 @@ import { forksOf, readVersion, VIEWS, type FileName, type View } from "@/server/
 // "checks". With no view asked for, the security view is drawn, or a version
 // stored before 0.4 draws the first file it has.
 //
-// An AWML 0.4 or 0.5 workflow is one file: its security view draws the design, and
-// its platform view draws one implementation, the first unless `implementation`
+// A workflow is one file: its security view draws the design, and its
+// platform view draws one implementation, the first unless `implementation`
 // names another. A 404 for anyone who may not see the version, for an
 // implementation it does not have, and for a view a version stored before
 // has no file for.
+//
+// Every file is shown as text as it was pushed, and drawn and checked as the
+// engine reads it: converted, when it is in an older AWML (see
+// src/server/as-read.ts). A file that can't be converted is not drawn, and
+// its Checks say why.
 //
 // A workflow file pushed since AWML listed its checks shows the list stored
 // at push, one row per check, named by the AWML that ran them. A workflow
@@ -42,18 +48,32 @@ export async function loadVersion(
   }
   const address = workflowPath(v.owner, v.slug, n === "latest" ? "latest" : v.number);
   const workflow = v.files.workflow;
-  const implementations = workflow ? implementationsOf(workflow) : [];
+  const views: View[] = workflow ? [...VIEWS] : VIEWS.filter((view) => v.files[view] !== undefined);
+  const names: FileName[] = workflow ? ["workflow"] : views;
+  const read = new Map(await Promise.all(names.map(async (name) => [name, await asRead(v.files, name)] as const)));
+  const readFile = (name: FileName) => {
+    const r = read.get(name);
+    return r && "file" in r ? r.file : undefined;
+  };
+  const implementations = workflow ? implementationsOf(readFile("workflow") ?? workflow) : [];
   if (implementation !== undefined && !implementations.some((i) => i.id === implementation)) notFound();
 
-  const views: View[] = workflow ? [...VIEWS] : VIEWS.filter((view) => v.files[view] !== undefined);
   if ((asked === "security" || asked === "platform") && !views.includes(asked)) notFound();
   const shown = asked ?? views[0];
-  const files = (workflow ? (["workflow"] as const) : views).map((name) => ({ name, text: v.files[name]! }));
+  const files = names.map((name) => ({ name, text: v.files[name]!, awml: awmlOf(v.files[name]) }));
   const checks: CheckedFile[] = await Promise.all(
     files.map(async (f) => {
+      const r = read.get(f.name)!;
+      if ("error" in r)
+        return {
+          name: f.name,
+          checkedBy: engine.version,
+          listed: false,
+          rows: [{ name: "awml convert", mistakes: r.error, warnings: [] }],
+        };
       if (f.name === "workflow") {
-        const stored = v.checks && (await engine.check(f.text)).length === 0 ? v.checks : null;
-        const list = stored ?? { awml: engine.version, checks: await engine.checks(f.text) };
+        const stored = v.checks && (await engine.check(r.file)).length === 0 ? v.checks : null;
+        const list = stored ?? { awml: engine.version, checks: await engine.checks(r.file) };
         return {
           name: f.name,
           checkedBy: list.awml,
@@ -70,13 +90,14 @@ export async function loadVersion(
         name: f.name,
         checkedBy: engine.version,
         listed: false,
-        rows: [{ name: "awml check", mistakes: await engine.check(f.text), warnings: await engine.warnings(f.text) }],
+        rows: [{ name: "awml check", mistakes: await engine.check(r.file), warnings: await engine.warnings(r.file) }],
       };
     }),
   );
 
-  // The file the shown view is drawn from, and for a 0.4 or 0.5 platform view, the
-  // implementation drawn, if it has any.
+  // The file the shown view is drawn from, and for a workflow's platform view,
+  // the implementation drawn, if it has any. A platform view stored before
+  // 0.4 converts into a workflow whose one implementation it draws.
   const placed = shown === "platform" ? (implementation ?? implementations[0]?.id) : undefined;
   const source: FileName | undefined = workflow ? "workflow" : views.find((view) => view === shown);
   const nowhere = Boolean(workflow) && shown === "platform" && !placed;
@@ -114,10 +135,18 @@ export async function loadVersion(
     nowhere,
     files,
     checks,
-    mermaid: drawable ? await engine.draw(v.files[source]!, workflow ? placed : undefined) : "",
+    mermaid: drawable ? await engine.draw(readFile(source)!, drawnImplementation(source, placed, readFile(source)!)) : "",
     summary: v.summary,
     versions: v.versions,
   };
+}
+
+// The implementation a view draws of a file as the engine reads it: the one
+// placed for a workflow's platform view, the only one a platform view stored
+// before 0.4 converts into, and none for a security view.
+function drawnImplementation(source: FileName, placed: string | undefined, file: string) {
+  if (source === "platform") return implementationsOf(file)[0]?.id;
+  return placed;
 }
 
 // The old address of a view, such as ?view=platform, sent for good (308) to

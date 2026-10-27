@@ -44,14 +44,14 @@ describe("pushing a workflow through the API", () => {
 
   it("refuses an invalid file with 422 and the messages `awml check` prints for it", async () => {
     const ana = await person("ana");
-    const printed = example("bad-04.check.txt").trim().split("\n");
+    const printed = example("bad-06.check.txt").trim().split("\n");
     expect(printed.length).toBeGreaterThan(0);
     const res = await request("POST", `/api/v1/${ana.username}/broken/versions`, {
       as: { token: ana.token },
-      json: { workflow: example("bad-04.yaml") },
+      json: { workflow: example("bad-06.yaml") },
     });
     expect(res.status).toBe(422);
-    expect((await res.json()).errors).toEqual(printed.map((line) => line.replace(/^bad-04\.yaml: /, "workflow: ")));
+    expect((await res.json()).errors).toEqual(printed.map((line) => line.replace(/^bad-06\.yaml: /, "workflow: ")));
   });
 
   it("stores the summary `awml summary --json` gives", async () => {

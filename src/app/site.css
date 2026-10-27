@@ -169,6 +169,7 @@ pre, code { font-family: var(--mono); }
 .yaml section { background: var(--wash); border-radius: 28px; padding: 24px; min-width: 0; }
 .yaml-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .yaml-head h2 { margin: 0; font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
+.yaml .converted { margin: 0 0 12px; color: var(--ink-soft); }
 .file-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .file-actions .copied { font-size: 14px; color: var(--ink-soft); }
 .file-actions .copied:empty { position: absolute; }

@@ -22,7 +22,7 @@ import { BASE, example, orgWith, person, request, type Who } from "./helpers";
 import { call } from "./mcp-client";
 import { renderPage, type Page } from "./pages";
 
-const backOffice = `awml: "0.4"
+const backOffice = `awml: "0.6"
 platform: { id: back-office, label: "Acme's back office" }
 off_for_up_to: PT0S
 steps: code
@@ -305,7 +305,7 @@ describe("Private platforms on the platform pages", () => {
 const commented = `# Codex on Ana's laptop, which she shuts when she travels.
 # Set up as https://example.com/codex-setup says.
 
-awml: "0.4"
+awml: "0.6"
 platform: { id: codex-laptop, label: "Codex on a laptop" }
 # Shut for up to a fortnight on holiday.
 # See https://example.com/holidays.
@@ -386,7 +386,7 @@ describe("a platform's page", () => {
 
   it("puts the words for an always-on agent platform that calls named companies and holds nothing", async () => {
     const ana = await person("ana");
-    const box = `awml: "0.4"
+    const box = `awml: "0.6"
 platform: { id: box, label: "A box" }
 off_for_up_to: P2DT1H30M
 steps: agent

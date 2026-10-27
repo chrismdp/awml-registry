@@ -36,6 +36,10 @@ export type SeedOptions = {
 
 const fixture = (name: string) => readFileSync(new URL(`../test/fixtures/${name}`, import.meta.url), "utf8");
 
+// A workflow's design without its implementations, as a first version that
+// doesn't yet say where it runs.
+const designOnly = (workflow: string) => workflow.slice(0, workflow.indexOf("implementations:"));
+
 const recipe = `# Install on a code worker
 
 1. Make a container from the workflow's code.
@@ -89,7 +93,7 @@ export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ c
   await call("POST", "/api/orgs/acme/members", { form: { identifier: "ben", role: "member" } }, ana);
 
   const pushes: [string, Record<string, string>][] = [
-    ["/api/v1/acme/dinners/versions", { workflow: fixture("dinners-04.yaml"), visibility: "public" }],
+    ["/api/v1/acme/dinners/versions", { workflow: designOnly(fixture("dinners.yaml")), visibility: "public" }],
     ["/api/v1/acme/dinners/versions", { workflow: fixture("dinners.yaml") }],
     ["/api/v1/acme/client-email/versions", { workflow: fixture("client-email.yaml"), visibility: "public" }],
     ["/api/v1/ana/dinners/versions", { workflow: fixture("dinners.yaml"), visibility: "private" }],

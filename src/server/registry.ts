@@ -7,6 +7,7 @@ import { record } from "./audit";
 import { measures, total } from "./summary";
 import { findOwner, isOwnerOrMember, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH } from "./push";
+import { asRead } from "./as-read";
 import { awmlOf, isOlderAwml, readYaml, WORKFLOW_IS_TOO_OLD } from "./awml-file";
 import { refuse, type Result } from "./result";
 import { workflowSlugProblem } from "./slugs";
@@ -15,8 +16,8 @@ import type { Viewer } from "./viewer";
 export const VIEWS = ["security", "platform"] as const;
 export type View = (typeof VIEWS)[number];
 
-// A version's files by the names their downloads use: one 0.4 or 0.5 workflow, or
-// the security and platform files of a version stored before.
+// A version's files by the names their downloads use: one workflow, or the
+// security and platform files of a version stored before 0.4.
 export const FILES = ["workflow", ...VIEWS] as const;
 export type FileName = (typeof FILES)[number];
 
@@ -50,8 +51,8 @@ async function readable(db: Db, viewer: Viewer, ownerSlug: string, slug: string)
   return { owner, workflow: w };
 }
 
-// The one file a push sends: an AWML 0.4 or 0.5 workflow, as `workflow`, or alone
-// as `security`, as awml push 0.4.0 sends it. Anything marked as an older
+// The one file a push sends: an AWML 0.6 workflow, as `workflow`, or alone
+// as `security`, as awml push 0.4.0 sent it. Anything marked as an older
 // AWML is refused with a 400 that says how to convert it, whichever field it
 // came in.
 function fileFrom(body: PushBody): Result<{ file: string }> {
@@ -63,9 +64,9 @@ function fileFrom(body: PushBody): Result<{ file: string }> {
     sent.push(text);
   }
   if (sent.some(isOlderAwml)) return refuse(400, WORKFLOW_IS_TOO_OLD);
-  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.4 or 0.5 file as workflow.");
+  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.6 file as workflow.");
   if (sent.length > 1)
-    return refuse(422, "Send one file, as workflow: an AWML 0.4 or 0.5 workflow holds its design and its implementations.");
+    return refuse(422, "Send one file, as workflow: an AWML 0.6 workflow holds its design and its implementations.");
   return { ok: true, file: sent[0] };
 }
 
@@ -215,9 +216,11 @@ export type ForkBody = { owner?: unknown; slug?: unknown; visibility?: unknown; 
 // Copies one version of a public workflow, the latest unless `version` names
 // another, into an owner the caller may push to, as the first version of a
 // new workflow there, which records the version it came from. The file is
-// the source's, unchanged, and goes through a push's rules: its checks, the
-// visibility it asks for and the edition's limits. Anyone who may not read
-// the original gets the 404 a missing one gives.
+// the source's, unchanged, or for a version stored in an older AWML, the
+// file converted, since a push takes only the current one. It goes through a
+// push's rules: its checks, the visibility it asks for and the edition's
+// limits. Anyone who may not read the original gets the 404 a missing one
+// gives.
 export async function forkWorkflow(db: Db, viewer: Viewer, ownerSlug: string, slug: string, body: ForkBody): Promise<Pushed> {
   if (!viewer) return refuse(401, SIGN_IN_TO_PUSH);
   const found = await readable(db, viewer, ownerSlug, slug);
@@ -240,6 +243,8 @@ export async function forkWorkflow(db: Db, viewer: Viewer, ownerSlug: string, sl
       422,
       `Version ${source.number} was stored before the registry took AWML 0.4 files, so it can't be forked. Fork a later version, or convert it with awml convert and push it.`,
     );
+  const file = await asRead({ workflow: source.workflow }, "workflow");
+  if ("error" in file) return refuse(422, ...file.error.map((e) => `workflow: ${e}`));
 
   if (typeof body.owner !== "string" || !body.owner)
     return refuse(422, "owner: the username or organisation to fork into.");
@@ -247,7 +252,7 @@ export async function forkWorkflow(db: Db, viewer: Viewer, ownerSlug: string, sl
   if (typeof into !== "string") return refuse(422, "slug: the fork's slug, as a string.");
   const owner = await findOwner(db, body.owner);
   if (!owner) return refuse(404, "Not found.");
-  return saveVersion(db, viewer, owner, into, { workflow: source.workflow, visibility: body.visibility }, source.id);
+  return saveVersion(db, viewer, owner, into, { workflow: file.file, visibility: body.visibility }, source.id);
 }
 
 export type Origin = { owner: string; slug: string; number: number };
@@ -407,9 +412,9 @@ const ownerSlugSql = sql<string>`coalesce(
 const isLatest = sql`${version.number} = (select max(v2.number) from version v2 where v2.workflow_id = ${version.workflowId})`;
 
 // The public gallery, newest first, searched by title, with each workflow's
-// latest summary and the file its card draws: the 0.4 or 0.5 workflow, whose
-// security view is drawn, or for a version stored before, the security view,
-// or the platform view when there is no security file.
+// latest summary and the file its card draws: the workflow, whose security
+// view is drawn, or for a version stored before 0.4, the security view, or
+// the platform view when there is no security file.
 export async function explore(db: Db, query = "", limit = 50) {
   const q = query.trim();
   const escaped = q.replace(/[\\%_]/g, (c) => `\\${c}`);
@@ -480,7 +485,7 @@ export async function inventory(db: Db, viewer: Viewer, orgSlug: string) {
       latest: l?.number ?? null,
       summary: l?.summary ?? null,
       hasSecurity: Boolean(l?.hasSecurity),
-      // A 0.4 or 0.5 workflow says where it runs in its implementations, whose
+      // A workflow says where it runs in its implementations, whose
       // blocks its summary counts as platforms.
       hasPlatform: Boolean(l?.hasPlatform) || (l?.summary.platforms ?? 0) > 0,
     };
