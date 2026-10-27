@@ -141,7 +141,7 @@ jobs:
           id=""
           if [ "$ATTEMPT" -gt 1 ]; then
             id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments" \
-              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- factory-status -->"))) | .id' |
+              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- factory-status -->"))) | .id' |
               tail -n 1)"
           fi
           if [ -n "$id" ]; then
@@ -1088,7 +1088,7 @@ jobs:
               case "$number" in ''|*[!0-9]*) echo "A pull request's number isn't a number: $number"; exit 1 ;; esac
               said="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$number/comments" |
                 jq -n --arg bot "$bot" \
-                  '[inputs[] | select(.user.login == $bot and (.body | contains("<!-- factory-replaced -->")))] | length')"
+                  '[inputs[] | select(.user.login == $bot and (.body | startswith("<!-- factory-replaced -->")))] | length')"
               if [ "$said" = 0 ]; then
                 gh pr comment "$number" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/replaced.md"
               fi
@@ -1121,7 +1121,7 @@ jobs:
             fi
           } > "$here/comment.md"
           id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments" \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- factory-status -->"))) | .id' |
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- factory-status -->"))) | .id' |
             tail -n 1)"
           if [ -n "$id" ]; then
             jq -n --rawfile body "$here/comment.md" '{body: $body}' |

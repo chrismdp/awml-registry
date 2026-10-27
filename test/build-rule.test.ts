@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,11 +30,25 @@ function newRepo() {
   return repo;
 }
 
-function stage(repo: string, path: string, contents: string) {
+function stage(repo: string, path: string, contents: string | Buffer) {
   mkdirSync(dirname(join(repo, path)), { recursive: true });
   writeFileSync(join(repo, path), contents);
   git(repo, "add", "--", path);
 }
+
+// The first bytes of each kind of image and font the rule lets through, then a NUL byte, which
+// makes git find the file binary.
+const signatures: Record<string, Buffer> = {
+  png: Buffer.from("89504e470d0a1a0a00", "hex"),
+  gif: Buffer.from("GIF89a\u0000", "latin1"),
+  jpg: Buffer.from("ffd8ffe000", "hex"),
+  webp: Buffer.from("RIFF\u0000\u0000\u0000\u0000WEBPVP8 ", "latin1"),
+  ico: Buffer.from("0000010001", "hex"),
+  ttf: Buffer.from("0001000000", "hex"),
+  otf: Buffer.from("OTTO\u0000", "latin1"),
+  woff: Buffer.from("wOFF\u0000", "latin1"),
+  woff2: Buffer.from("wOF2\u0000", "latin1"),
+};
 
 function commit(repo: string) {
   git(repo, "commit", "-qm", "fixture");
@@ -253,19 +267,65 @@ describe("judging a staged change", () => {
   it("sends a change to a binary file other than an image or a font to review", () => {
     const repo = newRepo();
     stage(repo, "src/server/hidden.ts", "export const a = 1;\u0000\n");
-    stage(repo, "public/logo.png", "\u0089PNG\u0000pixels");
-    stage(repo, "src/fonts/Inter.woff2", "wOF2\u0000glyphs");
+    stage(repo, "public/logo.png", Buffer.concat([signatures.png, Buffer.from("pixels")]));
+    stage(repo, "src/fonts/Inter.woff2", Buffer.concat([signatures.woff2, Buffer.from("glyphs")]));
 
     const got = evaluate(repo, plain);
     expect(got.review).toBe(true);
     expect(got.reasons).toEqual(["`src/server/hidden.ts` is binary, so the rule can't count or read it."]);
   });
 
-  it("lets an image or a font through without review", () => {
+  it.each(Object.keys(signatures))("lets a .%s file through without review when it starts as one does", (kind) => {
     const repo = newRepo();
-    stage(repo, "public/logo.png", "\u0089PNG\u0000pixels");
+    stage(repo, `public/thing.${kind}`, Buffer.concat([signatures[kind], Buffer.from("contents")]));
 
     expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
+  });
+
+  // Any binary file can be named as an image or a font, so one that doesn't start as its name says
+  // can't be read either.
+  it.each([
+    ["a script named as a picture", "public/logo.png", Buffer.from("#!/bin/sh\u0000echo hi\n", "latin1")],
+    ["a picture of another kind", "public/photo.jpg", Buffer.concat([signatures.png, Buffer.from("pixels")])],
+    ["a font of another kind", "src/fonts/Inter.ttf", Buffer.concat([signatures.woff2, Buffer.from("glyphs")])],
+  ])("sends %s to review", (_, path, contents) => {
+    const repo = newRepo();
+    stage(repo, path, contents);
+
+    expectVerdict(
+      evaluate(repo, plain),
+      true,
+      `\`${path}\` is binary, and doesn't start as its name says, so the rule can't read it.`,
+    );
+  });
+
+  it("lets a change delete an image without review", () => {
+    const repo = newRepo();
+    stage(repo, "public/logo.png", Buffer.from("not really a picture\u0000", "latin1"));
+    commit(repo);
+    git(repo, "rm", "-q", "--", "public/logo.png");
+
+    expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
+  });
+
+  // A symbolic link's target is read wherever the link is followed, so a new or changed one always
+  // needs review.
+  it.each([
+    ["adds", null],
+    ["changes", "../README.md"],
+  ])("sends a change that %s a symbolic link to review", (_, before) => {
+    const repo = newRepo();
+    stage(repo, "README.md", "A registry\n");
+    if (before) {
+      symlinkSync(before, join(repo, "docs-link"));
+      git(repo, "add", "--", "docs-link");
+      commit(repo);
+      rmSync(join(repo, "docs-link"));
+    }
+    symlinkSync("/proc/self/environ", join(repo, "docs-link"));
+    git(repo, "add", "--", "docs-link");
+
+    expectVerdict(evaluate(repo, plain), true, "`docs-link` is a symbolic link, so it always needs review.");
   });
 
   // A path's name reaches the pull request's description, so it's shown in a code span with nothing

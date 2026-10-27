@@ -24,8 +24,24 @@ const testFile = /\.test\.(ts|tsx|mjs)$/;
 // skip it.
 const removedTest = /^-\s*(it|test|describe)\b[\w.]*\s*\(/m;
 const gitAttributes = /(^|\/)\.gitattributes$/;
-// The binary files the rule lets through unread, as review.yml does.
-const imageOrFont = /\.(png|jpe?g|gif|webp|ico|ttf|otf|woff2?)$/i;
+// The binary files the rule lets through unread, as review.yml does, each only if it starts as its
+// kind does. The PNG and GIF signatures are the ones the build's open job checks its pictures by.
+const ascii = (text: string) => Buffer.from(text, "latin1");
+const startsWith = (head: Buffer, ...signatures: Buffer[]) =>
+  signatures.some((signature) => head.subarray(0, signature.length).equals(signature));
+const imagesAndFonts: [RegExp, (head: Buffer) => boolean][] = [
+  [/\.png$/i, (head) => startsWith(head, Buffer.from("89504e470d0a1a0a", "hex"))],
+  [/\.gif$/i, (head) => startsWith(head, ascii("GIF87a"), ascii("GIF89a"))],
+  [/\.jpe?g$/i, (head) => startsWith(head, Buffer.from("ffd8ff", "hex"))],
+  [/\.webp$/i, (head) => startsWith(head, ascii("RIFF")) && head.subarray(8, 12).equals(ascii("WEBP"))],
+  [/\.ico$/i, (head) => startsWith(head, Buffer.from("00000100", "hex"))],
+  [/\.ttf$/i, (head) => startsWith(head, Buffer.from("00010000", "hex"), ascii("true"))],
+  [/\.otf$/i, (head) => startsWith(head, ascii("OTTO"))],
+  [/\.woff$/i, (head) => startsWith(head, ascii("wOFF"))],
+  [/\.woff2$/i, (head) => startsWith(head, ascii("wOF2"))],
+];
+// A symbolic link's mode in git.
+const symbolicLink = "120000";
 
 export function loadConfig(path: string): Config {
   return readConfig(readFileSync(path, "utf8"));
@@ -119,11 +135,23 @@ export function evaluate(repo: string, config: Config, records: Records = {}): V
     if (removedTest.test(diff)) reasons.push(`${shown(path)} removes a test.`);
   }
 
+  // A symbolic link's target is read wherever the link is followed, so a new or changed one always
+  // needs review.
+  const modes = newModes(repo);
+  for (const [path, mode] of modes) {
+    if (mode === symbolicLink) reasons.push(`${shown(path)} is a symbolic link, so it always needs review.`);
+  }
+
   // A file git finds binary by its content can't be counted or read, so it needs review, unless it's
-  // an image or a font.
+  // an image or a font that starts as its kind does. A deleted one leaves nothing to read.
   const { changedLines, binaries } = countChangedLines(repo);
   for (const path of binaries) {
-    if (!imageOrFont.test(path)) reasons.push(`${shown(path)} is binary, so the rule can't count or read it.`);
+    const kind = imagesAndFonts.find(([name]) => name.test(path));
+    if (!kind) {
+      reasons.push(`${shown(path)} is binary, so the rule can't count or read it.`);
+    } else if (modes.get(path) !== "000000" && !kind[1](head(repo, path))) {
+      reasons.push(`${shown(path)} is binary, and doesn't start as its name says, so the rule can't read it.`);
+    }
   }
   if (changedLines > config.maxChangedLines) {
     reasons.push(`The patch changes ${changedLines} lines, more than the limit of ${config.maxChangedLines}.`);
@@ -181,6 +209,31 @@ function countChangedLines(repo: string): { changedLines: number; binaries: stri
     }
   }
   return { changedLines, binaries };
+}
+
+// The mode each changed path has once the change is applied, "000000" for one it deletes, from
+// git's raw records: ":<old mode> <new mode> <old id> <new id> <status>", then the path.
+function newModes(repo: string): Map<string, string> {
+  const modes = new Map<string, string>();
+  const fields = nulFields(git(repo, "diff", "--cached", "--raw", "--no-renames", "-z", "--"));
+  for (let at = 0; at + 1 < fields.length; at += 2) {
+    const mode = fields[at].split(" ")[1];
+    if (!/^\d{6}$/.test(mode ?? "")) throw new Error(`unexpected raw record ${JSON.stringify(fields[at])}`);
+    modes.set(fields[at + 1], mode);
+  }
+  return modes;
+}
+
+// The first bytes of a path as the change stages it.
+function head(repo: string, path: string): Buffer {
+  try {
+    return execFileSync("git", ["-C", repo, "cat-file", "blob", `:0:${path}`], {
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 256 * 1024 * 1024,
+    }).subarray(0, 16);
+  } catch (error) {
+    throw new Error(`read ${path}: ${(error as Error).message}`);
+  }
 }
 
 // A path as a reason shows it: in a code span, with anything that could end the span or the line

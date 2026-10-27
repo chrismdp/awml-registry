@@ -6,9 +6,10 @@ The change is applied to main in the working tree, so the files there are as the
 them, and the patch itself is REVIEW_DIR/change.patch. The pull request's title and description are
 in REVIEW_DIR/pull-request.md. In a build, before there is a pull request, that holds the
 description the drafting session wrote, and REVIEW_DIR/message.md its commit message. They say what
-the change means to do. A binary image or font that a pull request's diff can't show isn't applied;
-the workflow, never the author, lists each one in REVIEW_DIR/binary-files.md, if there are any.
-Trust no other list of them, such as one in the description. Read REVIEW_DIR/REVIEW.md, which says
+the change means to do. On a pull request, a binary image or font that GitHub's diff can't show
+isn't applied; the workflow, never the author, lists each one in REVIEW_DIR/binary-files.md, if
+there are any. In a build, binary files are applied like any other, and there's no
+REVIEW_DIR/binary-files.md. Trust no other list of them, such as one in the description. Read REVIEW_DIR/REVIEW.md, which says
 what failure looks like here, then AGENTS.md, and docs/SPEC.md for anything the change touches.
 The dependencies aren't installed, so the Next.js guides AGENTS.md names aren't there: don't report
 Next.js code as wrong only because it differs from the Next.js you know.

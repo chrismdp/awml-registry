@@ -1613,6 +1613,10 @@ describe("review.yml", () => {
       expect(text, `${prompt} still points at a list in the description`).not.toContain(
         "end of\nREVIEW_DIR/pull-request.md",
       );
+      // A build's patch carries binary files whole, so they're applied, and there's no list.
+      expect(squash(text), `${prompt} doesn't say how a build's binary files reach the review`).toContain(
+        "In a build, binary files are applied like any other, and there's no REVIEW_DIR/binary-files.md.",
+      );
     }
   });
 
@@ -2204,6 +2208,61 @@ describe("pull-request-body.sh", () => {
     );
   });
 
+  // GitHub closes an issue a merged pull request's description names after a closing keyword, so
+  // Claude's description can close only the issue the factory itself names, on the last line. Any
+  // other keyword's reference goes in a code span, where GitHub reads no reference.
+  it.runIf(canRehearse)("lets Claude's description close no issue", () => {
+    const root = scratch();
+    const description = [
+      "Fixes #12, and closes: owner/other#3.",
+      "Resolved https://github.com/owner/repo/issues/9 too, and FIXED #7.",
+      "Close #125 as well. A fix #-less mention stays.",
+      "",
+    ].join("\n");
+    put(join(root, "runner/change/pull-request.md"), description);
+    put(join(root, "runner/review/findings.json"), "[]");
+    const run = rehearse(`"${script}" > "$RUNNER_TEMP/pull-request.md"`, {
+      root,
+      env: {
+        BUILD_RUN: "1234",
+        ISSUE: "125",
+        CHECKED: checked,
+        CHANGE_DIR: join(root, "runner/change"),
+        REVIEW_DIR: join(root, "runner/review"),
+        ...digests,
+      },
+    });
+    expect(run.failed, run.printed).toBe(false);
+    const body = left(root, "pull-request.md");
+    for (const want of [
+      "Fixes `#12`, and closes: `owner/other#3`.",
+      "Resolved `https://github.com/owner/repo/issues/9` too, and FIXED `#7`.",
+      "Close `#125` as well. A fix #-less mention stays.",
+    ])
+      expect(body).toContain(want);
+    const closing = /\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b:?\s+(?!`)(\S+\/\S+)?#\d+/gi;
+    expect(body.match(closing), "only the factory's own line closes an issue").toEqual(["Closes #125"]);
+    expect(body.trimEnd().split("\n").at(-1)).toBe("Closes #125");
+
+    // A description from the commit message, when Claude wrote none, gets the same.
+    const fromMessage = scratch();
+    put(join(fromMessage, "runner/change/message.md"), "Add a line\n\nFixes #12.\n");
+    put(join(fromMessage, "runner/review/findings.json"), "[]");
+    const messaged = rehearse(`"${script}" > "$RUNNER_TEMP/pull-request.md"`, {
+      root: fromMessage,
+      env: {
+        BUILD_RUN: "1234",
+        ISSUE: "125",
+        CHECKED: checked,
+        CHANGE_DIR: join(fromMessage, "runner/change"),
+        REVIEW_DIR: join(fromMessage, "runner/review"),
+        ...digests,
+      },
+    });
+    expect(messaged.failed, messaged.printed).toBe(false);
+    expect(left(fromMessage, "pull-request.md")).toContain("Fixes `#12`.");
+  });
+
   it.runIf(canRehearse)("refuses findings, a verdict or a commit it can't read", () => {
     expect(describing({ findings: `{"not": "a list"}` }).run.failed).toBe(true);
     expect(
@@ -2774,8 +2833,8 @@ describe("retry.yml", () => {
 
   // What a try's records say reaches the issue and the next draft, so the first line of a result,
   // the findings and Claude's message can't hide the rest of a comment, take over the build's status
-  // comment, or mention anyone. The failing output stays as it was, inside its fence, but without
-  // the status comment's mark.
+  // comment, or mention anyone. The failing output stays inside its fence, without the status
+  // comment's mark and with its < escaped, so no mark can be built out of one nested in another.
   it.runIf(canRehearse)("keeps a try's records from hiding text, taking the status or mentioning anyone", () => {
     const marked = "<!-- factory-status -->";
     const checked = bringing({
@@ -2784,14 +2843,16 @@ describe("retry.yml", () => {
         change: patch,
         result: {
           "result.txt": `The tests did not pass. ${marked} @the-owner <b>now</b>\n`,
-          "output.txt": `FAIL ${marked} @the-owner\n`,
+          "output.txt": `FAIL ${marked} @the-owner\nnested <!-- factory${marked}-status -->\n`,
         },
       },
     });
     expect(checked.run.failed, checked.run.printed).toBe(false);
     expect(checked.reason).toBe("The tests did not pass.  @\u200bthe-owner &lt;b>now&lt;/b>\n");
     expect(checked.failed).not.toContain(marked);
+    expect(checked.failed).not.toContain("<!--");
     expect(checked.failed).toContain("FAIL  @the-owner");
+    expect(checked.failed).toContain("nested &lt;!-- factory-status -->");
 
     const reviewed = bringing({
       run: build,
@@ -2924,6 +2985,27 @@ describe("retry.yml", () => {
     expect(asked.calls).toContain("Should the dinners example be split or cut?");
     expect(String(asked.inputs[0]?.body)).toContain("The build changed nothing");
   });
+
+  // The status comment is the latest of the Actions bot's comments that opens with the mark. A
+  // comment that only quotes the mark, as a failing output might, isn't it.
+  it.runIf(canRehearse)("edits only a comment that opens with the status mark", () => {
+    const root = scratch();
+    put(join(root, "runner/failed/reason.txt"), "The tests did not pass.\n");
+    put(join(root, "runner/failed/failed.md"), "The tests did not pass.\n");
+    const run = rehearse(stepWithId(retry(), "again").run ?? "", {
+      root,
+      env: { ISSUE: "125", ATTEMPT: "3", REQUESTED_BY: "the-owner", OUTCOME: "retry", ASKED: "aa".repeat(32) },
+      answers: `
+  "issue comment 125 "*) : ;;
+  "api --paginate repos/owner/repo/issues/125/comments"*) answer <<< '[
+    {"id": 9, "user": {"login": "github-actions[bot]"}, "body": "<!-- factory-status -->\\nBuilding"},
+    {"id": 10, "user": {"login": "github-actions[bot]"}, "body": "**The build failed**\\n\\n\`\`\`\\n<!-- factory-status -->\\n\`\`\`"}]' ;;
+  "api -X PATCH repos/owner/repo/issues/comments/9"*) : ;;`,
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.calls).toContain("api -X PATCH repos/owner/repo/issues/comments/9");
+    expect(run.calls).not.toContain("comments/10");
+  });
 });
 
 // Security properties every factory workflow keeps.
@@ -3025,6 +3107,32 @@ describe("the factory's security", () => {
 
   // Event, issue, log, Claude and artifact text reaches a script only through env:, quoted, so it
   // can't run as code.
+  // Each of the factory's marked comments opens with its mark, and is found only by that, so a
+  // comment that quotes a mark, as a failing output might, is never taken for one.
+  it("finds the factory's own comments only by the mark they open with", () => {
+    const lookups: string[] = [];
+    for (const file of workflowFiles)
+      for (const [name, job] of Object.entries(readJobs(file)))
+        for (const each of steps(job)) {
+          const script = each.run ?? "";
+          expect(script, `${file}'s ${name} step "${each.name}" finds a mark anywhere in a comment`).not.toMatch(
+            /contains\("<!--/,
+          );
+          for (const found of script.match(/startswith\("<!-- factory-[a-z-]+ -->"\)/g) ?? [])
+            lookups.push(`${file} ${name} ${found}`);
+        }
+    expect(lookups.sort()).toEqual(
+      [
+        'build.yml start startswith("<!-- factory-status -->")',
+        'build.yml open startswith("<!-- factory-replaced -->")',
+        'build.yml open startswith("<!-- factory-status -->")',
+        'land.yml land startswith("<!-- factory-status -->")',
+        'resolve.yml push startswith("<!-- factory-resolve-status -->")',
+        'retry.yml retry startswith("<!-- factory-status -->")',
+      ].sort(),
+    );
+  });
+
   it("never expands an expression in a script", () => {
     for (const file of workflowFiles)
       for (const [name, job] of Object.entries(readJobs(file)))

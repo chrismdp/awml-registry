@@ -584,7 +584,7 @@ jobs:
           } > "$RUNNER_TEMP/status.md"
           id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" |
             jq -r --arg link "($run_url)" '.[] | select(.user.login == "github-actions[bot]"
-              and (.body | contains("<!-- factory-resolve-status -->")) and (.body | contains($link))) | .id' |
+              and (.body | startswith("<!-- factory-resolve-status -->")) and (.body | contains($link))) | .id' |
             tail -n 1)"
           if [ -z "$id" ]; then
             echo "This run posted no status comment on #$PR_NUMBER, so there is none to edit."

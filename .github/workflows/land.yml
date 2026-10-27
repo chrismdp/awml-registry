@@ -395,7 +395,7 @@ jobs:
             fi
           } > "$here/comment.md"
           id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments" \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- factory-status -->"))) | .id' |
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- factory-status -->"))) | .id' |
             tail -n 1)"
           if [ -n "$id" ]; then
             jq -n --rawfile body "$here/comment.md" '{body: $body}' |

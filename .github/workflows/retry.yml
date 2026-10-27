@@ -57,7 +57,7 @@ jobs:
       # draft reads. A draft that changed nothing isn't tried again. What the try's records say
       # reaches the issue, so the reason, the findings and Claude's message can't hide the rest of a
       # comment, take over the build's status comment, or mention anyone. The failing output stays
-      # as it was, inside its fence, but without the status comment's mark.
+      # inside its fence, without the status comment's mark and with its < escaped.
       - name: Bring in why it failed
         id: bring
         env:
@@ -152,7 +152,9 @@ jobs:
               echo "The end of the failing output:"
               echo
               echo "$fence"
-              sed 's/<!-- factory-status -->//g' "$output"
+              # One pass of stripping can leave a whole mark where one was nested in another, so
+              # every < is escaped too.
+              sed -e 's/<!-- factory-status -->//g' -e 's/</\&lt;/g' "$output"
               echo "$fence"
             fi
           } > "$failed/failed.md"
@@ -225,7 +227,7 @@ jobs:
 
           printf '<!-- factory-status -->\n%s [The run](%s)\n' "$status" "$run_url" > "$failed/status.md"
           id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments" \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- factory-status -->"))) | .id' |
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- factory-status -->"))) | .id' |
             tail -n 1)"
           if [ -n "$id" ]; then
             jq -n --rawfile body "$failed/status.md" '{body: $body}' |
