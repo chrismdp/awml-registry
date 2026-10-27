@@ -6,6 +6,7 @@ review_paths:
   # What the registry is, how it is built and checked, and the factory itself.
   - docs/SPEC.md
   - AGENTS.md
+  - REVIEW.md
   - .github/
   - scripts/
   - eslint-rules/
