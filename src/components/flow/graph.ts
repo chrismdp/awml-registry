@@ -39,7 +39,9 @@ export type Line = {
   broken?: boolean;
 };
 
-// A note, and the part (or scope) it belongs to.
+// A note, and the part (or scope) it belongs to: a note tied to several
+// parts is given once for each, and one tied to none belongs to its scope,
+// or, in none, to the whole drawing.
 export type Note = { id: string; text: string; on?: string };
 
 export type Graph = { parts: Part[]; scopes: Scope[]; lines: Line[]; notes: Note[] };
@@ -74,9 +76,9 @@ function plain(html: string) {
 // A node's text, from any of the shapes the engine draws: (["…"]), {{"…"}},
 // ("…"), >"…"], [("…")], ["…"], or @{ shape: …, label: "…" }.
 function nodeText(rest: string): { text: string; shape?: string } | undefined {
-  const at = /^@\{\s*shape:\s*([\w-]+),\s*label:\s*"(.*)"\s*\}$/.exec(rest);
+  const at = /^@\{\s*shape:\s*([\w-]+),\s*label:\s*"([^]*)"\s*\}$/.exec(rest);
   if (at) return { text: at[2], shape: at[1] };
-  const quoted = /^[[({>]+"(.*)"[\])}]+$/.exec(rest);
+  const quoted = /^[[({>]+"([^]*)"[\])}]+$/.exec(rest);
   return quoted ? { text: quoted[1] } : undefined;
 }
 
@@ -91,7 +93,29 @@ const BROKEN = "#d0342c";
 
 // A line: a, then <?, then -- or -.- or == with more of the same, then >?,
 // an optional |"label"|, then b.
-const LINE = /^(\w+)\s+(<)?(-{2,}|-\.+-|={2,})(>)?(?:\|"(.*)"\|)?\s+(\w+)$/;
+const LINE = /^(\w+)\s+(<)?(-{2,}|-\.+-|={2,})(>)?(?:\|"([^]*)"\|)?\s+(\w+)$/;
+
+// The text's rows. The engine doesn't escape a line break in a label, so a
+// label may run over several of the text's lines; it does escape a quote, as
+// #34;, so a row runs on until its quotes are closed. Nothing here matches a
+// label with `.`, which stops at a line break. Each line's quotes are counted
+// once, so a label of many lines takes no longer than its length.
+function rows(body: string) {
+  const out: string[] = [];
+  let row: string[] = [];
+  let quotes = 0;
+  for (const piece of body.split("\n")) {
+    row.push(piece);
+    quotes += piece.split('"').length - 1;
+    if (quotes % 2 === 0) {
+      out.push(row.join("\n"));
+      row = [];
+      quotes = 0;
+    }
+  }
+  if (row.length) out.push(row.join("\n"));
+  return out;
+}
 
 export function parseMermaid(text: string): Graph {
   const body = text.replace(/^---\n[\s\S]*?\n---\n/, "");
@@ -101,23 +125,23 @@ export function parseMermaid(text: string): Graph {
   const lines: (Line & { index: number })[] = [];
   const stack: string[] = [];
   let index = 0;
-  for (const raw of body.split("\n")) {
+  for (const raw of rows(body)) {
     const row = raw.trim();
     if (!row || row.startsWith("%%") || /^(flowchart|graph|direction|classDef)\b/.test(row)) continue;
     let m: RegExpExecArray | null;
-    if ((m = /^subgraph\s+(\w+)\s*\["(.*)"\]$/.exec(row))) {
+    if ((m = /^subgraph\s+(\w+)\s*\["([^]*)"\]$/.exec(row))) {
       scopes.push({ id: m[1], label: plain(m[2]), dashed: false, ...(stack.length ? { scope: stack.at(-1) } : {}) });
       stack.push(m[1]);
     } else if (row === "end") stack.pop();
     else if ((m = /^class\s+([\w,]+)\s+(\w+)$/.exec(row))) for (const id of m[1].split(",")) kinds.set(id, m[2]);
-    else if ((m = /^style\s+(\w+)\s+(.*)$/.exec(row))) {
+    else if ((m = /^style\s+(\w+)\s+([^]*)$/.exec(row))) {
       const scope = scopes.find((s) => s.id === m![1]);
       if (!scope) continue;
       scope.dashed = m[2].includes("stroke-dasharray");
       const fill = colour(m[2], "fill");
       const stroke = colour(m[2], "stroke");
       if (!scope.dashed && fill && stroke) Object.assign(scope, { fill, stroke });
-    } else if ((m = /^linkStyle\s+([\d,]+)\s+(.*)$/.exec(row))) {
+    } else if ((m = /^linkStyle\s+([\d,]+)\s+([^]*)$/.exec(row))) {
       const noEnd = m[2].includes("marker-end:none");
       const broken = colour(m[2], "stroke") === BROKEN;
       for (const i of m[1].split(",").map(Number)) {
@@ -137,7 +161,7 @@ export function parseMermaid(text: string): Graph {
         arrowStart: Boolean(start),
         arrowEnd: Boolean(end),
       });
-    } else if ((m = /^(\w+)(.*)$/.exec(row))) {
+    } else if ((m = /^(\w+)([^]*)$/.exec(row))) {
       const t = nodeText(m[2]);
       if (t) nodes.set(m[1], { id: m[1], raw: t.text, shape: t.shape, ...(stack.length ? { scope: stack.at(-1) } : {}) });
     }
@@ -147,17 +171,21 @@ export function parseMermaid(text: string): Graph {
   const notes: Note[] = [];
   for (const n of nodes.values()) {
     if (!isNote(n.id)) continue;
-    // A note is joined to its part by a dotted line with no arrows.
-    const joined = lines.find((l) => (l.to === n.id || l.from === n.id) && !l.arrowStart && !l.arrowEnd);
-    const on = joined ? (joined.to === n.id ? joined.from : joined.to) : n.scope;
-    notes.push({ id: n.id, ...(on ? { on } : {}), text: plain(n.raw) });
+    // A note is joined to each part it is tied to by a dotted line with no arrows.
+    const text = plain(n.raw);
+    const tied = lines.filter((l) => (l.to === n.id || l.from === n.id) && !l.arrowStart && !l.arrowEnd);
+    for (const l of tied) notes.push({ id: n.id, on: l.to === n.id ? l.from : l.to, text });
+    if (!tied.length) notes.push({ id: n.id, ...(n.scope ? { on: n.scope } : {}), text });
   }
   const parts: Part[] = [...nodes.values()].filter((n) => !isNote(n.id)).map((n) => partOf(n, kinds.get(n.id)));
+  // A line whose ends aren't both drawn is left out, so the layout never
+  // meets a part it doesn't have.
+  const known = new Set([...parts.map((p) => p.id), ...scopes.map((sc) => sc.id)]);
   return {
     parts,
     scopes,
-    lines: lines.filter((l) => !isNote(l.from) && !isNote(l.to)).map(({ index: _, ...l }) => l),
-    notes,
+    lines: lines.filter((l) => known.has(l.from) && known.has(l.to)).map(({ index: _, ...l }) => l),
+    notes: notes.filter((n) => !n.on || known.has(n.on)),
   };
 }
 
@@ -165,14 +193,14 @@ function partOf(n: { id: string; raw: string; shape?: string; scope?: string }, 
   const kind = (cls && KINDS[cls] !== "note" ? KINDS[cls] : undefined) ?? (n.shape === "win-pane" ? "surface" : "part");
   const part: Part = { id: n.id, kind: kind as PartKind, label: "" };
   // A step's caption: who decides it, as an emoji, and its kind of work.
-  const caption = /^<small[^>]*>(.*?)<\/small><br>(.*)$/.exec(n.raw);
+  const caption = /^<small[^>]*>([^]*?)<\/small><br>([^]*)$/.exec(n.raw);
   if (caption) {
     const verb = /([a-z][a-z-]*)\s*$/.exec(unescape(caption[1]))?.[1];
     if (verb) part.verb = verb;
     part.label = plain(caption[2]);
   } else part.label = plain(n.raw);
   // An outside action ends with its tier: "Fill the basket: Allow under £180".
-  const tier = kind === "outside" ? /^(.*): ((?:Allow|Ask|Block)\b.*)$/.exec(part.label) : null;
+  const tier = kind === "outside" ? /^([^]*): ((?:Allow|Ask|Block)\b[^]*)$/.exec(part.label) : null;
   if (tier) {
     part.label = tier[1];
     part.tier = tier[2];
@@ -197,7 +225,7 @@ export function flowOnly(g: Graph): Graph {
     parts,
     scopes: g.scopes,
     lines: lines.filter((l) => ids.has(l.from) && ids.has(l.to)),
-    notes: g.notes.filter((n) => n.on && ids.has(n.on)),
+    notes: g.notes.filter((n) => !n.on || ids.has(n.on)),
   };
 }
 

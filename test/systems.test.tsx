@@ -27,6 +27,7 @@ import GalleryPage from "@/app/gallery/page";
 import { BASE, example, orgWith, person, request, storeVersion, type Who } from "./helpers";
 import { call } from "./mcp-client";
 import { pageRequest, renderPage } from "./pages";
+import { laidOut } from "./drawn";
 
 // A workflow that the fit can judge: one scope any company may process, a
 // trigger that waits up to an hour, a note kept in the scope and a step a
@@ -408,7 +409,7 @@ describe("a system's page", () => {
     const own = await panelAs(ana);
     expect(own).toMatchObject({ hrefs: { w1: "/acme/shopping", w2: "/ana/notes", w3: "/acme/dinners" } });
     if (own.tab !== "map" || !own.drawing) throw new Error("no map");
-    expect(own.drawing.full.scopes.map((sc) => [sc.id, sc.lines.join(" ")])).toEqual([
+    expect(laidOut(own.drawing).full.scopes.map((sc) => [sc.id, sc.lines.join(" ")])).toEqual([
       ["w1", "Shopping"],
       ["w2", "Notes"],
       ["w3", "Dinners"],

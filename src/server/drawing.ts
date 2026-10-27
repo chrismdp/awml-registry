@@ -19,6 +19,7 @@ import {
   titleWidth,
   type Drawing,
   type Drawings,
+  type Undrawn,
   type DrawnLine,
   type DrawnPart,
   type DrawnScope,
@@ -169,13 +170,39 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
         : {}),
     };
   });
+  // Notes tied to nothing belong to the whole drawing: their icon sits in a
+  // strip above it, made for them.
+  const strip = g.notes.some((n) => !n.on) ? NOTES_STRIP : 0;
   return {
-    box: { x: 0, y: 0, width: Math.ceil(out.width ?? 0), height: Math.ceil(out.height ?? 0) },
+    box: { x: 0, y: strip ? -strip : 0, width: Math.ceil(out.width ?? 0), height: Math.ceil(out.height ?? 0) + strip },
     parts: drawnParts,
     scopes: drawnScopes,
     lines: drawnLines,
     notes: g.notes,
+    ...(strip ? { notesAt: { x: 24, y: -strip / 2 + 4 } } : {}),
   };
+}
+
+// The height of the strip above a drawing for the notes of the whole drawing.
+const NOTES_STRIP = 36;
+
+// The most a drawing may hold for the server to lay it out: ELK takes longer
+// the more it lays out, most of all for lines that cross many layers, and
+// holds the Worker while it does, so a drawing beyond these isn't laid out at
+// all. Measured in workerd on 2026-10-27, for graphs whose every line is as
+// long as it can be: 96 lines took 230 ms, 120 took 350 ms, 146 took 520 ms
+// and 196 took 880 ms; Flow only adds tens of milliseconds. So at these
+// limits a page's two layouts take well under a second. The largest workflow
+// in test/fixtures, dinners.yaml, holds 22 parts and scopes and 19 lines. The
+// limits also bound what the kept layouts hold.
+export const LIMITS = { parts: 80, lines: 120, characters: 20_000 };
+
+// Whether a graph is beyond LIMITS: its parts and scopes, its lines, and the
+// characters of every label in it.
+export function tooBig(g: Graph) {
+  const characters = [...g.parts, ...g.scopes, ...g.notes].reduce((n, x) => n + ("label" in x ? x.label : x.text).length, 0) +
+    g.lines.reduce((n, l) => n + (l.label?.length ?? 0), 0);
+  return g.parts.length + g.scopes.length > LIMITS.parts || g.lines.length > LIMITS.lines || characters > LIMITS.characters;
 }
 
 // On a system's map, each part joined to workflows' boxes, such as a trigger
@@ -202,20 +229,36 @@ export function mapLinks(d: Drawing, boxes: Record<string, { title: string; addr
 // One drawing of the engine's text, the whole of it or Flow only, kept by the
 // SHA-256 of the text, the switch, whether it is a system's map, and the
 // engine that drew the text (see memo.ts), for the 200 drawings used last.
-const drawingOf = memoise(async (text: string, flow: boolean, map: boolean, _engine: string) => {
-  const parsed = parseMermaid(text);
-  const graph = map ? triggersOutside(parsed) : parsed;
-  return layOutGraph(flow ? flowOnly(graph) : graph);
+// A drawing too big to lay out, or one whose layout fails, is kept as that,
+// so it isn't tried again; LIMITS also bounds what the 200 hold.
+const drawingOf = memoise(async (text: string, flow: boolean, map: boolean, _engine: string): Promise<Drawing | Undrawn> => {
+  try {
+    const parsed = parseMermaid(text);
+    if (tooBig(parsed)) return { undrawn: "too big" };
+    const graph = map ? triggersOutside(parsed) : parsed;
+    return await layOutGraph(flow ? flowOnly(graph) : graph);
+  } catch (e) {
+    console.error(`[awml] a drawing could not be laid out: ${(e as Error).message}`);
+    return { undrawn: "failed" };
+  }
 });
 
 // Both drawings a page may show of the engine's text: the whole drawing, and
 // Flow only. Both are laid out here, so the switch needs nothing more from
 // the server. A system's map draws each trigger outside its workflow's box.
-export async function layOut(text: string, opts: { map?: boolean } = {}): Promise<Drawings> {
+// Never throws: a drawing that can't be laid out says why.
+export async function layOut(text: string, opts: { map?: boolean } = {}): Promise<Drawings | Undrawn> {
   const version = JSON.stringify(engine.version);
   const [full, flow] = await Promise.all([
     drawingOf(text, false, Boolean(opts.map), version),
     drawingOf(text, true, Boolean(opts.map), version),
   ]);
+  if ("undrawn" in full) return full;
+  if ("undrawn" in flow) return flow;
   return { full, flow };
+}
+
+// The whole drawing alone, as the gallery's cards show it.
+export function layOutWhole(text: string): Promise<Drawing | Undrawn> {
+  return drawingOf(text, false, false, JSON.stringify(engine.version));
 }

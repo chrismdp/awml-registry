@@ -9,10 +9,12 @@ import { INTER_ASCENT, INTER_DESCENT, INTER_WIDTHS } from "./inter-widths";
 // A character the table doesn't have, such as an emoji, is taken as one em.
 const UNKNOWN = 1000;
 
+const charWidth = (ch: string, size: number) => ((INTER_WIDTHS[ch.codePointAt(0)!] ?? UNKNOWN) * size) / 1000;
+
 export function textWidth(text: string, size: number) {
   let total = 0;
-  for (const ch of text) total += INTER_WIDTHS[ch.codePointAt(0)!] ?? UNKNOWN;
-  return (total * size) / 1000;
+  for (const ch of text) total += charWidth(ch, size);
+  return total;
 }
 
 // Where the first baseline sits below the top of a line `line` pixels high,
@@ -22,26 +24,38 @@ export function baseline(size: number, line: number) {
 }
 
 // `text` in lines no wider than `max`, broken between words, or inside a word
-// too long for a line on its own.
+// too long for a line on its own. Each character is measured once, so a long
+// label takes no longer than its length.
 export function wrap(text: string, size: number, max: number): string[] {
+  const space = charWidth(" ", size);
   const lines: string[] = [];
   let line = "";
+  let width = 0;
   for (const word of text.split(/\s+/).filter(Boolean)) {
-    const next = line ? `${line} ${word}` : word;
-    if (textWidth(next, size) <= max) {
-      line = next;
+    const w = textWidth(word, size);
+    if (line && width + space + w <= max) {
+      line += ` ${word}`;
+      width += space + w;
       continue;
     }
     if (line) lines.push(line);
     line = "";
-    let rest = word;
-    while (textWidth(rest, size) > max) {
-      let cut = 1;
-      while (cut < rest.length && textWidth(rest.slice(0, cut + 1), size) <= max) cut++;
-      lines.push(rest.slice(0, cut));
-      rest = rest.slice(cut);
+    width = 0;
+    if (w <= max) {
+      line = word;
+      width = w;
+      continue;
     }
-    line = rest;
+    for (const ch of word) {
+      const cw = charWidth(ch, size);
+      if (line && width + cw > max) {
+        lines.push(line);
+        line = "";
+        width = 0;
+      }
+      line += ch;
+      width += cw;
+    }
   }
   if (line || lines.length === 0) lines.push(line);
   return lines;

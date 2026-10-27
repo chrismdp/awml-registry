@@ -21,7 +21,7 @@ import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
 import VersionChecksPage from "@/app/[owner]/[slug]/v/[n]/checks/page";
 import GalleryPage from "@/app/gallery/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
-import { drawing, drawnFrom } from "./drawn";
+import { drawing, expected, expectedOf } from "./drawn";
 import { example, orgWith, person, request, storePlatformVersion, storeVersion, type Who } from "./helpers";
 import { call } from "./mcp-client";
 import { renderPage } from "./pages";
@@ -227,12 +227,12 @@ describe("a workflow's page", () => {
       { href: `/${o}/dinners/yaml`, label: "YAML", selected: false },
       { href: `/${o}/dinners/checks`, label: "Checks No mistakes", selected: false },
     ]);
-    expect(drawing(page.html)).toEqual(drawnFrom(example("dinners.mmd")));
+    expect(drawing(page.html)).toEqual(expected(dinners));
     expect((await renderPage(WorkflowSecurityPage, params)).html).toBe(page.html);
 
     const platform = await renderPage(WorkflowPlatformPage, params);
     expect(platform.status).toBe(200);
-    expect(drawing(platform.html)).toEqual(drawnFrom(example("dinners-home.mmd")));
+    expect(drawing(platform.html)).toEqual(expected(dinners, "home"));
     expect(tabs(platform.html).find((t) => t.selected)?.href).toBe(`/${o}/dinners/platform`);
     // One implementation, so there is nothing to choose.
     expect(choice(platform.html)).toEqual([]);
@@ -267,12 +267,12 @@ describe("a workflow's page", () => {
       { href: `/${o}/dinners/platform/home`, label: "At home", current: true },
       { href: `/${o}/dinners/platform/away`, label: "Away for the summer", current: false },
     ]);
-    expect(drawing(first.html)).toEqual(drawnFrom(await engine.draw(twoPlaces, "home")));
+    expect(drawing(first.html)).toEqual(expected(twoPlaces, "home"));
     expect((await renderPage(ImplementationPage, { ...params, implementation: "home" })).html).toBe(first.html);
 
     const away = await renderPage(ImplementationPage, { ...params, implementation: "away" });
     expect(away.status).toBe(200);
-    expect(drawing(away.html)).toEqual(drawnFrom(await engine.draw(twoPlaces, "away")));
+    expect(drawing(away.html)).toEqual(expected(twoPlaces, "away"));
     expect(choice(away.html).map((c) => c.current)).toEqual([false, true]);
     expect(tabs(away.html).find((t) => t.selected)?.href).toBe(`/${o}/dinners/platform`);
 
@@ -287,7 +287,7 @@ describe("a workflow's page", () => {
     const v1 = { owner: o, slug: "dinners", n: "1" };
     const away = await renderPage(VersionImplementationPage, { ...v1, implementation: "away" });
     expect(away.status).toBe(200);
-    expect(drawing(away.html)).toEqual(drawnFrom(await engine.draw(twoPlaces, "away")));
+    expect(drawing(away.html)).toEqual(expected(twoPlaces, "away"));
     expect(choice(away.html).map((c) => c.href)).toEqual([`/${o}/dinners/v/1/platform/home`, `/${o}/dinners/v/1/platform/away`]);
     expect(tabs(away.html).map((t) => t.href)).toEqual([
       `/${o}/dinners/v/1/security`,
@@ -295,7 +295,7 @@ describe("a workflow's page", () => {
       `/${o}/dinners/v/1/yaml`,
       `/${o}/dinners/v/1/checks`,
     ]);
-    expect(drawing((await renderPage(VersionPlatformPage, v1)).html)).toEqual(drawnFrom(await engine.draw(twoPlaces, "home")));
+    expect(drawing((await renderPage(VersionPlatformPage, v1)).html)).toEqual(expected(twoPlaces, "home"));
     // The latest version has only home.
     expect((await renderPage(ImplementationPage, { owner: o, slug: "dinners", implementation: "away" })).status).toBe(404);
   });
@@ -309,7 +309,7 @@ describe("a workflow's page", () => {
     expect(text(page.html)).toContain("This workflow doesn't say where it runs yet.");
     expect(drawing(page.html)).toBeNull();
     expect(tabs(page.html).map((t) => t.label)).toEqual(["Who may see each part", "Where each part runs", "YAML", "Checks No mistakes"]);
-    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html)).toEqual(drawnFrom(await engine.draw(nowhere)));
+    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html)).toEqual(expected(nowhere));
   });
 
   it("shows the one file on the YAML tab, with its download", async () => {
@@ -368,7 +368,7 @@ describe("warnings on the Checks tab", () => {
         `Warnings don't fail the check. ${warnings[0]}`,
     );
     // The design is still drawn.
-    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "basket" })).html)).toEqual(drawnFrom(await engine.draw(example("warning-06.yaml"))));
+    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "basket" })).html)).toEqual(expected(example("warning-06.yaml")));
     // A file without warnings says nothing of them.
     await push(o, "dinners", { token: ana.token }, { workflow: dinners });
     expect(text((await renderPage(WorkflowChecksPage, { owner: o, slug: "dinners" })).html)).not.toContain("warning");
@@ -582,7 +582,7 @@ describe("workflows in the gallery and an inventory", () => {
   it("draw the design on a gallery card", async () => {
     const ana = await person("ana");
     await push(ana.username, "dinners", { token: ana.token }, { workflow: dinners });
-    expect(drawing((await renderPage(GalleryPage, {})).html)).toEqual(drawnFrom(example("dinners.mmd")));
+    expect(drawing((await renderPage(GalleryPage, {})).html)).toEqual(expected(dinners));
   });
 
   it("say where they run by their implementations' blocks, or that they don't say yet", async () => {
@@ -862,7 +862,7 @@ describe("versions stored before the registry took only 0.4 files", () => {
 
     const page = await renderPage(VersionPage, v1);
     expect(page.status).toBe(200);
-    expect(drawing(page.html)).toEqual(drawnFrom(example("legacy/dinners-security.mmd")));
+    expect(drawing(page.html)).toEqual(await expectedOf([legacySecurity]));
     expect(tabs(page.html).map((t) => t.href)).toEqual([
       `/${o}/dinners/v/1/security`,
       `/${o}/dinners/v/1/platform`,
@@ -904,7 +904,7 @@ describe("versions stored before the registry took only 0.4 files", () => {
     // The latest, 0.6, sits beside them.
     const latest = await renderPage(WorkflowPage, { owner: o, slug: "dinners" });
     expect(text(latest.html)).toContain("Version 3 of 3");
-    expect(drawing(latest.html)).toEqual(drawnFrom(example("dinners.mmd")));
+    expect(drawing(latest.html)).toEqual(expected(dinners));
   });
 
   it("draws a platform view joined with its security view, when the two agree", async () => {
@@ -913,7 +913,7 @@ describe("versions stored before the registry took only 0.4 files", () => {
     const pair = { security: example("legacy/bin-day-security.yaml"), platform: example("legacy/bin-day-platform.yaml") };
     await storeVersion(o, "bin-day", ana, pair);
     const platform = await renderPage(WorkflowPlatformPage, { owner: o, slug: "bin-day" });
-    expect(drawing(platform.html)).toEqual(drawnFrom(example("legacy/bin-day-platform.mmd")));
+    expect(drawing(platform.html)).toEqual(await expectedOf([pair.security, pair.platform], "default"));
     expect(tabs(platform.html).at(-1)?.label).toBe("Checks No mistakes");
     expect(files((await renderPage(WorkflowYamlPage, { owner: o, slug: "bin-day" })).html)).toEqual({
       "security-yaml": pair.security,

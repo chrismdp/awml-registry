@@ -225,3 +225,5 @@ You need a Cloudflare account. Sign in to it with `npx wrangler login`, then:
 The registry is under the [Functional Source License, Version 1.1, MIT Future License](LICENSE) (FSL-1.1-MIT). You may use, change and run it for any purpose except offering it to others as a competing commercial product or service. Each version becomes MIT two years after its release. AWML itself, its spec, command line and Go package, is MIT.
 
 The Inter font in `src/fonts/` is by The Inter Project Authors, under the SIL Open Font License 1.1, in `src/fonts/LICENSE.txt`.
+
+The server lays out each drawing with elkjs 0.12.0, the Eclipse Layout Kernel for JavaScript, copyright Kiel University and others. The registry takes elkjs under the Eclipse Public License 2.0 (elkjs is offered under EPL-2.0 or GPL-3.0-or-later); its licence ships with it in `node_modules/elkjs/LICENSE.md`, and its source is at https://github.com/kieler/elkjs. The registry doesn't change elkjs, and it runs on the server only: no browser is sent it.

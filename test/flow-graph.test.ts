@@ -166,3 +166,70 @@ describe("a map's triggers, outside their workflow's box", () => {
     expect(triggersOutside(issue)).toEqual(issue);
   });
 });
+
+describe("labels that break lines", () => {
+  // The engine leaves a line break in a label as it is, inside its quotes, and writes a quote
+  // as #34;, so a row runs on while a quote is open: a label's line that says end, or holds a
+  // line separator, is text.
+  const broken = parseMermaid(
+    [
+      "flowchart TB",
+      '  subgraph home["home#58; the',
+      "end",
+      'family"]',
+      "    direction TB",
+      '    tick(["Every end morning"])',
+      '    step("<small>⚙️ 🛠️ do</small><br>Do\r',
+      'it #34;quoted#34;")',
+      '    c1@{ shape: notch-rect, label: "Tied',
+      'to two" }',
+      "  end",
+      '  c2@{ shape: notch-rect, label: "Tied to nothing" }',
+      '  tick -->|"first',
+      'second"| step',
+      "  step -.- c1",
+      "  tick -.- c1",
+      "  c2 --> step",
+      "  tick --> ghost",
+      "  class tick trig",
+      "  class step code",
+      "  class c1,c2 gap",
+      "  style home fill:transparent,stroke:#8a93a3,stroke-dasharray:6 4,color:#3d434f",
+    ].join("\n"),
+  );
+
+  it("reads a label over several rows, a line that says end in it ending nothing", () => {
+    expect(broken.scopes).toEqual([{ id: "home", label: "home: the end family", dashed: true }]);
+    expect(broken.parts).toEqual([
+      { id: "tick", kind: "trigger", label: "Every end morning", scope: "home" },
+      { id: "step", kind: "code", verb: "do", label: 'Do it "quoted"', scope: "home" },
+    ]);
+    expect(broken.lines.map((l) => [l.from, l.to, l.label])).toEqual([["tick", "step", "first second"]]);
+  });
+
+  it("puts a comment tied to two parts on both, and one tied to nothing on the whole drawing", () => {
+    expect(broken.notes).toEqual([
+      { id: "c1", on: "step", text: "Tied to two" },
+      { id: "c1", on: "tick", text: "Tied to two" },
+      { id: "c2", text: "Tied to nothing" },
+    ]);
+    // Flow only keeps the notes of the whole drawing.
+    expect(flowOnly(broken).notes.filter((n) => !n.on)).toEqual([{ id: "c2", text: "Tied to nothing" }]);
+  });
+
+  it("reads a label of many lines in time growing with its length", () => {
+    const start = performance.now();
+    const many = parseMermaid(`flowchart TB\n  a("${"line\n".repeat(100_000)}end")\n  b("B")\n  a --> b\n  class a,b code`);
+    expect(performance.now() - start).toBeLessThan(1_000);
+    expect(many.parts.map((p) => p.id)).toEqual(["a", "b"]);
+    expect(many.parts[0].label).toBe(`${"line ".repeat(100_000)}end`);
+    expect(many.lines).toHaveLength(1);
+  });
+
+  it("leaves out a line one of whose ends isn't drawn: from a note, or to nothing the text names", () => {
+    expect(line(broken, "c2", "step")).toBeUndefined();
+    expect(line(broken, "tick", "ghost")).toBeUndefined();
+    const ends = new Set([...broken.parts.map((p) => p.id), ...broken.scopes.map((s) => s.id)]);
+    for (const l of broken.lines) expect(ends.has(l.from) && ends.has(l.to), l.id).toBe(true);
+  });
+});

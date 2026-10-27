@@ -13,6 +13,7 @@ import { layOut } from "@/server/drawing";
 import { partLinks, type PartLink } from "@/server/part-links";
 import { orgWith, person, request, storeVersion, type Who } from "./helpers";
 import { pageRequest } from "./pages";
+import { laidOut } from "./drawn";
 
 const shopping = `awml: "0.6"
 title: Shopping
@@ -81,7 +82,7 @@ describe("a part with a ref, marked in the drawing", () => {
     for (const view of ["security", "platform"] as const) {
       const page = await pageOf("acme", "dinners", view);
       // The drawing has the part, for the mark to go on.
-      expect(page.drawing!.full.parts.map((p) => p.id)).toContain("list");
+      expect(laidOut(page.drawing).full.parts.map((p) => p.id)).toContain("list");
       expect(page.links).toEqual(linked);
     }
     expect(destination(linked[0])).toBe("/acme/shopping#list");
@@ -184,7 +185,7 @@ describe("parts linked across tenants", () => {
         const page = await pageOf("beta", "plans", view, who);
         expect(page.links).toEqual(hidden);
         expect(JSON.stringify(page.links)).not.toContain("acme");
-        expect(page.drawing!.full.parts.map((p) => p.id)).toContain("list");
+        expect(laidOut(page.drawing).full.parts.map((p) => p.id)).toContain("list");
       }
     expect(destination(hidden[0])).toBeNull();
   });
@@ -213,7 +214,7 @@ describe("parts linked across tenants", () => {
 // A drawing of a workflow whose list is linked, laid out as the server lays it out.
 async function drawn() {
   const text = `flowchart TB\n  list[("Shopping list")]\n  plan("<small>🤖</small><br>Plan the week#39;s dinners")\n  list -.-> plan\n  class list ctx\n  class plan ai`;
-  return (await layOut(text)).full;
+  return laidOut(await layOut(text)).full;
 }
 
 // The SVG the server sends for a drawing, with the links given.

@@ -11,6 +11,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { NoteButton, NoteTip } from "@/components/flow/FlowCanvas";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
 import { layOut } from "@/server/drawing";
+import { laidOut } from "./drawn";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
 import GalleryPage from "@/app/gallery/page";
@@ -90,7 +91,7 @@ describe("a workflow's drawing", () => {
 
 describe("a part's notes (#60)", () => {
   it("are never drawn: each part with notes has one icon, its notes' text only in its tooltip", async () => {
-    const { full } = await layOut(issue);
+    const { full } = laidOut(await layOut(issue));
     const svg = renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />);
     const marked = [...svg.matchAll(/<g class="flow-note" transform="[^"]+" data-note="([^"]+)"><title>([^<]*)<\/title>/g)];
     // Eight notes, on eight parts, one icon each.
@@ -105,7 +106,7 @@ describe("a part's notes (#60)", () => {
 
   it("show as text, never as HTML, in the tooltip, the button and the modal", async () => {
     const text = `---\nconfig: {}\n---\nflowchart TB\n  a("<small>⚙️ 🛠️ do</small><br>Do it")\n  n@{ shape: notch-rect, label: "#60;script#62;alert(1)#60;/script#62; and #60;b#62;bold#60;/b#62;" }\n  a -.- n\n  class a code\n  class n gap`;
-    const { full } = await layOut(text);
+    const { full } = laidOut(await layOut(text));
     expect(full.notes).toEqual([{ id: "n", on: "a", text: "<script>alert(1)</script> and <b>bold</b>" }]);
     const svg = renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />);
     expect(svg).toContain("<title>&lt;script&gt;alert(1)&lt;/script&gt; and &lt;b&gt;bold&lt;/b&gt;</title>");

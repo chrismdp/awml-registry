@@ -26,7 +26,7 @@ import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
 import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
 import VersionChecksPage from "@/app/[owner]/[slug]/v/[n]/checks/page";
 import { copyText } from "@/components/CopyButton";
-import { drawing, drawnFrom } from "./drawn";
+import { drawing, expectedOf } from "./drawn";
 import TokensPage from "@/app/settings/tokens/page";
 import LoginPage from "@/app/login/page";
 import { makeToken } from "@/app/settings/tokens/actions";
@@ -164,7 +164,7 @@ describe("the public gallery", () => {
     expect(shown).toContain("Public workflows");
     expect(shown).toContain("Workflows people have drawn and shared. Borrow one and make it yours.");
     expect(shown).toContain("The family's dinners AI 1 Code 3 ana / dinners");
-    expect(drawing(page.html)).toEqual(drawnFrom(await drawnAsRead(security)));
+    expect(drawing(page.html)).toEqual(await expectedOf([security]));
     expect(page.html).toContain('placeholder="Search by title"');
     expect(page.html).toContain('action="/gallery"');
   });
@@ -196,7 +196,7 @@ describe("a workflow's page", () => {
     const page = await renderPage(WorkflowPage, { owner: o, slug: "bin-day" });
     const shown = text(page.html);
     expect(shown).toContain(`${o} / bin-day Bin day Public · Version 1 of 1 Fork Who may see each part`);
-    expect(drawing(page.html)).toEqual(drawnFrom(await drawnAsRead(binDayPair.security)));
+    expect(drawing(page.html)).toEqual(await expectedOf([binDayPair.security]));
     expect(tabs(page.html)).toEqual([
       { href: `/${o}/bin-day/security`, label: "Who may see each part", selected: true },
       { href: `/${o}/bin-day/platform`, label: "Where each part runs", selected: false },

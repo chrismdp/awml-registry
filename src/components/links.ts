@@ -30,3 +30,34 @@ export const newTab = (e: { button?: number; ctrlKey: boolean; metaKey: boolean 
 // Whether a key follows a focused part: Enter does for a link, and Enter or
 // Space for a button that opens a menu.
 export const followsOnKey = (key: string, role: string | null) => key === "Enter" || (key === " " && role === "button");
+
+// What following a part does, as a link would: open where it leads, here or
+// in a new tab, open the menu of several, close the menu already open, or
+// nothing for a part that leads nowhere.
+export type Follow = { to: string; newTab: boolean } | "menu" | "close" | null;
+
+export function followOf(to: string | "menu" | null, e: { button?: number; ctrlKey: boolean; metaKey: boolean }, menuOpen: boolean): Follow {
+  if (menuOpen) return "close";
+  if (to === null || to === "menu") return to;
+  return { to, newTab: newTab(e) };
+}
+
+// A press on a part or a box: one that dragged it moves it and follows
+// nothing, so the click that ends it is let go; one that didn't follows it.
+export class Press {
+  private dragged = false;
+  // The part has moved under the pointer.
+  moved() {
+    this.dragged = true;
+  }
+  // Whether the click that ends the press follows the part. It ends the press.
+  followsClick() {
+    const follows = !this.dragged;
+    this.dragged = false;
+    return follows;
+  }
+  // A drag that ended without a click on the part, so the next press starts afresh.
+  reset() {
+    this.dragged = false;
+  }
+}

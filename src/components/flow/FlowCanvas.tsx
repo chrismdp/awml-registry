@@ -25,7 +25,8 @@ import type { PartLink } from "@/server/part-links";
 import type { Drawing, DrawnLine, DrawnPart, DrawnScope, Note, Point, Rect } from "./drawing";
 import { LabelGraphic, LineGraphic, NoteIcon, NOTE_R, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import type { Body, Physics } from "./physics";
-import { notesBy } from "./StaticDrawing";
+import { Press } from "../links";
+import { notesBy, wholeNotes } from "./StaticDrawing";
 
 // React Flow drawing what the server laid out, so a dragged part takes its
 // lines with it (issue #62). It starts exactly where the server's SVG was
@@ -51,14 +52,18 @@ type Shared = {
   hrefs: Record<string, string>;
   notes: Map<string, Note[]>;
   target?: string;
+  // The part whose menu is open.
+  menuFor?: string;
   onNote: (title: string, notes: Note[]) => void;
 };
 type PartData = Shared & { part: DrawnPart };
 type ScopeData = Shared & { scope: DrawnScope; hull?: boolean };
+type NotesData = Shared & { whole: Note[] };
 type LineData = { id: string; line: DrawnLine; physics: boolean; from?: Point; to?: Point };
 type PartNode = Node<PartData, "part">;
 type ScopeNode = Node<ScopeData, "scope">;
-type FlowNode = PartNode | ScopeNode;
+type NotesNode = Node<NotesData, "notes">;
+type FlowNode = PartNode | ScopeNode | NotesNode;
 type FlowEdge = Edge<LineData, "line">;
 
 export type FlowCanvasProps = {
@@ -71,6 +76,8 @@ export type FlowCanvasProps = {
   viewport: Viewport;
   // The part the address's fragment names, outlined.
   target?: string;
+  // The part whose menu is open.
+  menuFor?: string;
   onReady: () => void;
   onApi: (api: FlowApi) => void;
   onNote: (title: string, notes: Note[]) => void;
@@ -92,7 +99,7 @@ function Canvas(p: FlowCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges] = useState<FlowEdge[]>([]);
   const physics = useRef<Physics>(undefined);
-  const dragged = useRef(false);
+  const press = useRef(new Press());
   const flow = useReactFlow<FlowNode, FlowEdge>();
   const initialised = useNodesInitialized();
   const ready = useRef(false);
@@ -103,9 +110,10 @@ function Canvas(p: FlowCanvasProps) {
       hrefs: p.hrefs,
       notes: notesBy(drawing.notes),
       target: p.target,
+      menuFor: p.menuFor,
       onNote: p.onNote,
     }),
-    [p.id, p.links, p.hrefs, drawing.notes, p.target, p.onNote],
+    [p.id, p.links, p.hrefs, drawing.notes, p.target, p.menuFor, p.onNote],
   );
 
   // The page shows React Flow, and hides its SVG, once every part is drawn.
@@ -206,14 +214,15 @@ function Canvas(p: FlowCanvasProps) {
     // `shared` changing (a fragment, say) restyles the nodes below, without laying out again.
   }, [drawing, mode, p.id, setNodes, flow, fitOf]);
 
-  // The outlined part and the links change only what nodes carry.
+  // The outlined part, the open menu and the links change only what nodes
+  // carry and what they are called.
   useEffect(() => {
-    setNodes((old) => old.map((n) => ({ ...n, data: { ...n.data, ...shared } }) as FlowNode));
+    setNodes((old) => old.map((n) => labelled(n, shared)));
   }, [shared, setNodes]);
 
   const centre = (n: Node) => ({ x: n.position.x + (n.width ?? 0) / 2, y: n.position.y + (n.height ?? 0) / 2 });
   const onNodeClick: NodeMouseHandler<FlowNode> = (e, node) => {
-    if (dragged.current || (e.target as Element).closest("button, a")) return;
+    if (!press.current.followsClick() || (e.target as Element).closest("button, a")) return;
     const follows = node.type === "part" ? shared.links.has(node.id) : Boolean(shared.hrefs[node.id]);
     if (follows) p.onFollow(node.id, e);
   };
@@ -251,16 +260,16 @@ function Canvas(p: FlowCanvasProps) {
         if (e) fitted.current = false;
       }}
       onNodeDragStart={(_, n) => {
-        dragged.current = false;
+        press.current.reset();
         physics.current?.hold(n.id, centre(n));
       }}
       onNodeDrag={(_, n) => {
-        dragged.current = true;
+        press.current.moved();
         physics.current?.hold(n.id, centre(n));
       }}
       onNodeDragStop={(_, n) => {
         physics.current?.release(n.id);
-        setTimeout(() => (dragged.current = false));
+        setTimeout(() => press.current.reset());
       }}
     />
   );
@@ -288,23 +297,59 @@ function boundsOf(nodes: Node[]): Rect {
   };
 }
 
-// What a node is called, for someone who can't see it, and whether it leads anywhere.
-function a11y(label: string, link?: PartLink, href?: string): Pick<Node, "focusable" | "ariaRole" | "ariaLabel" | "domAttributes"> {
+// What a node is called, for someone who can't see it, and whether it leads
+// anywhere: a workflow's box on a map is a link to its page; a linked part
+// (#55) a link to its one workflow, or a button for the menu of several,
+// saying whether it is open; a part that leads nowhere is still named by
+// where it would lead.
+function a11y(label: string, link: PartLink | undefined, href: string | undefined, menuOpen: boolean): Pick<Node, "focusable" | "ariaRole" | "ariaLabel" | "domAttributes"> {
   if (href) return { focusable: true, ariaRole: "link", ariaLabel: `Open ${label}` };
-  if (!link || link.to.length === 0) return { focusable: false };
+  if (!link) return { focusable: false };
+  const named = [label, ...link.title.split("\n")].join(". ");
+  if (link.to.length === 0) return { focusable: false, ariaRole: "group", ariaLabel: named };
   const several = link.to.length > 1;
   return {
     focusable: true,
     ariaRole: several ? "button" : "link",
-    ariaLabel: [label, ...link.title.split("\n")].join(". "),
-    ...(several ? { domAttributes: { "aria-haspopup": "menu" } } : {}),
+    ariaLabel: named,
+    ...(several ? { domAttributes: { "aria-haspopup": "menu", "aria-expanded": menuOpen } } : {}),
   };
+}
+
+// A node with what it carries and what it is called brought up to date.
+export function labelled(n: FlowNode, shared: Shared): FlowNode {
+  if (n.type === "part") {
+    const label = n.data.part.lines.join(" ");
+    return { ...n, ...a11y(label, shared.links.get(n.id), undefined, shared.menuFor === n.id), data: { ...n.data, ...shared } };
+  }
+  if (n.type === "scope" && !n.data.hull && !n.data.scope.holds)
+    return { ...n, ...a11y(n.data.scope.lines.join(" "), undefined, shared.hrefs[n.id], false), data: { ...n.data, ...shared } };
+  return { ...n, data: { ...n.data, ...shared } } as FlowNode;
+}
+
+// The icon for the notes of the whole drawing, where the server put it.
+function notesNode(d: Drawing, shared: Shared, at: Point | undefined): NotesNode[] {
+  const whole = wholeNotes(d.notes);
+  if (!at || !whole.length) return [];
+  return [
+    {
+      id: "notes-of-the-drawing",
+      type: "notes",
+      position: { x: at.x - NOTE_R, y: at.y - NOTE_R },
+      width: 2 * NOTE_R,
+      height: 2 * NOTE_R,
+      draggable: false,
+      selectable: false,
+      focusable: false,
+      data: { ...shared, whole },
+    },
+  ];
 }
 
 // The nodes where the server put them, each part inside its scope's box. A
 // scope round parts is the background they sit on, so dragging or pinching
 // it pans and zooms, on a phone too, rather than moving it.
-function layeredNodes(d: Drawing, shared: Shared): FlowNode[] {
+export function layeredNodes(d: Drawing, shared: Shared): FlowNode[] {
   const scopes = new Map(d.scopes.map((s) => [s.id, s]));
   const relative = (x: number, y: number, parent?: string) => {
     const s = parent ? scopes.get(parent) : undefined;
@@ -321,7 +366,7 @@ function layeredNodes(d: Drawing, shared: Shared): FlowNode[] {
           width: s.width,
           height: s.height,
           ...(s.scope ? { parentId: s.scope, expandParent: true } : {}),
-          ...(s.holds ? { draggable: false, selectable: false, focusable: false } : a11y(s.lines.join(" "), undefined, shared.hrefs[s.id])),
+          ...(s.holds ? { draggable: false, selectable: false, focusable: false } : {}),
           data: { ...shared, scope: s },
         }),
       ),
@@ -333,11 +378,11 @@ function layeredNodes(d: Drawing, shared: Shared): FlowNode[] {
         width: part.width,
         height: part.height,
         ...(part.scope ? { parentId: part.scope, expandParent: true } : {}),
-        ...a11y(part.lines.join(" "), shared.links.get(part.id)),
         data: { ...shared, part },
       }),
     ),
-  ];
+    ...notesNode(d, shared, d.notesAt),
+  ].map((n) => labelled(n, shared));
 }
 
 // The nodes where the physics has them, with each scope that holds parts
@@ -382,11 +427,14 @@ function physicsNodes(d: Drawing, bodies: Body[], shared: Shared): FlowNode[] {
   const boxes = bodies.map((b): FlowNode => {
     const at = { position: { x: b.x! - b.width / 2, y: b.y! - b.height / 2 }, width: b.width, height: b.height };
     const part = parts.get(b.id);
-    if (part) return { id: b.id, type: "part", ...at, ...a11y(part.lines.join(" "), shared.links.get(b.id)), data: { ...shared, part } };
-    const s = scopes.get(b.id)!;
-    return { id: b.id, type: "scope", ...at, ...a11y(s.lines.join(" "), undefined, shared.hrefs[s.id]), data: { ...shared, scope: s } };
+    if (part) return { id: b.id, type: "part", ...at, data: { ...shared, part } };
+    return { id: b.id, type: "scope", ...at, data: { ...shared, scope: scopes.get(b.id)! } };
   });
-  return [...hulls, ...boxes];
+  // The notes of the whole drawing keep to its top-left corner.
+  const corner = bodies.length
+    ? { x: Math.min(...bodies.map((b) => b.x! - b.width / 2)), y: Math.min(...bodies.map((b) => b.y! - b.height / 2)) - 80 }
+    : undefined;
+  return [...hulls, ...boxes, ...notesNode(d, shared, corner)].map((n) => labelled(n, shared));
 }
 
 function linesOf(d: Drawing, id: string, physics: boolean): FlowEdge[] {
@@ -449,6 +497,7 @@ function PartNodeView({ data }: NodeProps<PartNode>) {
   return (
     <div className={`flow-node${data.target === part.id ? " part-target" : ""}${data.links.get(part.id)?.to.length ? " part-linked" : ""}`} style={{ width: part.width, height: part.height }}>
       <svg className="flow-node-svg" width={part.width} height={part.height}>
+        {data.links.get(part.id) && <title>{data.links.get(part.id)!.title}</title>}
         <PartGraphic part={part} link={data.links.get(part.id)} />
       </svg>
       <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
@@ -535,5 +584,14 @@ function LineView({ source, target, data }: EdgeProps<FlowEdge>) {
   );
 }
 
-const NODE_TYPES = { part: PartNodeView, scope: ScopeNodeView };
+// The icon of the notes of the whole drawing.
+function NotesNodeView({ data }: NodeProps<NotesNode>) {
+  return (
+    <div className="flow-node" style={{ width: 2 * NOTE_R, height: 2 * NOTE_R }}>
+      <NoteButton title="The whole drawing" notes={data.whole} at={{ x: NOTE_R, y: NOTE_R }} onNote={data.onNote} />
+    </div>
+  );
+}
+
+export const NODE_TYPES = { part: PartNodeView, scope: ScopeNodeView, notes: NotesNodeView };
 const EDGE_TYPES = { line: LineView };

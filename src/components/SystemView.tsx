@@ -7,7 +7,7 @@ import type { Visibility } from "@/server/push";
 import { names } from "@/server/summary";
 import { Checks, mistakesIn, Tick, type CheckedFile } from "./Checks";
 import { Drawing } from "./Drawing";
-import type { Drawings } from "./flow/drawing";
+import { undrawnText, type Drawings, type Undrawn } from "./flow/drawing";
 import { Versions, type ListedVersion } from "./VersionList";
 import { count } from "./words";
 
@@ -24,7 +24,7 @@ export type SystemFit = { owner: string; slug: string; label: string; fits: bool
 // mistakes it threw, and is empty when no member is drawn.
 export type SystemPanel =
   | { tab: "checks" }
-  | { tab: "map"; drawing?: Drawings; hrefs?: Record<string, string>; links?: PartLink[]; error?: string }
+  | { tab: "map"; drawing?: Drawings | Undrawn; hrefs?: Record<string, string>; links?: PartLink[]; error?: string }
   | { tab: "who-waits"; summary?: Summary; error?: string }
   | { tab: "where-it-runs"; fits?: SystemFit[]; gaps?: string[]; error?: string };
 
@@ -184,23 +184,29 @@ function Panel(p: SystemViewProps) {
   if (panel.tab === "map")
     return (
       <figure className="figure" role="tabpanel" aria-label={label}>
-        {panel.drawing ? <Drawing drawings={panel.drawing} hrefs={panel.hrefs} links={panel.links} /> : <Undrawn />}
+        {!panel.drawing ? (
+          <NoneDrawn />
+        ) : "undrawn" in panel.drawing ? (
+          <p className="cannot-draw">{undrawnText(panel.drawing, "map")}</p>
+        ) : (
+          <Drawing drawings={panel.drawing} hrefs={panel.hrefs} links={panel.links} />
+        )}
       </figure>
     );
   if (panel.tab === "who-waits")
     return (
       <div className="figure pf-panel" role="tabpanel" aria-label={label}>
-        {panel.summary ? <Waits summary={panel.summary} /> : <Undrawn />}
+        {panel.summary ? <Waits summary={panel.summary} /> : <NoneDrawn />}
       </div>
     );
   return (
     <div className="figure pf-panel" role="tabpanel" aria-label={label}>
-      {panel.fits && panel.gaps ? <Runs fits={panel.fits} gaps={panel.gaps} /> : <Undrawn />}
+      {panel.fits && panel.gaps ? <Runs fits={panel.fits} gaps={panel.gaps} /> : <NoneDrawn />}
     </div>
   );
 }
 
-function Undrawn() {
+function NoneDrawn() {
   return <p className="cannot-draw">None of the workflows you can see in this system is drawn.</p>;
 }
 

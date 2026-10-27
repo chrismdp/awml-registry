@@ -79,6 +79,7 @@ export async function loadSystem(owner: string, slug: string, n: string, tab: Sy
       ...(await attempt(async () => {
         if (!drawn.length) return {};
         const drawing = await layOut(await engine.drawMap(drawn), { map: true });
+        if ("undrawn" in drawing) return { drawing };
         return { drawing, hrefs, links: mapLinks(drawing.full, Object.fromEntries(boxes.map((b, i) => [`w${i + 1}`, b]))) };
       })),
     };

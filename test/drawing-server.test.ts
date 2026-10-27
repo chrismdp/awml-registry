@@ -9,7 +9,11 @@ import { boxText, LABEL, partText } from "@/components/flow/drawing";
 import { parseMermaid } from "@/components/flow/graph";
 import { textWidth, wrap } from "@/components/flow/text";
 import { layOut, mapLinks } from "@/server/drawing";
+import { laidOut } from "./drawn";
 import { example } from "./helpers";
+
+// The drawing laid out, which these tests expect to be.
+const lay = async (text: string, opts?: { map?: boolean }) => laidOut(await layOut(text, opts));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -26,7 +30,7 @@ const inside = (r: { x: number; y: number; width: number; height: number }, s: t
 
 describe("laying a drawing out on the server", () => {
   it("places every part inside its scope, every scope inside the one it is in, and routes every line", async () => {
-    const { full } = await layOut(dinners);
+    const { full } = await lay(dinners);
     const scopes = new Map(full.scopes.map((s) => [s.id, s]));
     expect(full.parts.map((p) => p.id)).toEqual(parseMermaid(dinners).parts.map((p) => p.id));
     for (const p of full.parts) if (p.scope) expect(inside(p, scopes.get(p.scope)!), p.id).toBe(true);
@@ -43,7 +47,7 @@ describe("laying a drawing out on the server", () => {
   });
 
   it("lays out Flow only (#51) on its own: no contexts and no dotted lines, so it is smaller", async () => {
-    const { full, flow } = await layOut(issue);
+    const { full, flow } = await lay(issue);
     expect(flow.parts.some((p) => p.kind === "context")).toBe(false);
     expect(flow.lines.some((l) => l.style === "dotted")).toBe(false);
     expect(flow.parts.length).toBeLessThan(full.parts.length);
@@ -52,34 +56,34 @@ describe("laying a drawing out on the server", () => {
 
   it("keeps each layout once worked out, by the text, the switch and the engine, so the same drawing isn't laid out twice", async () => {
     const layout = vi.spyOn(ELK.prototype, "layout");
-    const first = await layOut(small("x"));
+    const first = await lay(small("x"));
     // The whole drawing and Flow only: two layouts.
     expect(layout).toHaveBeenCalledTimes(2);
-    const again = await layOut(small("x"));
+    const again = await lay(small("x"));
     expect(layout).toHaveBeenCalledTimes(2);
     expect(again).toEqual(first);
     // Each caller gets its own copy.
     again.full.parts[0].x = -1;
-    expect((await layOut(small("x"))).full.parts[0].x).not.toBe(-1);
+    expect((await lay(small("x"))).full.parts[0].x).not.toBe(-1);
     // Another text is laid out afresh.
-    await layOut(small("y"));
+    await lay(small("y"));
     expect(layout).toHaveBeenCalledTimes(4);
   });
 
   it("keeps only the 200 layouts used last", async () => {
     const layout = vi.spyOn(ELK.prototype, "layout");
     // A hundred drawings, each laid out whole and Flow only: 200 layouts, all kept.
-    for (let i = 0; i < 100; i++) await layOut(small(`k${i}`));
+    for (let i = 0; i < 100; i++) await lay(small(`k${i}`));
     expect(layout).toHaveBeenCalledTimes(200);
     // Using the first again keeps it as the newest.
-    await layOut(small("k0"));
+    await lay(small("k0"));
     expect(layout).toHaveBeenCalledTimes(200);
     // One more drawing lets go of the two layouts used longest ago, the second drawing's.
-    await layOut(small("k100"));
+    await lay(small("k100"));
     expect(layout).toHaveBeenCalledTimes(202);
-    await layOut(small("k1"));
+    await lay(small("k1"));
     expect(layout).toHaveBeenCalledTimes(204);
-    await layOut(small("k0"));
+    await lay(small("k0"));
     expect(layout).toHaveBeenCalledTimes(204);
   }, 60_000);
 
@@ -102,7 +106,7 @@ describe("laying a drawing out on the server", () => {
 
 describe("a system's map, laid out on the server", () => {
   it("draws each trigger outside its workflow's box, with a line into it", async () => {
-    const { full } = await layOut(map, { map: true });
+    const { full } = await lay(map, { map: true });
     const trigger = full.parts.find((p) => p.id === "w1_comment")!;
     expect(trigger.scope).toBeUndefined();
     expect(full.lines.find((l) => l.from === "w1_comment" && l.to === "w1")).toBeDefined();
@@ -115,7 +119,7 @@ describe("a system's map, laid out on the server", () => {
   });
 
   it("leads each part joined to workflows' boxes to those workflows, and none to a box the viewer may not open", async () => {
-    const { full } = await layOut(map, { map: true });
+    const { full } = await lay(map, { map: true });
     const boxes = {
       w1: { title: "An issue becomes a pull request", address: "chrismdp/issue-to-pull-request", href: "/chrismdp/issue-to-pull-request" },
       w3: { title: "A failed build tries again", address: "chrismdp/retry-a-build", href: "/chrismdp/retry-a-build" },

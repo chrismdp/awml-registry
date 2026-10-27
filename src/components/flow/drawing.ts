@@ -54,10 +54,20 @@ export type Drawing = {
   scopes: DrawnScope[];
   lines: DrawnLine[];
   notes: Note[];
+  // Where the icon of the notes of the whole drawing goes, when it has any.
+  notesAt?: Point;
 };
 
 // Both layouts a page may show: the whole drawing, and Flow only (#51).
 export type Drawings = { full: Drawing; flow: Drawing };
+
+// Why the server didn't lay a drawing out: it is beyond the limits it lays
+// out (src/server/drawing.ts), or its layout failed.
+export type Undrawn = { undrawn: "too big" | "failed" };
+
+// What a page says in place of a drawing it wasn't given, of a workflow or a map.
+export const undrawnText = (u: Undrawn, what: "workflow" | "map") =>
+  u.undrawn === "too big" ? `This ${what} is too big to draw here.` : `This ${what} can't be drawn here.`;
 
 // The sizes text is drawn at, and the height of each of its lines.
 export const LABEL = { size: 14, line: 19 };

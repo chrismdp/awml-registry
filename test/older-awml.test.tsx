@@ -17,7 +17,7 @@ import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
 import GalleryPage from "@/app/gallery/page";
 import PlatformPage from "@/app/[owner]/platforms/[slug]/page";
 import PlatformYamlPage from "@/app/[owner]/platforms/[slug]/yaml/page";
-import { drawing, drawnFrom } from "./drawn";
+import { drawing, expectedOf } from "./drawn";
 import { example, person, request, storePlatformVersion, storeVersion, type Who } from "./helpers";
 import { call } from "./mcp-client";
 import { renderPage } from "./pages";
@@ -130,8 +130,8 @@ describe("a stored 0.4 version, with no checks stored", () => {
 
   it("draws its design and its implementation converted to 0.6, as the native awml draws the converted file", async () => {
     const o = await stored04();
-    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html)).toEqual(drawnFrom(example("older/dinners-04.mmd")));
-    expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" })).html)).toEqual(drawnFrom(example("older/dinners-04-home.mmd")));
+    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html)).toEqual(await expectedOf([dinners04]));
+    expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" })).html)).toEqual(await expectedOf([dinners04], "home"));
   });
 
   it("has its checks worked out when shown, through convert, by the AWML the registry runs", async () => {
@@ -170,7 +170,7 @@ describe("a stored 0.4 version, with no checks stored", () => {
 
   it("draws its design on a gallery card", async () => {
     await stored04();
-    expect(drawing((await renderPage(GalleryPage, {})).html)).toEqual(drawnFrom(example("older/dinners-04.mmd")));
+    expect(drawing((await renderPage(GalleryPage, {})).html)).toEqual(await expectedOf([dinners04]));
   });
 
   it("is forked as the converted 0.6 file, since a fork is a push", async () => {
@@ -195,8 +195,8 @@ describe("a stored 0.5 version, with the checks stored at push, and a stored 0.5
 
   it("draws its design and its office implementation converted to 0.6, as the native awml draws the converted file", async () => {
     const o = await stored05();
-    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "client-email" })).html)).toEqual(drawnFrom(example("older/client-email-05.mmd")));
-    expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "client-email" })).html)).toEqual(drawnFrom(example("older/client-email-05-office.mmd")));
+    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "client-email" })).html)).toEqual(await expectedOf([clientEmail05]));
+    expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "client-email" })).html)).toEqual(await expectedOf([clientEmail05], "office"));
   });
 
   it("keeps its checks as stored, named by the AWML that made them", async () => {

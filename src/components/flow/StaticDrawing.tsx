@@ -82,6 +82,7 @@ export function StaticDrawing({
           </g>
         );
       })}
+      {drawing.notesAt && <Notes notes={wholeNotes(drawing.notes)} at={drawing.notesAt} />}
     </svg>
   );
 }
@@ -97,6 +98,9 @@ function Notes({ notes, at }: { notes: Note[]; at: { x: number; y: number } }) {
 }
 
 // Each part's notes, and each scope's, by what they belong to.
+// The notes of the whole drawing, tied to nothing in it, which share one icon.
+export const wholeNotes = (notes: Note[]) => notes.filter((n) => !n.on);
+
 export function notesBy(notes: Note[]) {
   const by = new Map<string, Note[]>();
   for (const n of notes) if (n.on) by.set(n.on, [...(by.get(n.on) ?? []), n]);

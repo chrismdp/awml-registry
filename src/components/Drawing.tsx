@@ -7,7 +7,7 @@ import type { Drawings, Note, Rect } from "./flow/drawing";
 import type { FlowApi, FlowCanvasProps, Mode } from "./flow/FlowCanvas";
 import { Arrowheads } from "./flow/Graphic";
 import { StaticDrawing } from "./flow/StaticDrawing";
-import { destination, followsOnKey, newTab, partInHash } from "./links";
+import { destination, followOf, followsOnKey, partInHash } from "./links";
 import { PartMenu } from "./PartLinks";
 import { fit, STEP, viewOf, type Box, type Viewport } from "./viewport";
 
@@ -87,17 +87,25 @@ export function Drawing({
   // new tab, or opens or closes the menu of several.
   const onFollow = useCallback(
     (part: string, e: { ctrlKey: boolean; metaKey: boolean; button?: number }) => {
-      const href = hrefs[part];
       const link = links.find((l) => l.part === part);
-      const to = href ?? (link ? destination(link) : null);
-      if (to === "menu" && link) {
-        const node = api.current?.rectOf(part);
-        setMenu((open) => (open?.link === link || !node ? undefined : { link, node }));
-      } else if (to && newTab(e)) window.open(to, "_blank", "noopener");
-      else if (to) window.location.assign(to);
+      const to = hrefs[part] ?? (link ? destination(link) : null);
+      const f = followOf(to, e, menu?.link.part === part);
+      const node = api.current?.rectOf(part);
+      if (f === "close") closeMenu();
+      else if (f === "menu" && link && node) setMenu({ link, node });
+      else if (f && f !== "menu" && f.newTab) window.open(f.to, "_blank", "noopener");
+      else if (f && f !== "menu") window.location.assign(f.to);
     },
-    [hrefs, links],
+    // closeMenu reads only the menu, which is a dependency.
+    [hrefs, links, menu],
   );
+
+  // Closes the menu, giving the focus back to the part it opened from.
+  function closeMenu() {
+    const part = menu?.link.part;
+    setMenu(undefined);
+    if (part) frame.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(part)}"]`)?.focus();
+  }
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     const el = e.target as HTMLElement;
@@ -139,11 +147,13 @@ export function Drawing({
     if (dx || dy) api.current?.panBy(dx, dy);
   }
 
-  // A press anywhere outside the menu closes it.
+  // A press anywhere outside the menu closes it, but on the part it opened
+  // from, whose click closes it, as a button's would.
   useEffect(() => {
     if (!menu) return;
     const onPress = (e: Event) => {
-      if (!(e.target as Element | null)?.closest?.(".part-menu")) setMenu(undefined);
+      const at = e.target as Element | null;
+      if (!at?.closest?.(`.part-menu, .react-flow__node[data-id="${CSS.escape(menu.link.part)}"]`)) setMenu(undefined);
     };
     document.addEventListener("pointerdown", onPress);
     return () => document.removeEventListener("pointerdown", onPress);
@@ -165,6 +175,7 @@ export function Drawing({
             hrefs={hrefs}
             viewport={start}
             target={target}
+            menuFor={menu?.link.part}
             onReady={onReady}
             onApi={onApi}
             onNote={onNote}
@@ -199,7 +210,7 @@ export function Drawing({
         </div>
       </div>
       <NoteDialog shown={note} onClose={() => setNote(undefined)} />
-      {menu && <PartMenu link={menu.link} node={menu.node} onClose={() => setMenu(undefined)} />}
+      {menu && <PartMenu link={menu.link} node={menu.node} onClose={closeMenu} />}
     </div>
   );
 }
