@@ -87,30 +87,76 @@ describe("judging a staged change", () => {
     expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
   });
 
-  // The pull request quotes the note as Claude wrote it, so the reason only points to it.
-  it("sends a change to review when Claude's note asks for it", () => {
+  // The reviews' findings and the classifier's verdict are files the build's review job wrote. A
+  // finding about code the change didn't write is shown, but leaves the change straightforward.
+  it.each([
+    ["an Important finding", `[{"severity": "Important"}]`, true, "The reviews left 1 finding open."],
+    ["a Nit and an Important finding", `[{"severity": "Nit"}, {"severity": "Important"}]`, true, "The reviews left 2 findings open."],
+    ["only a pre-existing finding", `[{"severity": "Pre-existing"}]`, false, "No review rule matched this change."],
+    ["no findings", "[]", false, "No review rule matched this change."],
+  ])("weighs %s", (_, findings, review, reason) => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
-    const note = join(tempDir(), "review.md");
-    writeFileSync(note, "- I chose the slower option.\n- The issue did not settle it.\n");
+    const path = join(tempDir(), "findings.json");
+    writeFileSync(path, findings);
 
-    expectVerdict(evaluate(repo, plain, note), true, "Claude asked for a review: see Claude's note.");
+    expectVerdict(evaluate(repo, plain, { findings: path }), review, reason);
   });
 
-  it("sends a change to review when Claude's note is empty", () => {
+  it("sends a change to review when the classifier asks", () => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
-    const note = join(tempDir(), "review.md");
-    writeFileSync(note, "\n");
+    const path = join(tempDir(), "classification.json");
+    writeFileSync(path, `{"needs_review": true, "reasons": ["It changes who may see a private workflow."]}`);
 
-    expectVerdict(evaluate(repo, plain, note), true, "Claude asked for the maintainer's review.");
+    expectVerdict(evaluate(repo, plain, { classification: path }), true, "The classifier asked for a review.");
   });
 
-  it("takes a missing note as no note", () => {
+  // The classifier can add a review, never skip one.
+  it("keeps a review the rules require when the classifier finds the change low risk", () => {
+    const repo = newRepo();
+    stage(repo, "docs/SPEC.md", "changed\n");
+    const path = join(tempDir(), "classification.json");
+    writeFileSync(path, `{"needs_review": false, "reasons": ["It is a small fix."]}`);
+
+    expectVerdict(
+      evaluate(repo, { reviewPaths: ["docs/SPEC.md"], maxChangedLines: 400 }, { classification: path }),
+      true,
+      "docs/SPEC.md is a path that always needs review.",
+    );
+  });
+
+  it("adds nothing when the classifier finds the change low risk", () => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
+    const path = join(tempDir(), "classification.json");
+    writeFileSync(path, `{"needs_review": false, "reasons": ["It is a small fix."]}`);
 
-    expectVerdict(evaluate(repo, plain, join(tempDir(), "review.md")), false, "No review rule matched this change.");
+    expectVerdict(evaluate(repo, plain, { classification: path }), false, "No review rule matched this change.");
+  });
+
+  it.each([
+    ["an unknown severity", { findings: `[{"severity": "Minor"}]` }],
+    ["findings that aren't a list", { findings: `{"severity": "Nit"}` }],
+    ["a finding that isn't an object", { findings: `["Nit"]` }],
+    ["findings that aren't JSON", { findings: "Nit" }],
+    ["a missing findings file", { findings: undefined }],
+    ["a verdict without needs_review", { classification: `{"reasons": []}` }],
+    ["a needs_review that isn't true or false", { classification: `{"needs_review": "yes"}` }],
+    ["a missing classification file", { classification: undefined }],
+  ])("refuses %s", (_, files: { findings?: string; classification?: string }) => {
+    const repo = newRepo();
+    stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
+    const dir = tempDir();
+    const records: { findings?: string; classification?: string } = {};
+    for (const name of ["findings", "classification"] as const) {
+      if (!(name in files)) continue;
+      records[name] = join(dir, `${name}.json`);
+      const text = files[name];
+      if (text !== undefined) writeFileSync(records[name], text);
+    }
+
+    expect(() => evaluate(repo, plain, records)).toThrow();
   });
 
   it.each([

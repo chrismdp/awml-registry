@@ -1,61 +1,18 @@
-# Builds the change an issue asks for when the maintainer adds the build label, and opens a pull
-# request for it. A change the build rule finds straightforward merges by itself. This is the
-# workflow drawn at https://awml.io/chrismdp/issue-to-pull-request.
-#
-# Only people with write access and the repository's app can add a label, so the label is the
-# decision. Claude works in the first job with a read-only token, sees only the issue and the
-# comments of the repository's own people, and hands back a patch. A second read-only job applies
-# that patch and runs the same checks as ci.yml: npm ci, typecheck, lint and test. The later jobs
-# start from the commit of main the draft started from, so the patch still applies when main moves
-# during a long draft, and the pull request catches up like any other. The write-capable job runs
-# none of the proposed code and installs nothing. It judges a passing patch against
-# .github/build-rules.yml with scripts/build-rule.ts, both as they are on main, and opens the pull
-# request.
-#
-# A change that alters what a page shows is pictured, before and after. Claude names the pages in
-# pictures.json beside its patch. Once the checks pass, a third read-only job runs
-# .github/picture-pages.sh as it is on main. It builds and serves the registry from main and then
-# from the change, fills each with the same people, workflows and platforms from
-# scripts/seed-pictures.ts, and pictures each page at desktop width, 1280 pixels, and at phone
-# width, 390. A page that moves when someone uses it, such as a drawing being zoomed, is recorded
-# as a GIF of the moves Claude lists. Any other page is a still PNG of the whole page. A change for
-# which Claude names no pages, such as one to the server alone, the tests or the workflows, skips
-# that job. The write-capable job checks every picture, pushes them to the factory-media branch,
-# which holds only pictures, and shows them in the pull request. If a picture fails a check, or the
-# pictures job fails, all the pictures are left out and the description says why. The change
-# still goes ahead.
-#
-# Claude writes the pull request's description in Markdown. The write-capable job puts why the
-# change needs review, and Claude's note, above it, and the pictures and the checks below it. A
-# change that needs review stays open, and the person who added the label is asked to review it,
-# or the repository's owner when the app added the label. A straightforward change is set to merge
-# by itself once CI passes, saying why and how to undo it. Main's rule holds every merge until CI
-# has passed on the branch.
-#
-# The repository's GitHub App pushes the branch and the pictures, opens the pull request and sets
-# the merge, because GitHub starts other workflows from what an app does but not from what the
-# Actions token does. So CI runs on the pull request and shows on it, and the merge starts CI on
-# main and the conflict rebase workflow, as a person's merge would. The job mints the app's token,
-# for this repository alone, from the app's two secrets and gives it only to the steps that write
-# with it. Review requests, comments and the retry's dispatch use the Actions token. Claude's job
-# never gets the app's token.
-#
-# A build can also be started by hand, by dispatching this one with the issue's number. A build that
-# fails its checks, or whose draft fails or runs out of time, starts itself again by dispatch, up to
-# three tries in all. Each try after the first brings in the last try's result, with the end of the
-# failing check's output, so Claude fixes what failed rather than starting over. After the third try
-# it comments on the issue with the reason instead. A draft in which Claude changed nothing isn't
-# tried again: it comments with Claude's message. The retry job only reads results and calls the
-# GitHub API, and runs nothing from the change. Pictures that fail don't start another try.
-#
-# Each build keeps one status comment on the issue, marked with a hidden <!-- factory-status -->.
-# A first job posts it before Claude drafts, saying the build has started. Each retry edits the
-# latest such comment from the Actions bot to say which try it's on and why the last one failed, so
-# no comment id passes between runs, and a new build label starts a new comment. The open job edits
-# it to link the pull request, saying whether it merges by itself or waits for a review, and the
-# retry job edits it when the build fails or changes nothing. A failure still gets its own new
-# comment too, because GitHub sends no notification for an edit.
-#
+# An issue the maintainer labels build becomes a pull request. Only people with write access, and
+# the repository's own app, can add a label, so the label is the decision. Claude drafts with a
+# read-only token, from the issue as it read when the label went on. The checks run where Claude
+# can't reach: npm ci, typecheck, lint and test, as ci.yml runs them. Two fresh Claude sessions that
+# didn't write the change review it, one for bugs and one for security, and a third classifies its
+# risk. Alongside the reviews, the pages the change alters are pictured, before and after. The app
+# then pushes the branch and the pictures and opens the pull request, which lands by
+# land-a-pull-request (land.yml) once CI has run. A failed check, or an Important finding before the
+# third try, goes to retry-a-build (retry.yml).
+# Drawn at https://awml.io/chrismdp/issue-to-pull-request
+name: Build from an issue
+# GitHub names each build run for its issue and try, from its own inputs, so retry.yml and land.yml
+# can check a run is the one they mean.
+run-name: ${{ (github.event_name == 'workflow_dispatch' || github.event.label.name == 'build') && format('Build of issue {0}, try {1}', inputs.issue || github.event.issue.number, inputs.attempt || '1') || format('A label added to issue {0}', github.event.issue.number) }}
+
 # Before it works, a repository needs:
 # - a GitHub App with read and write access to contents, pull requests and issues, installed on the
 #   repository, with its app id in a FACTORY_APP_ID secret and a private key in FACTORY_APP_KEY;
@@ -65,11 +22,35 @@
 # - "Allow auto-merge" turned on in the repository's general settings;
 # - a ruleset on main that requires CI's test check, since that rule is what holds a merge the app
 #   sets. It must cover main alone, so that the app can push the factory-media branch.
-name: Build from an issue
-
+#
+# The app pushes and opens, because GitHub starts other workflows from what an app does but not
+# from what the Actions token does, so CI runs on the pull request, and land.yml when CI finishes.
+# The open job mints the app's token, for this repository alone, from the app's two secrets, and
+# gives it only to the steps that push, open and close. Comments and the retry's dispatch use the
+# Actions token. No job that runs Claude or the change's code holds a token that can write.
+#
+# A change that alters what a page shows is pictured, before and after. Claude names the pages in
+# pictures.json beside its patch. Once the checks pass, the pictures job runs
+# .github/picture-pages.sh as it is on main. It builds and serves the registry from main and then
+# from the change, fills each with the same people, workflows and platforms from
+# scripts/seed-pictures.ts, and pictures each page at desktop width, 1280 pixels, and at phone
+# width, 390. A page that moves when someone uses it, such as a drawing being zoomed, is recorded
+# as a GIF of the moves Claude lists. Any other page is a still PNG of the whole page. A change for
+# which Claude names no pages, such as one to the server alone, the tests or the workflows, skips
+# that job. The open job checks every picture, pushes them to the factory-media branch, which holds
+# only pictures, and shows them in the pull request. If a picture fails a check, or the pictures job
+# fails, all the pictures are left out and the description says why. The change still goes ahead.
+#
+# Each build keeps one status comment on the issue, marked with a hidden <!-- factory-status -->.
+# The start job posts it before Claude drafts, and a retry edits the latest one from the Actions
+# bot to say which try it's on and why the last one failed, so no comment id passes between runs,
+# and a new build label starts a new comment. The open job edits it to link the pull request,
+# land.yml once CI has run, and retry.yml when the build fails or changes nothing. A failure still
+# gets its own new comment too, because GitHub sends no notification for an edit.
 on:
   issues:
     types: [labeled]
+  # retry.yml starts each try after the first, and a person can start one by hand.
   workflow_dispatch:
     inputs:
       issue:
@@ -79,7 +60,7 @@ on:
         description: Which try this is, from 1 to 3
         default: "1"
       previous_run:
-        description: The run of the last try, whose result this try is told about
+        description: The retry-a-build run that says why the last try failed
         default: ""
       requested_by:
         description: Who to ask to review the pull request, if it needs a review
@@ -96,15 +77,16 @@ env:
   ATTEMPT: ${{ inputs.attempt || '1' }}
   PREVIOUS_RUN: ${{ inputs.previous_run }}
   # Whoever added the label, or started the build by hand. A retry passes them on. A build whose
-  # label the app added has the app's bot here, whose name isn't a person's, so the review step asks
-  # the owner instead.
+  # label the app added has the app's bot here, whose name isn't a person's, so land.yml asks the
+  # owner instead.
   REQUESTED_BY: ${{ inputs.requested_by || github.event.sender.login }}
 
 jobs:
   # Says on the issue that the build has started, before Claude drafts. The first try posts a new
   # status comment, and a retry edits the latest one to say which try it's on and why the last
-  # failed. It checks out nothing and runs only gh, so the drafting and checking jobs can stay
-  # read-only. If it can't comment, the build goes on without the comment.
+  # failed, as the retry run that started it recorded. It checks out nothing and runs only gh, so
+  # the drafting and checking jobs can stay read-only. If it can't comment, the build goes on
+  # without the comment.
   start:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'build'
     runs-on: ubuntu-latest
@@ -128,11 +110,16 @@ jobs:
             echo "<!-- factory-status -->"
             printf '**Building this issue** (try %s of 3). [The run](%s)\n' "$ATTEMPT" "$run_url"
             if [ "$ATTEMPT" -gt 1 ]; then
-              reason="The draft failed or ran out of time."
-              if [ -n "$PREVIOUS_RUN" ] &&
-                gh run download "$PREVIOUS_RUN" --repo "$GITHUB_REPOSITORY" -n result -D "$here/previous"; then
-                reason="$(head -n 1 "$here/previous/result.txt" 2>/dev/null | cut -c 1-200)"
-                [ -n "$reason" ] || reason="The check job did not produce a result."
+              reason="The reason was not recorded."
+              # Only retry.yml's run from main for this issue's last try is read.
+              retry="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/retry.yml" --jq .id || true)"
+              if [ -n "$PREVIOUS_RUN" ] && [ -n "$retry" ] &&
+                gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREVIOUS_RUN" |
+                  jq -e --argjson workflow "$retry" --arg title "Retry of issue $ISSUE, try $((ATTEMPT - 1))" \
+                    '.workflow_id == $workflow and .head_branch == "main" and .display_title == $title' > /dev/null &&
+                gh run download "$PREVIOUS_RUN" --repo "$GITHUB_REPOSITORY" -n failed -D "$here/failed"; then
+                reason="$(head -n 1 "$here/failed/reason.txt" 2>/dev/null | cut -c 1-200)"
+                [ -n "$reason" ] || reason="The reason was not recorded."
               fi
               echo
               printf 'The last try failed because: %s\n' "$reason"
@@ -151,6 +138,9 @@ jobs:
             gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$here/comment.md"
           fi
 
+  # Claude works here with a read-only token, sees only the issue's text as it was when the label
+  # went on and the comments of the repository's own people, and hands back a patch, with the pages
+  # it alters named in pictures.json.
   draft:
     needs: start
     if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || github.event.label.name == 'build') }}
@@ -179,44 +169,96 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: Bring in the issue and the comments of the repository's own people
+      # The label approves the issue as it reads then. Its author, who may be anyone, can edit it
+      # later, so every try drafts from the text the label approved. The first try takes the
+      # issue's title and body from the label's event, and keeps them as the asked artifact, before
+      # Claude drafts. A retry reads them from the first try's run: the latest build of this issue's
+      # first try from main before the retry run that started it, each run checked as the last
+      # try's is. Removing and adding the label again approves the text as it reads now, as does a
+      # build started by hand (chrismdp/awml#120). The labels and the comments of the repository's
+      # own people are read as they are now. Anyone can comment, but only the comments of the owner,
+      # members and collaborators are passed on, so strangers' text never reaches the draft step.
+      - name: Bring in the issue's text as it was when the label went on, and the comments of the repository's own people
+        id: bring
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "$RUNNER_TEMP/build"
-          {
+          asked="$RUNNER_TEMP/asked"
+          mkdir -p "$RUNNER_TEMP/build" "$asked"
+          if [ -z "$PREVIOUS_RUN" ] && [ "$GITHUB_EVENT_NAME" = issues ]; then
+            jq --argjson issue "$ISSUE" '{issue: $issue, title: .issue.title, body: (.issue.body // "")}' \
+              "$GITHUB_EVENT_PATH" > "$asked/asked.json"
+          elif [ -z "$PREVIOUS_RUN" ]; then
             gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE" \
-              --jq '"# #\(.number): \(.title)\n\nLabels: \([.labels[].name] | join(", "))\n\n\(.body // "")\n"'
+              --jq '{issue: .number, title, body: (.body // "")}' > "$asked/asked.json"
+          else
+            retry="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/retry.yml" --jq .id)"
+            build="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build.yml" --jq .id)"
+            previous="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREVIOUS_RUN")"
+            if ! jq -e --argjson workflow "$retry" --arg title "Retry of issue $ISSUE, try $((ATTEMPT - 1))" \
+                '.workflow_id == $workflow and .head_branch == "main" and .display_title == $title' \
+                <<< "$previous" > /dev/null; then
+              echo "Run $PREVIOUS_RUN isn't the retry from main of issue $ISSUE, try $((ATTEMPT - 1))."
+              exit 1
+            fi
+            first="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --branch main \
+              --created "<=$(jq -r .created_at <<< "$previous")" --limit 1000 --json databaseId,displayTitle |
+              jq -r --arg title "Build of issue $ISSUE, try 1" \
+                '[.[] | select(.displayTitle == $title)] | first | .databaseId // empty')"
+            case "$first" in ''|*[!0-9]*) echo "Found no first try of issue $ISSUE before run $PREVIOUS_RUN."; exit 1 ;; esac
+            if ! gh api "repos/$GITHUB_REPOSITORY/actions/runs/$first" |
+                jq -e --argjson workflow "$build" --arg title "Build of issue $ISSUE, try 1" \
+                  '.workflow_id == $workflow and .head_branch == "main" and
+                    (.event | IN("issues", "workflow_dispatch")) and .display_title == $title' > /dev/null; then
+              echo "Run $first isn't the build from main of issue $ISSUE, try 1."
+              exit 1
+            fi
+            if ! gh run download "$first" --repo "$GITHUB_REPOSITORY" -n asked -D "$RUNNER_TEMP/first" ||
+              ! jq -e --argjson issue "$ISSUE" \
+                '.issue == $issue and (.title | type == "string") and (.body | type == "string")' \
+                "$RUNNER_TEMP/first/asked.json" > /dev/null; then
+              echo "The first try, run $first, kept no readable record of the issue as labelled."
+              echo "To build the issue as it reads now, remove the build label and add it again."
+              exit 1
+            fi
+            jq '{issue, title, body}' "$RUNNER_TEMP/first/asked.json" > "$asked/asked.json"
+          fi
+          labels="$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE" --jq '[.labels[].name] | join(", ")')"
+          {
+            jq -r --arg labels "$labels" '"# #\(.issue): \(.title)\n\nLabels: \($labels)\n\n\(.body)\n"' \
+              "$asked/asked.json"
             gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments" \
               --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR")
                     | "## Comment by \(.user.login), \(.created_at)\n\n\(.body)\n"'
           } > "$RUNNER_TEMP/build/issue.md"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asked
+          path: ${{ runner.temp }}/asked
 
+      # The retry run that started this try wrote why the last one failed: the failing check's
+      # output, CI's failed log or what the reviews found.
       - name: Bring in why the last try failed
+        id: why
         if: env.PREVIOUS_RUN != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           previous="$RUNNER_TEMP/previous"
-          if ! gh run download "$PREVIOUS_RUN" --repo "$GITHUB_REPOSITORY" -n result -D "$previous"; then
+          # Only retry.yml's run from main for this issue's last try is read.
+          retry="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/retry.yml" --jq .id)"
+          if ! gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREVIOUS_RUN" |
+              jq -e --argjson workflow "$retry" --arg title "Retry of issue $ISSUE, try $((ATTEMPT - 1))" \
+                '.workflow_id == $workflow and .head_branch == "main" and .display_title == $title' > /dev/null ||
+            ! gh run download "$PREVIOUS_RUN" --repo "$GITHUB_REPOSITORY" -n failed -D "$previous" ||
+            [ ! -s "$previous/failed.md" ]; then
             mkdir -p "$previous"
-            echo "The last try's draft failed or ran out of time, so its change was never checked." \
-              > "$previous/result.txt"
+            echo "Why the last try failed was not recorded." > "$previous/failed.md"
           fi
           {
             echo "## The last try failed (attempt $((ATTEMPT - 1)) of 3)"
             echo
-            cat "$previous/result.txt"
-            if [ -s "$previous/output.txt" ]; then
-              longest="$(grep -o '`*' "$previous/output.txt" | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')"
-              fence="$(printf '%*s' "$(( longest >= 3 ? longest + 1 : 3 ))" '' | tr ' ' '`')"
-              echo
-              echo "The end of the failing check's output:"
-              echo
-              echo "$fence"
-              cat "$previous/output.txt"
-              echo "$fence"
-            fi
+            cat "$previous/failed.md"
           } >> "$RUNNER_TEMP/build/issue.md"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, so that it
@@ -231,6 +273,11 @@ jobs:
           bwrap --dev-bind / / --unshare-pid true
           npm install -g @anthropic-ai/claude-code
 
+      # Claude Code holds the maintainer's login token for its own calls, and strips it, with any
+      # other credential, from the commands it runs, so text that steers Claude can't send it
+      # anywhere. A command running as the same user could still read Claude Code's own environment
+      # (chrismdp/awml#121). It loads only the user's settings and no MCP servers, since Claude Code
+      # picks up a settings file or a .mcp.json that appears in its tree while it runs.
       - name: Draft the change
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -273,9 +320,10 @@ jobs:
             ${{ runner.temp }}/build/change.patch
             ${{ runner.temp }}/build/message.md
             ${{ runner.temp }}/build/pull-request.md
-            ${{ runner.temp }}/build/review.md
             ${{ runner.temp }}/build/pictures.json
 
+  # Applies the patch to the main the draft started from and runs the same checks as ci.yml, with a
+  # read-only token, so Claude's code never runs where a token can push.
   check:
     needs: draft
     if: needs.draft.outputs.changed == 'true'
@@ -342,9 +390,214 @@ jobs:
           name: result
           path: ${{ runner.temp }}/result
 
+  # Two fresh Claude sessions review the checked change side by side, one for bugs and one for
+  # security, each its own claude run. None of them sees the drafting session or the issue's
+  # thread, and none can run the change's code: they read the patch, applied to main, and the
+  # repository, with no tool that runs anything but git's reads. Once both are done, a rule weighs
+  # their findings. If none is Important, or this is the third try, a third fresh session sorts the
+  # change by risk. The prompts and REVIEW.md come from main, before the patch is applied, so a
+  # change can't alter how it's reviewed. The record goes into the review artifact, which the open
+  # job, retry.yml and land.yml read as data.
+  review:
+    needs: [draft, check]
+    if: needs.check.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      opens: ${{ steps.weigh.outputs.opens }}
+    steps:
+      - name: Prepare the record
+        run: |
+          case "$ATTEMPT" in [1-3]) ;; *) echo "The attempt must be 1, 2 or 3: $ATTEMPT"; exit 1 ;; esac
+          mkdir -p "$RUNNER_TEMP/review" "$RUNNER_TEMP/record"
+          echo "The reviews did not finish." > "$RUNNER_TEMP/record/result.txt"
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      # Only for Claude Code. Nothing here installs the registry's dependencies or runs its code, so
+      # there's no npm cache to restore.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: change
+          path: ${{ runner.temp }}/change
+
+      # A Claude Code session loads its tree's settings, servers and instructions, so a change that
+      # touches .claude/, .mcp.json or a CLAUDE.md, anywhere in the tree, is refused before a session
+      # starts. The record says why, and the try goes to retry.yml as a failed check does. The paths
+      # go only to the log, since the reason reaches the issue.
+      - name: Apply the change, keeping main's prompts and REVIEW.md
+        id: apply
+        run: |
+          review="$RUNNER_TEMP/review"
+          cp .github/review-bugs-prompt.md .github/review-security-prompt.md .github/classify-prompt.md "$RUNNER_TEMP/"
+          cp REVIEW.md "$review/REVIEW.md"
+          for file in change.patch message.md pull-request.md; do
+            if [ -f "$RUNNER_TEMP/change/$file" ]; then cp "$RUNNER_TEMP/change/$file" "$review/"; fi
+          done
+          git apply --index "$RUNNER_TEMP/change/change.patch"
+          claudes='(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$'
+          if git diff --cached --name-only --no-renames -z | grep -zqE "$claudes"; then
+            echo "The change touches Claude Code's own settings, servers or instructions (.claude/, .mcp.json or a CLAUDE.md), which the reviews would load, so it wasn't reviewed." |
+              tee "$RUNNER_TEMP/record/result.txt"
+            git diff --cached --name-only --no-renames -z | grep -zE "$claudes" | tr '\0' '\n'
+            exit 1
+          fi
+
+      # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, so that it
+      # can scrub its login token from them, and they can't start without both. Ubuntu's runners
+      # restrict the user namespaces bubblewrap needs, so allow them on this throwaway machine, and
+      # check bubblewrap works before Claude starts.
+      - name: Install Claude Code and bubblewrap
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --dev-bind / / --unshare-pid true
+          npm install -g @anthropic-ai/claude-code
+
+      # Each review is its own claude run, started together, so neither sees the other's session.
+      # As in the draft, each session, and the classifier's below, keeps the login token from the
+      # commands it runs (chrismdp/awml#121), and loads only the user's settings and no MCP servers,
+      # so a settings file or a .mcp.json in the patch can't set its hooks or where it sends the
+      # token. Each reads only the working tree and its own folder, never /proc, where its own
+      # environment holds the token.
+      - name: Review the patch for bugs and for security, side by side
+        id: reviews
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+          REVIEW_DIR: ${{ runner.temp }}/review
+        run: |
+          review() {
+            prompt="$(sed "s|REVIEW_DIR|$REVIEW_DIR|g" "$RUNNER_TEMP/$1")"
+            claude -p "$prompt" --model opus --max-turns 100 --permission-mode acceptEdits \
+              --setting-sources user --strict-mcp-config --add-dir "$REVIEW_DIR" \
+              --disallowedTools "Read(//proc/**)" \
+              --allowedTools "Read(./**)" "Read(/$REVIEW_DIR/**)" "Write" \
+                "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(git status:*)" \
+              > "$RUNNER_TEMP/$1.log" 2>&1
+          }
+          review review-bugs-prompt.md &
+          bugs=$!
+          review review-security-prompt.md &
+          security=$!
+          status=0
+          wait "$bugs" || status=1
+          wait "$security" || status=1
+          for log in review-bugs-prompt.md review-security-prompt.md; do
+            echo "::group::$log"
+            cat "$RUNNER_TEMP/$log.log"
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+      # Each review's file must be a list of findings, each ranked. They're kept together, each
+      # saying which review found it. An Important finding before the third try sends the change to
+      # retry.yml; otherwise the classifier runs and the pull request opens. Anyone who can read the
+      # repository can download the record, and the findings reach the issue and the pull request,
+      # so findings that carry anything like the login token are refused, never kept, as
+      # review.yml refuses them.
+      - name: Weigh the findings
+        id: weigh
+        run: |
+          review="$RUNNER_TEMP/review"
+          record="$RUNNER_TEMP/record"
+          for kind in bug security; do
+            case "$kind" in bug) file="$review/bugs.json" ;; *) file="$review/security.json" ;; esac
+            if ! jq -e 'type == "array" and length <= 50 and all(.[];
+                type == "object" and
+                (.severity | IN("Important", "Nit", "Pre-existing")) and
+                (.file | type == "string") and (.line | type == "number" and . >= 0) and
+                (.title | type == "string") and (.detail | type == "string"))' "$file" > /dev/null; then
+              echo "The $kind review left no readable record of its findings." | tee "$record/result.txt"
+              exit 1
+            fi
+            if ! jq -e '[.. | strings | select(test("sk-ant-"; "i") or test("[A-Za-z0-9_-]{80,}"))] | length == 0' \
+                "$file" > /dev/null; then
+              echo "The $kind review's findings carry what looks like a login token, so they weren't kept." |
+                tee "$record/result.txt"
+              exit 1
+            fi
+          done
+          echo '[]' > "$record/findings.json"
+          for kind in bug security; do
+            case "$kind" in bug) file="$review/bugs.json" ;; *) file="$review/security.json" ;; esac
+            jq --arg kind "$kind" --slurpfile found "$file" \
+              '. + [$found[0][] | {review: $kind, severity, file, line: (.line | floor), title, detail}]' \
+              "$record/findings.json" > "$record/merged.json"
+            mv "$record/merged.json" "$record/findings.json"
+          done
+          cp "$record/findings.json" "$review/findings.json"
+          jq . "$record/findings.json"
+          important="$(jq '[.[] | select(.severity == "Important")] | length' "$record/findings.json")"
+          if [ "$important" -gt 0 ] && [ "$ATTEMPT" != 3 ]; then
+            if [ "$important" -eq 1 ]; then
+              echo "The reviews found 1 Important finding." > "$record/result.txt"
+            else
+              echo "The reviews found $important Important findings." > "$record/result.txt"
+            fi
+            echo "opens=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "The classifier did not finish." > "$record/result.txt"
+            echo "opens=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sort the change by risk
+        id: classify
+        if: steps.weigh.outputs.opens == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+          REVIEW_DIR: ${{ runner.temp }}/review
+        run: |
+          prompt="$(sed "s|REVIEW_DIR|$REVIEW_DIR|g" "$RUNNER_TEMP/classify-prompt.md")"
+          claude -p "$prompt" --model opus --max-turns 100 --permission-mode acceptEdits \
+            --setting-sources user --strict-mcp-config --add-dir "$REVIEW_DIR" \
+            --disallowedTools "Read(//proc/**)" \
+            --allowedTools "Read(./**)" "Read(/$REVIEW_DIR/**)" "Write" \
+              "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(git status:*)"
+
+      # The classifier's reasons reach the pull request, so a verdict that carries anything like the
+      # login token is refused too.
+      - name: Read the classifier's verdict
+        id: verdict
+        if: steps.weigh.outputs.opens == 'true'
+        run: |
+          record="$RUNNER_TEMP/record"
+          classification="$RUNNER_TEMP/review/classification.json"
+          if ! jq -e '(.needs_review | type == "boolean") and
+              (.reasons | type == "array" and length >= 1 and all(.[]; type == "string"))' \
+              "$classification" > /dev/null; then
+            echo "The classifier left no readable verdict." | tee "$record/result.txt"
+            exit 1
+          fi
+          if ! jq -e '[.. | strings | select(test("sk-ant-"; "i") or test("[A-Za-z0-9_-]{80,}"))] | length == 0' \
+              "$classification" > /dev/null; then
+            echo "The classifier's verdict carries what looks like a login token, so it wasn't kept." |
+              tee "$record/result.txt"
+            exit 1
+          fi
+          jq '{needs_review, reasons: .reasons[0:5]}' "$classification" > "$record/classification.json"
+          echo pass > "$record/result.txt"
+          jq . "$record/classification.json"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: review
+          path: ${{ runner.temp }}/record
+
   # Runs the registry itself, from main and from the change, so like the check job it can only
   # read, and the open job checks every picture it hands back. It starts once the checks have
-  # passed, so it never pictures a change that won't be opened.
+  # passed, alongside the reviews, so it never pictures a change that failed its checks.
   pictures:
     needs: [draft, check]
     if: needs.check.result == 'success' && needs.draft.outputs.pictures == 'true'
@@ -385,37 +638,30 @@ jobs:
           name: pictures
           path: ${{ runner.temp }}/pictures
 
+  # Pushes the branch and the pictures and opens the pull request, once the checks pass and the
+  # classifier has run, and closes the build's earlier pull request for the issue if it opened a new
+  # one. It runs none of the proposed code and installs nothing. It applies the patch to main as it
+  # is now, not the main the draft started from, so a change that landed on main meanwhile, such as
+  # one to a workflow the app may not push, isn't pushed back as part of this one. If the patch no
+  # longer applies, the retry job sends it to retry.yml. The checks ran on the older main, but
+  # land.yml waits for CI on the newer one before anything merges.
   open:
-    needs: [draft, check, pictures]
-    if: ${{ always() && needs.draft.result == 'success' && needs.draft.outputs.changed == 'true' }}
+    needs: [draft, check, review, pictures]
+    if: ${{ always() && needs.draft.result == 'success' && needs.draft.outputs.changed == 'true' && needs.check.result == 'success' && needs.review.result == 'success' && needs.review.outputs.opens == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    concurrency:
-      group: build-auto-merge
-      cancel-in-progress: false
-    # The Actions token only reads, asks for reviews and edits the status comment here. The app's
-    # token pushes, opens the pull request and sets the merge.
+    # The Actions token only reads and edits the status comment here. The app's token pushes, opens
+    # the pull request and closes the build's earlier ones.
     permissions:
       contents: read
       issues: write
-      pull-requests: write
+    outputs:
+      applies: ${{ steps.commit.outputs.applies }}
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.sha }}
+          ref: main
           persist-credentials: false
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-
-      # The rule and its settings come from main, before the change is applied, so the change
-      # can't alter how it's judged. The rule needs only Node and git, so this job installs nothing,
-      # and runs nothing else. The copy is an .mts file so that Node reads it as a module without a
-      # package.json beside it.
-      - name: Take the rule from main
-        run: |
-          cp scripts/build-rule.ts "$RUNNER_TEMP/build-rule.mts"
-          cp .github/build-rules.yml "$RUNNER_TEMP/build-rules.yml"
 
       - uses: actions/download-artifact@v4
         with:
@@ -425,15 +671,15 @@ jobs:
         with:
           name: result
           path: ${{ runner.temp }}/result
+      - uses: actions/download-artifact@v4
+        with:
+          name: review
+          path: ${{ runner.temp }}/review
 
       - name: Read the check result
         run: |
-          if [ ! -s "$RUNNER_TEMP/result/result.txt" ]; then
-            echo "The check job did not produce a result."
-            exit 1
-          fi
-          if [ "$(cat "$RUNNER_TEMP/result/result.txt")" != pass ]; then
-            cat "$RUNNER_TEMP/result/result.txt"
+          if [ "$(cat "$RUNNER_TEMP/result/result.txt" 2> /dev/null)" != pass ]; then
+            echo "The check job did not pass."
             exit 1
           fi
 
@@ -515,8 +761,34 @@ jobs:
           done <<< "$rows"
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
+      # If the patch no longer applies to main as it is now, the job says so in its own record and
+      # stops without failing, and the retry job sends the build to retry.yml. Once the patch is
+      # applied, the workspace holds the change's code and later steps hold the app's token, so
+      # nothing after this runs from the workspace: main's script for the description is copied out
+      # first.
+      - name: Apply the change to main as it is now
+        id: commit
+        run: |
+          mkdir -p "$RUNNER_TEMP/open"
+          cp .github/pull-request-body.sh "$RUNNER_TEMP/pull-request-body.sh"
+          if ! git apply --index "$RUNNER_TEMP/change/change.patch" 2> "$RUNNER_TEMP/apply.log"; then
+            cat "$RUNNER_TEMP/apply.log"
+            echo "The change no longer applies to main as it is now." > "$RUNNER_TEMP/open/result.txt"
+            tail -n 150 "$RUNNER_TEMP/apply.log" > "$RUNNER_TEMP/open/output.txt"
+            echo "applies=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "applies=true" >> "$GITHUB_OUTPUT"
+          echo "branch=build/issue-$ISSUE" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        if: steps.commit.outputs.applies == 'false'
+        with:
+          name: open
+          path: ${{ runner.temp }}/open
+
       - name: Make the app's token
         id: app
+        if: steps.commit.outputs.applies == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.FACTORY_APP_ID }}
@@ -525,42 +797,67 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       # The commit is the app's, as its push is.
-      - name: Find the app's bot
-        id: bot
+      - name: Commit the change as the app's bot
+        if: steps.commit.outputs.applies == 'true'
         env:
           APP_SLUG: ${{ steps.app.outputs.app-slug }}
           GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.commit.outputs.branch }}
         run: |
           id="$(gh api "users/$APP_SLUG%5Bbot%5D" --jq .id)"
-          echo "name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
-          echo "email=$id+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
-
-      - name: Apply and commit the change
-        id: commit
-        env:
-          BOT_NAME: ${{ steps.bot.outputs.name }}
-          BOT_EMAIL: ${{ steps.bot.outputs.email }}
-        run: |
-          git apply --index "$RUNNER_TEMP/change/change.patch"
-          node --experimental-strip-types "$RUNNER_TEMP/build-rule.mts" --repo . \
-            --rules "$RUNNER_TEMP/build-rules.yml" --review "$RUNNER_TEMP/change/review.md" \
-            > "$RUNNER_TEMP/verdict.txt"
           message="$RUNNER_TEMP/commit.md"
           cat "$RUNNER_TEMP/change/message.md" > "$message" 2> /dev/null || true
           [ -s "$message" ] || echo "Build #$ISSUE" > "$message"
           printf '\n\nCloses #%s\n' "$ISSUE" >> "$message"
-          branch="build/issue-$ISSUE"
-          git config user.name "$BOT_NAME"
-          git config user.email "$BOT_EMAIL"
-          git switch -c "$branch"
+          git config user.name "$APP_SLUG[bot]"
+          git config user.email "$id+$APP_SLUG[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
           git -c core.hooksPath=/dev/null commit -q -F "$message"
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
+      # What land.yml needs from this build: the commit it pushes, the commit of main it applied the
+      # patch to, the commit of main the checks ran on, the try, who to ask, the app's bot that opens
+      # the pull request, and the pictures. It goes up before the push, so it's there before CI can
+      # finish.
+      - name: Write the build's record
+        id: record
+        if: steps.commit.outputs.applies == 'true'
+        env:
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          record="$RUNNER_TEMP/pull-request"
+          mkdir -p "$record"
+          jq -n --argjson issue "$ISSUE" --argjson attempt "$ATTEMPT" --arg requested_by "$REQUESTED_BY" \
+            --arg commit "$(git rev-parse HEAD)" --arg base "$(git rev-parse HEAD^)" \
+            --arg checked "$GITHUB_SHA" --arg bot "$APP_SLUG[bot]" \
+            '{issue: $issue, attempt: $attempt, requested_by: $requested_by, commit: $commit, base: $base,
+              checked: $checked, bot: $bot}' \
+            > "$record/build.json"
+          cp "$RUNNER_TEMP/pictures.txt" "$RUNNER_TEMP/pictures-left-out.txt" "$record/"
+          title="$(head -n 1 "$RUNNER_TEMP/change/message.md" 2> /dev/null || true)"
+          [ -n "$title" ] || title="Build #$ISSUE"
+          printf '%s\n' "$title" > "$record/title.txt"
+          cat "$record/build.json"
+      - uses: actions/upload-artifact@v4
+        if: steps.commit.outputs.applies == 'true'
+        with:
+          name: pull-request
+          path: ${{ runner.temp }}/pull-request
+
+      # A new try's commit hasn't been judged, so a merge an earlier try set on the branch's open
+      # pull request is turned off before it's pushed.
       - name: Push the branch
+        id: push
+        if: steps.commit.outputs.applies == 'true'
         env:
           BRANCH: ${{ steps.commit.outputs.branch }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
+          auto="$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" \
+            --jq '[.[] | select(.auto_merge != null) | .number] | first // empty')"
+          case "$auto" in *[!0-9]*) echo "The open pull request's number isn't a number: $auto"; exit 1 ;; esac
+          if [ -n "$auto" ]; then
+            gh pr merge "$auto" --repo "$GITHUB_REPOSITORY" --disable-auto
+          fi
           git -c core.hooksPath=/dev/null \
             -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
             push --force origin "HEAD:refs/heads/$BRANCH"
@@ -569,7 +866,8 @@ jobs:
       # with main. Each try adds a commit with its own folder, so the links in older descriptions
       # keep working.
       - name: Push the pictures to the factory-media branch
-        if: steps.pictures.outputs.count != '0'
+        id: media
+        if: steps.commit.outputs.applies == 'true' && steps.pictures.outputs.count != '0'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
@@ -600,174 +898,104 @@ jobs:
           git -c core.hooksPath=/dev/null -c http.https://github.com/.extraheader="$auth" \
             push origin "$commit:refs/heads/factory-media"
 
-      - name: Read the verdict
-        id: verdict
-        run: |
-          verdict="$(head -n 1 "$RUNNER_TEMP/verdict.txt")"
-          tail -n +2 "$RUNNER_TEMP/verdict.txt" > "$RUNNER_TEMP/reasons.txt"
-          case "$verdict" in
-            review|straightforward)
-              echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "The build rule gave an unknown verdict: $verdict"
-              exit 1
-              ;;
-          esac
-
-      # The description opens with why the change needs review, then Claude's note as written, or
-      # with one line saying it merges by itself. Then Claude's description, the pictures, the
-      # checks, and the issue it closes.
+      # Before CI has run, the description says why the change will need review if the reviews or
+      # the classifier have already said so. land.yml writes it again with the rule's verdict once
+      # CI has passed.
       - name: Write the pull request's description
+        id: describe
+        if: steps.commit.outputs.applies == 'true'
         env:
-          VERDICT: ${{ steps.verdict.outputs.verdict }}
+          BUILD_RUN: ${{ github.run_id }}
+          CHECKED: ${{ github.sha }}
+          CHANGE_DIR: ${{ runner.temp }}/change
+          REVIEW_DIR: ${{ runner.temp }}/review
+          PICTURES: ${{ runner.temp }}/pictures.txt
+          PICTURES_LEFT_OUT: ${{ runner.temp }}/pictures-left-out.txt
         run: |
-          change="$RUNNER_TEMP/change"
-          media_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/raw/factory-media/issue-$ISSUE/attempt-$ATTEMPT"
-          title="$(head -n 1 "$change/message.md" 2> /dev/null || true)"
-          [ -n "$title" ] || title="Build #$ISSUE"
-          printf '%s\n' "$title" > "$RUNNER_TEMP/title.txt"
-          cell() {
-            if [ -n "$2" ]; then
-              printf '![%s](%s/%s)' "$1" "$media_url" "$2"
-            else
-              printf "Couldn't be pictured"
-            fi
-          }
-          {
-            if [ "$VERDICT" = review ]; then
-              echo "## Needs your review because"
-              echo
-              while IFS= read -r line; do
-                [ -n "$line" ] && printf -- '- %s\n' "$line"
-              done < "$RUNNER_TEMP/reasons.txt"
-              if [ -s "$change/review.md" ] && grep -q '[^[:space:]]' "$change/review.md"; then
-                echo
-                echo "### Claude's note"
-                echo
-                cat "$change/review.md"
-              fi
-            else
-              printf 'Merges by itself once CI passes, because the build rule found it straightforward: %s\n' \
-                "$(grep -v '^$' "$RUNNER_TEMP/reasons.txt" | paste -sd ' ')"
-            fi
-            echo
-            if [ -s "$change/pull-request.md" ]; then
-              cat "$change/pull-request.md"
-            else
-              tail -n +2 "$change/message.md" 2> /dev/null | sed '/./,$!d'
-            fi
-            if [ -s "$RUNNER_TEMP/pictures.txt" ]; then
-              echo
-              echo "## Pictures"
-              echo
-              echo "Before is main and after is this change, each filled with the data from \`scripts/seed-pictures.ts\`."
-              shown=""
-              while IFS='|' read -r page as width before after; do
-                if [ "$width" = desktop ] || [ "$page|$as" != "$shown" ]; then
-                  case "$as" in owner) who="signed in as ana" ;; *) who="signed out" ;; esac
-                  case "$before|$after" in *.gif*) who="$who, as someone uses it" ;; esac
-                  # shellcheck disable=SC2016 # The backticks are Markdown.
-                  printf '\n### `%s`, %s\n' "$page" "$who"
-                  shown="$page|$as"
-                fi
-                case "$width" in
-                  desktop) printf '\nDesktop, 1280 pixels wide:\n\n' ;;
-                  *) printf '\nPhone, 390 pixels wide:\n\n' ;;
-                esac
-                echo "| Before | After |"
-                echo "| --- | --- |"
-                printf '| %s | %s |\n' "$(cell Before "$before")" "$(cell After "$after")"
-              done < "$RUNNER_TEMP/pictures.txt"
-            elif [ -s "$RUNNER_TEMP/pictures-left-out.txt" ]; then
-              echo
-              echo "## Pictures"
-              echo
-              printf 'The pictures were left out. %s\n' "$(cat "$RUNNER_TEMP/pictures-left-out.txt")"
-            fi
-            echo
-            echo "## Checks"
-            echo
-            # shellcheck disable=SC2016 # The backticks are Markdown.
-            printf -- '- The check job applied this change to main at %s and ran `npm ci`, `npm run typecheck`, `npm run lint` and `npm test`. All passed.\n' "$GITHUB_SHA"
-            echo "- CI runs them again on this pull request, and main's rule holds the merge until they pass."
-            echo
-            printf 'Closes #%s\n' "$ISSUE"
-          } > "$RUNNER_TEMP/pull-request.md"
+          export MEDIA_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/raw/factory-media/issue-$ISSUE/attempt-$ATTEMPT"
+          "$RUNNER_TEMP/pull-request-body.sh" > "$RUNNER_TEMP/pull-request.md"
           cat "$RUNNER_TEMP/pull-request.md"
 
+      # gh pr view finds a branch's closed or merged pull request when it has no open one, so only
+      # GitHub's list of the branch's open pull requests decides whether there's one to update. If
+      # there's none, a new one is opened.
       - name: Open or update the pull request
         id: pull
+        if: steps.commit.outputs.applies == 'true'
         env:
           BRANCH: ${{ steps.commit.outputs.branch }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          title="$(cat "$RUNNER_TEMP/title.txt")"
-          if gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh pr edit "$BRANCH" --repo "$GITHUB_REPOSITORY" \
+          title="$(cat "$RUNNER_TEMP/pull-request/title.txt")"
+          number="$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" \
+            --jq '[.[] | .number] | first // empty')"
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" \
               --title "$title" --body-file "$RUNNER_TEMP/pull-request.md"
+            opened=false
           else
-            gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" \
-              --title "$title" --body-file "$RUNNER_TEMP/pull-request.md"
+            url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+              --title "$title" --body-file "$RUNNER_TEMP/pull-request.md")"
+            number="${url##*/}"
+            opened=true
           fi
-          number="$(gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json number --jq .number)"
+          case "$number" in ''|*[!0-9]*) echo "The pull request's number isn't a number: $number"; exit 1 ;; esac
           echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "opened=$opened" >> "$GITHUB_OUTPUT"
 
-      - name: Ask for a review
-        if: steps.verdict.outputs.verdict == 'review'
+      # A closed pull request is never updated: the build opens a new one and closes any earlier one
+      # of its own for the issue (chrismdp/awml#125). So once it has opened a new one, every earlier
+      # pull request the app opened from the branch that didn't merge is closed, with a comment naming
+      # the new one. One a person already closed gets the comment too, once. A pull request someone
+      # else opened, or one that merged, is left alone.
+      - name: Close the build's earlier pull requests for this issue
+        id: retire
+        if: steps.pull.outputs.opened == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ steps.pull.outputs.number }}
-        run: |
-          reviewer="$REQUESTED_BY"
-          case "$reviewer" in
-            ''|*[!A-Za-z0-9-]*) reviewer="$GITHUB_REPOSITORY_OWNER" ;;
-          esac
-          if ! gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-reviewer "$reviewer"; then
-            echo "::warning::Could not ask $reviewer to review the pull request."
-          fi
-
-      - name: Set the pull request to merge once CI passes
-        if: steps.verdict.outputs.verdict == 'straightforward'
-        env:
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          BRANCH: ${{ steps.commit.outputs.branch }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
           PR_NUMBER: ${{ steps.pull.outputs.number }}
         run: |
-          {
-            echo "Merges by itself once CI passes, because the build rule found it straightforward."
-            echo
-            echo "The build rule called it straightforward because:"
-            echo
-            while IFS= read -r line; do
-              [ -n "$line" ] && printf -- '- %s\n' "$line"
-            done < "$RUNNER_TEMP/reasons.txt"
-            echo
-            echo "To undo it, use the Revert button on this pull request."
-          } > "$RUNNER_TEMP/merge.md"
-          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash \
-            --body-file "$RUNNER_TEMP/merge.md"
+          case "$PR_NUMBER" in ''|*[!0-9]*) echo "The pull request must be a number: $PR_NUMBER"; exit 1 ;; esac
+          bot="$APP_SLUG[bot]"
+          printf '<!-- factory-replaced -->\nReplaced by #%s, the pull request the build of #%s opened in its place.\n' \
+            "$PR_NUMBER" "$ISSUE" > "$RUNNER_TEMP/replaced.md"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&state=all" |
+            jq -r --arg bot "$bot" --argjson new "$PR_NUMBER" \
+              '.[] | select(.user.login == $bot and .number != $new and .merged_at == null) | "\(.number) \(.state)"' |
+            while read -r number state; do
+              case "$number" in ''|*[!0-9]*) echo "A pull request's number isn't a number: $number"; exit 1 ;; esac
+              said="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$number/comments" |
+                jq -n --arg bot "$bot" \
+                  '[inputs[] | select(.user.login == $bot and (.body | contains("<!-- factory-replaced -->")))] | length')"
+              if [ "$said" = 0 ]; then
+                gh pr comment "$number" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/replaced.md"
+              fi
+              if [ "$state" = open ]; then
+                gh pr close "$number" --repo "$GITHUB_REPOSITORY"
+              fi
+            done
 
-      # Once the pull request is set to merge by itself or a review has been asked for, the status
-      # comment links it. If this job failed after the checks passed, the retry job won't hear of it,
-      # so this says so here, and in a new comment too, since GitHub sends no notification for an edit.
-      # A failed check is left to the retry job.
+      # Once the pull request is open, the status comment links it. If this job failed after the
+      # checks and reviews passed, retry.yml won't hear of it, so this says so here, and in a new
+      # comment too, since GitHub sends no notification for an edit. A patch that no longer applies
+      # is left to retry.yml.
       - name: Edit the status comment
-        if: ${{ !cancelled() && needs.check.result == 'success' }}
+        id: status
+        if: ${{ !cancelled() && steps.commit.outputs.applies != 'false' }}
         env:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
           PR_NUMBER: ${{ steps.pull.outputs.number }}
-          VERDICT: ${{ steps.verdict.outputs.verdict }}
         run: |
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           here="$RUNNER_TEMP/status"
           mkdir -p "$here"
           {
             echo "<!-- factory-status -->"
-            if [ "$JOB_STATUS" = success ] && [ "$VERDICT" = straightforward ]; then
-              printf '**Built** in #%s, which merges by itself once CI passes. [The run](%s)\n' "$PR_NUMBER" "$run_url"
-            elif [ "$JOB_STATUS" = success ]; then
-              printf '**Built** in #%s, which waits for a review. [The run](%s)\n' "$PR_NUMBER" "$run_url"
+            if [ "$JOB_STATUS" = success ]; then
+              printf '**Opened** #%s, which waits for CI. Then the build rule decides whether it merges by itself or waits for a review. [The run](%s)\n' "$PR_NUMBER" "$run_url"
             else
               printf '**The build failed** while opening the pull request (try %s of 3). [The run](%s)\n' "$ATTEMPT" "$run_url"
             fi
@@ -783,7 +1011,7 @@ jobs:
           fi
           if [ "$JOB_STATUS" != success ]; then
             {
-              echo "**The build failed while opening the pull request, after its checks had passed.**"
+              echo "**The build failed while opening the pull request, after its checks and reviews had passed.**"
               echo
               if [ -n "$PR_NUMBER" ]; then
                 printf -- '- It opened #%s, but a later step failed. The run says which.\n' "$PR_NUMBER"
@@ -797,104 +1025,33 @@ jobs:
             gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$here/failure.md"
           fi
 
-  # Runs when the draft failed or ran out of time, or the checks didn't pass, but not when the whole
-  # run was cancelled because a newer build of the same issue replaced it. It checks out nothing and
-  # runs only gh.
+  # Starts retry-a-build when this try failed: the draft failed or ran out of time or changed
+  # nothing, a check failed, the reviews found something Important before the third try or didn't
+  # finish, or the patch no longer applies to main. retry.yml reads why from this run. It doesn't
+  # run when the whole run was cancelled because a newer build of the same issue replaced it. It
+  # checks out nothing and runs only gh. Pictures that fail don't start another try.
   retry:
-    needs: [draft, check, open]
+    needs: [draft, check, review, open]
     if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || github.event.label.name == 'build') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     permissions:
       actions: write
-      issues: write
     steps:
-      - name: Try again, or say why the build failed
+      - name: Start retry-a-build with why this try failed
+        id: retry
         env:
           GH_TOKEN: ${{ github.token }}
-          DRAFT: ${{ needs.draft.result }}
-          CHANGED: ${{ needs.draft.outputs.changed }}
+          OPEN: ${{ needs.open.result }}
+          APPLIES: ${{ needs.open.outputs.applies }}
         run: |
           case "$ISSUE" in ''|*[!0-9]*) echo "The issue must be a number: $ISSUE"; exit 1 ;; esac
           case "$ATTEMPT" in [1-3]) ;; *) echo "The attempt must be 1, 2 or 3: $ATTEMPT"; exit 1 ;; esac
-          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          here="$RUNNER_TEMP/retry"
-          mkdir -p "$here"
-          # Edits the latest status comment, or posts one if there is none, to say how the build
-          # ended. The full reason goes in a new comment as well, since an edit sends no notification.
-          set_status() {
-            printf '<!-- factory-status -->\n%s [The run](%s)\n' "$1" "$run_url" > "$here/status.md"
-            id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments" \
-              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- factory-status -->"))) | .id' |
-              tail -n 1)"
-            if [ -n "$id" ]; then
-              jq -n --rawfile body "$here/status.md" '{body: $body}' |
-                gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" --input - > /dev/null
-            else
-              gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$here/status.md"
-            fi
-          }
-
-          if [ "$DRAFT" = success ] && [ "$CHANGED" != true ]; then
-            gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" -n change -D "$here/change" || true
-            {
-              echo "**The build changed nothing, so it won't be tried again.**"
-              echo
-              if [ -s "$here/change/message.md" ]; then
-                echo "- Claude left the code as it was, and said why:"
-                echo
-                cat "$here/change/message.md"
-              else
-                echo "- Claude left the code as it was, and left no message saying why."
-              fi
-              echo
-              echo "[The run]($run_url)"
-            } > "$here/comment.md"
-            gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$here/comment.md"
-            set_status "**The build changed nothing**, so it won't be tried again. The comment below says why."
+          # The open job ran, so this try reached the end, unless its patch no longer applied. If
+          # it failed after that, it said so itself.
+          if [ "$OPEN" != skipped ] && [ "$APPLIES" != false ]; then
+            echo "The build opened its pull request, or said itself why it couldn't."
             exit 0
           fi
-
-          if [ "$DRAFT" = success ]; then
-            if gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" -n result -D "$here/result"; then
-              reason="$(cat "$here/result/result.txt" 2>/dev/null)"
-              [ -n "$reason" ] || reason="The check job did not produce a result."
-            else
-              reason="The check job did not produce a result."
-            fi
-            [ "$reason" = pass ] && exit 0
-          else
-            reason="The draft failed or ran out of time."
-          fi
-          echo "$reason"
-
-          if [ "$ATTEMPT" -lt 3 ]; then
-            gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main \
-              -f issue="$ISSUE" -f attempt="$((ATTEMPT + 1))" -f previous_run="$GITHUB_RUN_ID" \
-              -f requested_by="$REQUESTED_BY"
-            exit 0
-          fi
-
-          {
-            echo "**The build failed three times, so it has stopped.**"
-            echo
-            printf -- '- The last try failed because: %s\n' "$reason"
-            echo "- To start afresh, remove the build label and add it again."
-            if [ -s "$here/result/output.txt" ]; then
-              tail -n 50 "$here/result/output.txt" > "$here/output.txt"
-              longest="$(grep -o '`*' "$here/output.txt" | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')"
-              fence="$(printf '%*s' "$(( longest >= 3 ? longest + 1 : 3 ))" '' | tr ' ' '`')"
-              echo
-              echo "<details><summary>Output</summary>"
-              echo
-              echo "$fence"
-              cat "$here/output.txt"
-              echo "$fence"
-              echo
-              echo "</details>"
-            fi
-            echo
-            echo "[The run]($run_url)"
-          } > "$here/comment.md"
-          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$here/comment.md"
-          set_status "**The build failed three times**, so it has stopped. The comment below says why."
+          gh workflow run retry.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f issue="$ISSUE" -f attempt="$ATTEMPT" -f requested_by="$REQUESTED_BY" -f run="$GITHUB_RUN_ID"

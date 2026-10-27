@@ -4,7 +4,9 @@ them.
 
 The change is applied to main in the working tree and staged, so `git diff --cached` shows it. The
 patch itself is REVIEW_DIR/change.patch, with the pull request's title and description in
-REVIEW_DIR/pull-request.md. They say what the change means to do. A binary image or font that a pull
+REVIEW_DIR/pull-request.md. In a build, before there is a pull request, that holds the description
+the drafting session wrote, and REVIEW_DIR/message.md its commit message. They say what the change
+means to do. A binary image or font that a pull
 request's diff can't show is left unstaged; the workflow, not the author, lists it at the end of
 REVIEW_DIR/pull-request.md under "Binary files, changed but not shown in the patch". Read
 REVIEW_DIR/REVIEW.md, which
