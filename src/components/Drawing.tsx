@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent } from "react";
 import type { PartLink } from "@/server/part-links";
 import type { Drawings, Note, Rect } from "./flow/drawing";
-import type { FlowApi, FlowCanvasProps, Mode } from "./flow/FlowCanvas";
+import type { FlowApi, FlowCanvasProps } from "./flow/FlowCanvas";
 import { Arrowheads } from "./flow/Graphic";
 import { StaticDrawing } from "./flow/StaticDrawing";
 import { destination, followOf, followsOnKey, partInHash } from "./links";
@@ -19,10 +19,10 @@ export const FRAME_LABEL = "Workflow drawing. Drag a part to move it; drag the b
 // A drawing of a workflow or a system's map, laid out by the server
 // (src/server/drawing.ts). The server's SVG shows it first, so it needs no
 // scripts; once the page runs, React Flow takes over from just where the SVG
-// was, to drag its parts, pan and zoom. Its switches: Layered or Physics, and
-// Flow only (#51). A part's notes are behind an icon (#60). A part linked to
-// other workflows (#55), and a workflow's box on a system's map (#61), opens
-// what it leads to.
+// was, to drag its parts, pan and zoom, and the physics lets it settle from
+// there (#78). Its switch: Flow only (#51). A part's notes are behind an icon
+// (#60). A part linked to other workflows (#55), and a workflow's box on a
+// system's map (#61), opens what it leads to.
 export function Drawing({
   drawings,
   links = [],
@@ -37,7 +37,6 @@ export function Drawing({
   const id = "flow" + useId().replace(/[^a-zA-Z0-9]/g, "");
   const frame = useRef<HTMLDivElement>(null);
   const [flowOnly, setFlowOnly] = useState(false);
-  const [mode, setMode] = useState<Mode>("layered");
   const [start, setStart] = useState<Viewport>();
   const [live, setLive] = useState(false);
   const [note, setNote] = useState<{ title: string; notes: Note[] }>();
@@ -170,7 +169,6 @@ export function Drawing({
           <FlowCanvas
             drawing={drawing}
             id={id}
-            mode={mode}
             links={links}
             hrefs={hrefs}
             viewport={start}
@@ -185,13 +183,6 @@ export function Drawing({
         </div>
       )}
       <div className="flow-controls flow-switches">
-        <div className="flow-pills" role="radiogroup" aria-label="Layout">
-          {(["layered", "physics"] as const).map((m) => (
-            <button key={m} type="button" role="radio" aria-checked={mode === m} disabled={!live} onClick={() => setMode(m)}>
-              {m === "layered" ? "Layered" : "Physics"}
-            </button>
-          ))}
-        </div>
         <button type="button" className="flow-toggle" aria-pressed={flowOnly} onClick={() => setFlowOnly(!flowOnly)}>
           Flow only
         </button>

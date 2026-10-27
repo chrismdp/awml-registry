@@ -1,7 +1,7 @@
 // The frame a workflow's drawing, or a system's map, is shown in (src/components/Drawing.tsx):
 // the server's SVG first, which a browser with no scripts sees whole, then React Flow, which
 // drags, pans and zooms it. Its maths is in test/viewport.test.ts. A part's notes are behind an
-// icon (#60), and the switches and zoom buttons sit in the frame's corners.
+// icon (#60), and the Flow only switch and zoom buttons sit in the frame's corners.
 import fs from "node:fs";
 import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -61,19 +61,17 @@ describe("a workflow's drawing", () => {
     expect(html).not.toContain("react-flow");
   });
 
-  it("has Layered and Physics, Flow only, and the zoom buttons in its corners, which a browser without scripts doesn't show", async () => {
+  it("has Flow only and the zoom buttons in its corners, which a browser without scripts doesn't show, and no choice of layout (#78)", async () => {
     const owner = await pushed("dinners", dinners);
     const { html } = await renderPage(WorkflowPage, { owner, slug: "dinners" });
     const figure = /<figure[^]*?<\/figure>/.exec(html)![0];
     expect(buttons(figure)).toEqual([
-      { text: "Layered", role: "radio", checked: "true", label: undefined, title: undefined },
-      { text: "Physics", role: "radio", checked: "false", label: undefined, title: undefined },
       { text: "Flow only", role: undefined, checked: "false", label: undefined, title: undefined },
       { text: "+", label: "Zoom in", title: "Zoom in", role: undefined, checked: undefined },
       { text: "−", label: "Zoom out", title: "Zoom out", role: undefined, checked: undefined },
       { text: "Fit", label: "Fit the whole drawing", title: "Fit the whole drawing", role: undefined, checked: undefined },
     ]);
-    expect(figure).toContain('<div class="flow-pills" role="radiogroup" aria-label="Layout">');
+    expect(figure).not.toContain("radiogroup");
     expect(css).toContain("@media (scripting: none) { .flow-controls { display: none; } }");
   });
 
