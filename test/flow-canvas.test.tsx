@@ -6,7 +6,10 @@
 import { ReactFlow } from "@xyflow/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { layeredNodes, NODE_TYPES } from "@/components/flow/FlowCanvas";
+import { headHeight, type Point, type Rect } from "@/components/flow/drawing";
+import { layeredNodes, lineRoute, NODE_TYPES } from "@/components/flow/FlowCanvas";
+import { roundedPath } from "@/components/flow/Graphic";
+import { StaticDrawing } from "@/components/flow/StaticDrawing";
 import { layOut } from "@/server/drawing";
 import type { PartLink } from "@/server/part-links";
 import { laidOut } from "./drawn";
@@ -96,6 +99,78 @@ describe("a workflow's box on a system's map, once React Flow draws it", () => {
     expect(w1.tag).toContain('aria-label="Open An issue becomes a pull request"');
     // A box the viewer may not open is no link.
     expect(node(html, "w2").tag).not.toContain('role="link"');
+  });
+});
+
+describe("a scope's heading (#67)", () => {
+  it("is its name, with who it is for on lines of their own under it, the same in the server's SVG and in React Flow", async () => {
+    const { full } = laidOut(await layOut(example("dinners.mmd")));
+    const carers = full.scopes.find((s) => s.id === "carers")!;
+    expect(carers).toMatchObject({ name: "carers", who: ["+ June, Beth"] });
+    const svg = renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />);
+    const html = await rendered(example("dinners.mmd"), {});
+    for (const drawn of [/<g [^>]*data-scope="carers"[^]*?<\/g>/.exec(svg)![0], node(html, "carers").inside]) {
+      const name = /<text class="flow-scope-name" x="20" y="([\d.]+)"[^>]*>carers<\/text>/.exec(drawn);
+      const who = /<text class="flow-scope-who" font-size="12"><tspan x="20" y="([\d.]+)">\+ June, Beth<\/tspan><\/text>/.exec(drawn);
+      expect(name, drawn).not.toBeNull();
+      expect(who, drawn).not.toBeNull();
+      // Below the name, and above where the scope's parts start.
+      expect(Number(who![1])).toBeGreaterThan(Number(name![1]) + 12);
+      expect(Number(who![1])).toBeLessThan(headHeight(carers.who) - 6);
+    }
+  });
+});
+
+describe("a line, once a part is dragged (#67)", () => {
+  // Each pair of points one after the other is level or plumb.
+  const square = (points: Point[]) => points.slice(1).every((q, i) => q.x === points[i].x || q.y === points[i].y);
+  const onEdge = (p: Point, r: Rect) =>
+    ((p.x === r.x || p.x === r.x + r.width) && p.y >= r.y && p.y <= r.y + r.height) ||
+    ((p.y === r.y || p.y === r.y + r.height) && p.x >= r.x && p.x <= r.x + r.width);
+
+  it("keeps the server's route while its ends haven't moved, or have moved together, and goes square once one has", async () => {
+    const { full } = laidOut(await layOut(example("flow/issue-to-pull-request.mmd")));
+    const at = new Map<string, Rect>([...full.parts, ...full.scopes].map((b) => [b.id, b]));
+    const line = full.lines.find((l) => l.label && l.points.length > 3)!;
+    const s = at.get(line.from)!;
+    const t = at.get(line.to)!;
+    const still = lineRoute(line, s, t, s, t);
+    expect(still).toEqual({ points: line.points, label: { x: line.label!.x, y: line.label!.y }, server: true });
+    const by = (r: Rect, dx: number, dy: number) => ({ ...r, x: r.x + dx, y: r.y + dy });
+    const together = lineRoute(line, by(s, 40, 30), by(t, 40, 30), s, t);
+    expect(together.server).toBe(true);
+    expect(together.points[0]).toEqual({ x: line.points[0].x + 40, y: line.points[0].y + 30 });
+
+    // Dragged across and up: square, out of the dragged part's side or bottom and into the other.
+    for (const [dx, dy] of [
+      [260, -40],
+      [-300, 20],
+      [500, s.y < t.y ? t.y - s.y : 0],
+      [0, 0.4 * (t.y - s.y)],
+    ]) {
+      const dragged = by(s, dx, dy);
+      const route = lineRoute(line, dragged, t, s, t);
+      expect(route.server, `${dx}, ${dy}`).toBe(false);
+      expect(square(route.points), JSON.stringify(route.points)).toBe(true);
+      expect(onEdge(route.points[0], dragged)).toBe(true);
+      expect(onEdge(route.points.at(-1)!, t)).toBe(true);
+      // Its label sits on the line.
+      expect(
+        route.points.slice(1).some((q, i) => {
+          const p = route.points[i];
+          const within = (v: number, a: number, b: number) => v >= Math.min(a, b) - 0.01 && v <= Math.max(a, b) + 0.01;
+          return within(route.label.x, p.x, q.x) && within(route.label.y, p.y, q.y);
+        }),
+      ).toBe(true);
+      // Drawn with the server's rounded corners, every stretch between them level or plumb.
+      expect(roundedPath(route.points)).toMatch(/^M [-\d.]+ [-\d.]+( L [-\d.]+ [-\d.]+ Q [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+)* L [-\d.]+ [-\d.]+$/);
+    }
+    // Into the top of a part below it, so its arrowhead points down into it, as the server's do.
+    const below = lineRoute(line, by(s, 200, 0), t, s, t);
+    if (t.y > s.y + s.height) {
+      expect(below.points.at(-1)!.y).toBe(t.y);
+      expect(below.points.at(-2)!.x).toBe(below.points.at(-1)!.x);
+    }
   });
 });
 

@@ -71,8 +71,8 @@
 .flow-scope.hull .flow-scope-card { fill: rgba(255, 255, 255, 0.72); }
 .flow-scope.hull.depth-1 .flow-scope-card { fill: rgba(246, 247, 249, 0.9); }
 .flow-scope.hull { pointer-events: none; }
-.flow-scope-title { fill: var(--ink-soft); }
 .flow-scope-name, .flow-box-name { fill: var(--ink); font-weight: 700; }
+.flow-scope-who { fill: var(--ink-faint); }
 .flow-box-go { fill: var(--ink-faint); font-weight: 400; }
 .flow-scope.linked:hover .flow-scope-card { stroke: var(--ink); stroke-width: 2px; }
 

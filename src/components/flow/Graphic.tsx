@@ -8,6 +8,7 @@ import {
   outline,
   PADDING,
   SCOPE_TITLE,
+  SCOPE_WHO,
   TIER,
   type DrawnLabel,
   type DrawnLine,
@@ -82,11 +83,22 @@ export function ScopeGraphic({ scope, href, hull }: { scope: DrawnScope; href?: 
   const kind = scope.dashed ? "dashed" : scope.fill && !href ? "place" : "box";
   const style = kind === "place" ? { fill: scope.fill, stroke: scope.stroke } : undefined;
   const r = scope.holds ? 22 : 18;
+  const whoTop = SCOPE_TITLE.top + SCOPE_TITLE.line + SCOPE_WHO.gap;
   const title = scope.holds ? (
-    <text className="flow-scope-title" x={SCOPE_TITLE.left} y={SCOPE_TITLE.top + baseline(SCOPE_TITLE.size, SCOPE_TITLE.line)} fontSize={SCOPE_TITLE.size}>
-      <tspan className="flow-scope-name">{scope.name}</tspan>
-      {scope.who && <tspan dx={8}>{scope.who}</tspan>}
-    </text>
+    <>
+      <text className="flow-scope-name" x={SCOPE_TITLE.left} y={SCOPE_TITLE.top + baseline(SCOPE_TITLE.size, SCOPE_TITLE.line)} fontSize={SCOPE_TITLE.size}>
+        {scope.name}
+      </text>
+      {scope.who && (
+        <text className="flow-scope-who" fontSize={SCOPE_WHO.size}>
+          {scope.who.map((line, i) => (
+            <tspan key={i} x={SCOPE_TITLE.left} y={whoTop + i * SCOPE_WHO.line + baseline(SCOPE_WHO.size, SCOPE_WHO.line)}>
+              {line}
+            </tspan>
+          ))}
+        </text>
+      )}
+    </>
   ) : (
     <>
       <text className="flow-caption" x={BOX.padX} y={BOX.padY + baseline(CAPTION.size, CAPTION.line)} fontSize={CAPTION.size}>

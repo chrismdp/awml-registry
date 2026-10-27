@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import ELK from "elkjs/lib/elk.bundled.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { boxText, LABEL, partText } from "@/components/flow/drawing";
+import { boxText, headHeight, headWidth, LABEL, partText, SCOPE_PAD, SCOPE_TITLE, SCOPE_WHO, type Drawing } from "@/components/flow/drawing";
 import { parseMermaid } from "@/components/flow/graph";
 import { textWidth, wrap } from "@/components/flow/text";
 import { layOut, mapLinks } from "@/server/drawing";
@@ -27,6 +27,22 @@ const small = (n: string) => `flowchart TB\n  a${n}(["Start ${n}"])\n  b${n}("<s
 
 const inside = (r: { x: number; y: number; width: number; height: number }, s: typeof r) =>
   r.x >= s.x && r.y >= s.y && r.x + r.width <= s.x + s.width && r.y + r.height <= s.y + s.height;
+
+// How far a scope's edges are from the box round the parts and scopes in it, rounded.
+function padding(d: Drawing, id: string) {
+  const s = d.scopes.find((x) => x.id === id)!;
+  const held = [...d.parts.filter((p) => p.scope === id), ...d.scopes.filter((x) => x.scope === id)];
+  const left = Math.min(...held.map((r) => r.x));
+  const top = Math.min(...held.map((r) => r.y));
+  const right = Math.max(...held.map((r) => r.x + r.width));
+  const bottom = Math.max(...held.map((r) => r.y + r.height));
+  return {
+    top: Math.round(top - s.y),
+    left: Math.round(left - s.x),
+    bottom: Math.round(s.y + s.height - bottom),
+    right: Math.round(s.x + s.width - right),
+  };
+}
 
 describe("laying a drawing out on the server", () => {
   it("places every part inside its scope, every scope inside the one it is in, and routes every line", async () => {
@@ -52,6 +68,52 @@ describe("laying a drawing out on the server", () => {
     expect(flow.lines.some((l) => l.style === "dotted")).toBe(false);
     expect(flow.parts.length).toBeLessThan(full.parts.length);
     expect(flow.box.height).toBeLessThan(full.box.height);
+  });
+
+  it("shrinks each scope in Flow only to the smallest box round what is left in it, plus its padding (#67)", async () => {
+    const { full, flow } = await lay(dinners);
+    for (const s of flow.scopes) {
+      const whole = full.scopes.find((f) => f.id === s.id)!;
+      expect(s.width, s.id).toBeLessThan(whole.width);
+      expect(s.height, s.id).toBeLessThan(whole.height);
+      expect(padding(flow, s.id), s.id).toEqual({ top: headHeight(s.who), left: SCOPE_PAD, bottom: SCOPE_PAD, right: SCOPE_PAD });
+    }
+    // A scope left with a trigger alone is just big enough for it and its heading: no taller
+    // for its heading being wide, as ELK made it when given its least width the wrong way round.
+    const { flow: one } = await lay(
+      `flowchart TB\n  subgraph people["people ops#58; HR team and the hiring managers"]\n    hire(["A new hire"])\n    rec[("The hire record")]\n  end\n  hire -.-> rec\n  class hire trig\n  class rec ctx\n  style people fill:transparent,stroke:#8a93a3,stroke-dasharray:6 4`,
+    );
+    const people = one.scopes[0];
+    const hire = one.parts[0];
+    expect(people.height).toBe(headHeight(people.who) + hire.height + SCOPE_PAD);
+    expect(people.width).toBe(Math.max(hire.width + 2 * SCOPE_PAD, headWidth(people)));
+  });
+
+  it("puts who a scope is for on lines of its own under its name, inside the scope, with the scope's heading growing to fit (#67)", async () => {
+    const who = "anyone who reads the repository, the maintainers who review its pull requests, and the bots";
+    const { full } = await lay(
+      `flowchart TB\n  subgraph pub["public#58; ${who}"]\n    a(["Start"])\n    b("<small>⚙️ 🛠️ do</small><br>Work")\n  end\n  a --> b\n  class a trig\n  class b code\n  style pub fill:transparent,stroke:#8a93a3,stroke-dasharray:6 4`,
+    );
+    const pub = full.scopes[0];
+    expect(pub.name).toBe("public");
+    expect(pub.who!.length).toBeGreaterThan(1);
+    expect(pub.who!.join(" ")).toBe(who);
+    // Never broken narrower than SCOPE_WHO.min, though the parts are narrower, and always
+    // inside the scope: the scope is made wide enough.
+    expect(Math.max(...pub.who!.map((l) => textWidth(l, SCOPE_WHO.size)))).toBeGreaterThan(SCOPE_WHO.min * 0.75);
+    for (const line of pub.who!) expect(textWidth(line, SCOPE_WHO.size)).toBeLessThanOrEqual(SCOPE_WHO.min);
+    expect(pub.width).toBeGreaterThanOrEqual(headWidth(pub));
+    for (const line of pub.who!) expect(SCOPE_TITLE.left + textWidth(line, SCOPE_WHO.size)).toBeLessThan(pub.width - SCOPE_TITLE.left / 2);
+    // The parts start below the heading's last line.
+    const top = Math.min(...full.parts.map((p) => p.y));
+    expect(top - pub.y).toBe(headHeight(pub.who));
+    expect(headHeight(pub.who)).toBeGreaterThan(SCOPE_TITLE.height + pub.who!.length * SCOPE_WHO.line);
+    // A scope holding more than SCOPE_WHO.min across breaks them wider, still inside it.
+    const { full: wide } = await lay(dinners.replace("carers#58; #43; June#44; Beth", `carers#58; ${who}`));
+    const carers = wide.scopes.find((s) => s.id === "carers")!;
+    expect(carers.who!.length).toBeLessThan(pub.who!.length);
+    expect(Math.max(...carers.who!.map((l) => textWidth(l, SCOPE_WHO.size)))).toBeGreaterThan(SCOPE_WHO.min);
+    for (const line of carers.who!) expect(textWidth(line, SCOPE_WHO.size)).toBeLessThanOrEqual(carers.width - 2 * SCOPE_TITLE.left);
   });
 
   it("keeps each layout once worked out, by the text, the switch and the engine, so the same drawing isn't laid out twice", async () => {
