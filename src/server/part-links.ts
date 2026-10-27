@@ -15,7 +15,7 @@ const listed = (names: string[]) =>
 // Each part a workflow's drawing marks, from its refs as the viewer may know
 // them and the referrers the viewer may see, so it names nothing they can't.
 // `kinds` are the kinds of the workflow's parts: an outside action whose ref
-// names another workflow's trigger starts that workflow (AWML 0.7). A part
+// names another workflow's trigger starts that workflow (AWML 0.7). A trigger
 // another workflow refers to from an outside action, which a referrer's
 // `starts` names, is started by it; any other referrer uses it.
 export function partLinks(refs: ShownRef[], referredBy: Referrer[], kinds: Map<string, string> = new Map()): PartLink[] {
@@ -37,7 +37,8 @@ export function partLinks(refs: ShownRef[], referredBy: Referrer[], kinds: Map<s
   for (const r of referredBy)
     for (const part of r.parts) {
       const link = at(part);
-      (r.starts?.includes(part) ? link.startedBy : link.usedBy).push(`${r.owner}/${r.slug}`);
+      const starts = r.starts?.includes(part) && kinds.get(part) === "trigger";
+      (starts ? link.startedBy : link.usedBy).push(`${r.owner}/${r.slug}`);
       link.to.push({ label: `${r.owner}/${r.slug}`, href: `/${r.owner}/${r.slug}` });
     }
   return [...links].map(([part, l]) => ({

@@ -8,11 +8,18 @@ import { loadAwmlModule } from "@/engine/module";
 import { memoise } from "./memo";
 import type { Engine, Files, FitReport, ListedCheck, Named, Summary } from "./types";
 
-// One Go runtime per process or Worker isolate, started on first use.
+// One Go runtime per process or Worker isolate, started on first use. A start
+// that fails, such as before `npm run engine:build`, isn't kept, so the next
+// use tries again, and a running dev server takes up an engine built later.
 let started: Promise<AWML> | undefined;
 
 function awml() {
-  started ??= loadAwmlModule().then(createAWML);
+  started ??= loadAwmlModule()
+    .then(createAWML)
+    .catch((e) => {
+      started = undefined;
+      throw e;
+    });
   return started;
 }
 

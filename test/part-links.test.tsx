@@ -4,14 +4,18 @@
 // the page outlines once it is drawn. A part other workflows refer to carries
 // the same mark, listing them. Neither names a workflow the viewer can't see.
 import { renderToStaticMarkup } from "react-dom/server";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { loadVersion } from "@/app/[owner]/[slug]/load";
+import { getDb } from "@/db/client";
+import { version, workflow, workflowRef } from "@/db/schema";
+import { referrersOf } from "@/server/registry";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
 import { destination, partInHash } from "@/components/links";
 import { PartMenu } from "@/components/PartLinks";
 import { layOut } from "@/server/drawing";
 import { partLinks, type PartLink } from "@/server/part-links";
-import { orgWith, person, request, storeVersion, type Who } from "./helpers";
+import { example, orgWith, person, request, statements, storeVersion, type Who } from "./helpers";
 import { pageRequest } from "./pages";
 import { laidOut } from "./drawn";
 
@@ -310,4 +314,84 @@ describe("the page a link opens", () => {
     expect(partInHash("#not a part")).toBeNull();
   });
 
+});
+
+// Whether a ref starts the workflow it names is stored with the ref at push, so a workflow's page
+// reads only short columns about the workflows that refer to it, never their files. A ref written
+// before that was stored is worked out once, from its file as the engine reads it, converted.
+describe("whether a ref starts what it names, stored with the ref", () => {
+  // The rows a push wrote for a workflow's refs: each referring part and whether it starts what it names.
+  async function refRows(owner: string, slug: string) {
+    const db = await getDb();
+    return db
+      .select({ part: workflowRef.part, starts: workflowRef.starts })
+      .from(workflowRef)
+      .innerJoin(version, eq(version.id, workflowRef.versionId))
+      .innerJoin(workflow, eq(workflow.id, version.workflowId))
+      .where(eq(workflow.slug, slug));
+  }
+  // The statements one read of a workflow's referrers sends, as Ana.
+  async function readingReferrers(owner: string, slug: string, as: { id: string; username: string }) {
+    const db = await getDb();
+    statements.length = 0;
+    const found = await referrersOf(db, { id: as.id, username: as.username } as Parameters<typeof referrersOf>[1], owner, slug);
+    return { found, sent: [...statements] };
+  }
+  const readsAFile = (sent: string[]) => sent.some((q) => /"version"\."workflow"|"version"\."security"|"version"\."platform"/.test(q));
+  // The bakery's supplier order, its stock ref left as a path, which a push stores under acme.
+  const order = example("bakery-order.yaml");
+
+  it("stores a starting outside action's ref as starting, and labels the trigger it starts without reading any file", async () => {
+    const { ana } = await world();
+    await pushed("acme", "bakery-order", { token: ana.token }, order, "private");
+    await pushed("acme", "bakery-stock", { token: ana.token }, example("bakery-stock.yaml"), "private");
+    expect(await refRows("acme", "bakery-stock")).toEqual([{ part: "start", starts: true }]);
+    expect(await refRows("acme", "bakery-order")).toEqual([{ part: "stock", starts: false }]);
+    const { found, sent } = await readingReferrers("acme", "bakery-order", ana);
+    expect(found).toMatchObject([{ owner: "acme", slug: "bakery-stock", parts: ["low"], starts: ["low"] }]);
+    expect(readsAFile(sent)).toBe(false);
+    expect((await linksOn("acme", "bakery-order", "security", ana)).find((l) => l.part === "low")?.title).toBe("Started by acme/bakery-stock");
+  });
+
+  it("works out a ref stored before, once, from its 0.6 file converted: a trigger with a ref that convert makes an outside action starts it", async () => {
+    const { ana } = await world();
+    await pushed("acme", "order", { token: ana.token }, order, "private");
+    // bakery-stock-06 leads into its trigger "order", whose ref is acme/order#low; converted, it
+    // is an outside action that starts acme/order.
+    await storeVersion("acme", "stock-old", ana, { workflow: example("older/bakery-stock-06.yaml") }, { visibility: "private" });
+    const db = await getDb();
+    const [stored] = await db.select({ id: version.id }).from(version).innerJoin(workflow, eq(workflow.id, version.workflowId)).where(eq(workflow.slug, "stock-old"));
+    await db.insert(workflowRef).values({ versionId: stored.id, part: "order", targetOwner: "acme", targetSlug: "order", targetPart: "low" });
+    expect(await refRows("acme", "stock-old")).toEqual([{ part: "order", starts: null }]);
+
+    const first = await readingReferrers("acme", "order", ana);
+    expect(first.found).toMatchObject([{ slug: "stock-old", parts: ["low"], starts: ["low"] }]);
+    expect(readsAFile(first.sent)).toBe(true);
+    expect(await refRows("acme", "stock-old")).toEqual([{ part: "order", starts: true }]);
+    // Worked out once: no file is read again.
+    const again = await readingReferrers("acme", "order", ana);
+    expect(again.found).toEqual(first.found);
+    expect(readsAFile(again.sent)).toBe(false);
+    expect((await linksOn("acme", "order", "security", ana)).find((l) => l.part === "low")?.title).toBe("Started by acme/stock-old");
+  });
+
+  it("says an outside action whose ref names a part that isn't a trigger uses it, and starts nothing", async () => {
+    const { ana } = await world();
+    // Pushed before what it names, so the push can't see the part; it stores the outside action's half.
+    const starter = `awml: "0.7"
+title: Starter
+parts:
+  - { id: tick, kind: trigger, label: "Every morning" }
+  - { id: go, kind: code, op: do, label: "Start it" }
+  - { id: start, kind: outside, label: "Start the list: Allow", ref: acme/lists#list }
+lines:
+  - { from: tick, to: go, kind: start }
+  - { from: go, to: start, kind: start }
+`;
+    await pushed("acme", "starter", { token: ana.token }, starter, "private");
+    expect(await refRows("acme", "starter")).toEqual([{ part: "start", starts: true }]);
+    await pushed("acme", "lists", { token: ana.token }, shopping.replace("title: Shopping", "title: Lists"), "private");
+    const links = await linksOn("acme", "lists", "security", ana);
+    expect(links.find((l) => l.part === "list")?.title).toBe("Used by acme/starter");
+  });
 });

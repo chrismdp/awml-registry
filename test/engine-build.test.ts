@@ -81,6 +81,24 @@ describe("the engine's WebAssembly", () => {
     expect(ENGINE_STALE).toContain("npm run engine:build");
   });
 
+  it("is started again after a start that failed, so an engine built later is taken up without a restart", async () => {
+    vi.resetModules();
+    const real = await vi.importActual<typeof import("@/engine/module")>("@/engine/module");
+    const load = vi.fn(real.loadAwmlModule).mockRejectedValueOnce(new Error(ENGINE_MISSING));
+    vi.doMock("@/engine/module", () => ({ ...real, loadAwmlModule: load }));
+    try {
+      const { wasmEngine } = await import("@/engine/wasm");
+      await expect(wasmEngine.start()).rejects.toThrow(ENGINE_MISSING);
+      await expect(wasmEngine.start()).resolves.toBeUndefined();
+      expect(load).toHaveBeenCalledTimes(2);
+      await wasmEngine.start();
+      expect(load).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.doUnmock("@/engine/module");
+      vi.resetModules();
+    }
+  });
+
   it("is built only when the build doesn't match the pin, so building again does nothing", () => {
     const said = execFileSync("bash", ["scripts/engine-build.sh"], { encoding: "utf8" });
     expect(said.trim()).toBe(`vendor/awml is built from awml ${pin.tag} (${pin.commit})`);
