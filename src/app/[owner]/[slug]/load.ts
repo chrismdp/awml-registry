@@ -1,5 +1,6 @@
 import { notFound, permanentRedirect } from "next/navigation";
 import { mistakesIn, type CheckedFile, type CheckRow } from "@/components/Checks";
+import { partLinks } from "@/components/part-links";
 import type { VersionViewProps } from "@/components/VersionView";
 import { engine, type ListedCheck } from "@/engine";
 import { asRead } from "@/server/as-read";
@@ -168,6 +169,9 @@ export async function loadVersion(
     checks: shownChecks,
     refs: refs.shown,
     referredBy: referredBy ?? [],
+    // The parts the drawing marks as linked to other workflows, from what the
+    // viewer may know of both, so it names nothing they can't see.
+    links: partLinks(refs.shown, referredBy ?? []),
     mermaid: drawable ? await engine.draw(readFile(source)!, drawnImplementation(source, placed, readFile(source)!)) : "",
     summary: v.summary,
     versions: v.versions,

@@ -13,6 +13,7 @@ import { CopyButton } from "./CopyButton";
 import { ForkForm } from "./ForkForm";
 import { Versions, type ListedVersion } from "./VersionList";
 import { PanZoom } from "./PanZoom";
+import type { PartLink } from "./part-links";
 import { count } from "./words";
 
 export type VersionViewProps = {
@@ -54,6 +55,8 @@ export type VersionViewProps = {
   refs: ShownRef[];
   // The workflows the viewer may see whose latest version refers to this one.
   referredBy: Referrer[];
+  // The parts the drawing marks as linked to other workflows, either way.
+  links: PartLink[];
   // The shown file drawn, or "" when it is not a drawing view or the file has mistakes.
   mermaid: string;
   summary: Summary;
@@ -184,7 +187,7 @@ export function VersionView(p: VersionViewProps) {
               {p.nowhere ? (
                 <p className="cannot-draw">This workflow doesn&apos;t say where it runs yet.</p>
               ) : p.mermaid ? (
-                <PanZoom text={p.mermaid} />
+                <PanZoom text={p.mermaid} links={p.links} />
               ) : (
                 <CannotDraw file={p.checks.find((f) => f.name === p.drawnFrom)!} checks={`${p.address}/checks`} />
               )}
