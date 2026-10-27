@@ -2,11 +2,12 @@ import Link from "next/link";
 import MarkdownIt from "markdown-it";
 import type { Summary } from "@/engine";
 import type { SystemTab } from "@/server/page";
+import type { PartLink } from "@/server/part-links";
 import type { Visibility } from "@/server/push";
 import { names } from "@/server/summary";
 import { Checks, mistakesIn, Tick, type CheckedFile } from "./Checks";
-import { FlowDrawing } from "./FlowDrawing";
-import { PanZoom } from "./PanZoom";
+import { Drawing } from "./Drawing";
+import type { Drawings } from "./flow/drawing";
 import { Versions, type ListedVersion } from "./VersionList";
 import { count } from "./words";
 
@@ -23,7 +24,7 @@ export type SystemFit = { owner: string; slug: string; label: string; fits: bool
 // mistakes it threw, and is empty when no member is drawn.
 export type SystemPanel =
   | { tab: "checks" }
-  | { tab: "map"; mermaid?: string; error?: string }
+  | { tab: "map"; drawing?: Drawings; hrefs?: Record<string, string>; links?: PartLink[]; error?: string }
   | { tab: "who-waits"; summary?: Summary; error?: string }
   | { tab: "where-it-runs"; fits?: SystemFit[]; gaps?: string[]; error?: string };
 
@@ -47,8 +48,6 @@ export type SystemViewProps = {
   checks: CheckedFile[];
   panel: SystemPanel;
   versions: ListedVersion[];
-  // "flow" draws the map laid out in the browser instead (issue #62's experiment).
-  draw?: "flow";
 };
 
 const TAB: Record<SystemTab, string> = {
@@ -185,13 +184,7 @@ function Panel(p: SystemViewProps) {
   if (panel.tab === "map")
     return (
       <figure className="figure" role="tabpanel" aria-label={label}>
-        {!panel.mermaid ? (
-          <Undrawn />
-        ) : p.draw === "flow" ? (
-          <FlowDrawing text={panel.mermaid} hrefs={boxLinks(p.members)} />
-        ) : (
-          <PanZoom text={panel.mermaid} />
-        )}
+        {panel.drawing ? <Drawing drawings={panel.drawing} hrefs={panel.hrefs} links={panel.links} /> : <Undrawn />}
       </figure>
     );
   if (panel.tab === "who-waits")
@@ -205,15 +198,6 @@ function Panel(p: SystemViewProps) {
       {panel.fits && panel.gaps ? <Runs fits={panel.fits} gaps={panel.gaps} /> : <Undrawn />}
     </div>
   );
-}
-
-// The page of each workflow boxed on the map. The engine names the boxes w1,
-// w2 and on, in the order the members drawn were given to it (see load.ts),
-// and only members the viewer may see are drawn, so a box never leads to a
-// workflow they may not see (#61).
-function boxLinks(members: ListedMember[]) {
-  const drawn = members.filter((m) => m.state === "found" && m.drawn);
-  return Object.fromEntries(drawn.map((m, i) => [`w${i + 1}`, `/${m.owner}/${m.slug}`]));
 }
 
 function Undrawn() {

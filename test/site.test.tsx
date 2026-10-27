@@ -4,7 +4,6 @@ import { isValidElement, type ReactNode } from "react";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { LoginForm } from "@/components/LoginForm";
-import { drawingFont } from "@/components/Mermaid";
 import { getDb } from "@/db/client";
 import { organisation, user, version } from "@/db/schema";
 import { engine } from "@/engine";
@@ -27,6 +26,7 @@ import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
 import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
 import VersionChecksPage from "@/app/[owner]/[slug]/v/[n]/checks/page";
 import { copyText } from "@/components/CopyButton";
+import { drawing, drawnFrom } from "./drawn";
 import TokensPage from "@/app/settings/tokens/page";
 import LoginPage from "@/app/login/page";
 import { makeToken } from "@/app/settings/tokens/actions";
@@ -164,7 +164,7 @@ describe("the public gallery", () => {
     expect(shown).toContain("Public workflows");
     expect(shown).toContain("Workflows people have drawn and shared. Borrow one and make it yours.");
     expect(shown).toContain("The family's dinners AI 1 Code 3 ana / dinners");
-    expect(page.html).toContain(await drawnAsRead(security).then((m) => m.split("\n")[0]));
+    expect(drawing(page.html)).toEqual(drawnFrom(await drawnAsRead(security)));
     expect(page.html).toContain('placeholder="Search by title"');
     expect(page.html).toContain('action="/gallery"');
   });
@@ -196,7 +196,7 @@ describe("a workflow's page", () => {
     const page = await renderPage(WorkflowPage, { owner: o, slug: "bin-day" });
     const shown = text(page.html);
     expect(shown).toContain(`${o} / bin-day Bin day Public · Version 1 of 1 Fork Who may see each part`);
-    expect(page.html).toContain(await drawnAsRead(binDayPair.security).then((m) => m.split("\n")[0]));
+    expect(drawing(page.html)).toEqual(drawnFrom(await drawnAsRead(binDayPair.security)));
     expect(tabs(page.html)).toEqual([
       { href: `/${o}/bin-day/security`, label: "Who may see each part", selected: true },
       { href: `/${o}/bin-day/platform`, label: "Where each part runs", selected: false },
@@ -210,7 +210,7 @@ describe("a workflow's page", () => {
 
     const other = await renderPage(WorkflowPlatformPage, { owner: o, slug: "bin-day" });
     expect(other.status).toBe(200);
-    expect(text(other.html)).toContain('subgraph pi["A Raspberry Pi"]');
+    expect(drawing(other.html)?.scopes).toContain("pi");
     expect(
       tabs(other.html)
         .filter((t) => t.selected)
@@ -251,7 +251,7 @@ describe("a workflow's page", () => {
     const drawn = await renderPage(VersionPlatformPage, v1);
     expect(drawn.status).toBe(200);
     expect(header(drawn.html)).toMatch(new RegExp(`^${o} / bin-day Bin day for two Public · Version 1 of 2 #2 `));
-    expect(text(drawn.html)).toContain('subgraph pi["A Raspberry Pi"]');
+    expect(drawing(drawn.html)?.scopes).toContain("pi");
     expect(tabs(drawn.html)).toEqual([
       { href: `/${o}/bin-day/v/1/security`, label: "Who may see each part", selected: false },
       { href: `/${o}/bin-day/v/1/platform`, label: "Where each part runs", selected: true },
@@ -803,8 +803,10 @@ describe("the engine", () => {
 });
 
 describe("drawing a workflow", () => {
-  it("asks for Inter, which the registry serves itself under the SIL Open Font License", async () => {
-    expect(drawingFont(await engine.draw(dinners))).toBe("Inter, sans-serif");
+  it("sets its text in Inter, which the registry serves itself under the SIL Open Font License", async () => {
+    expect(fs.readFileSync(path.join("src", "components", "flow", "flow.css"), "utf8")).toContain(
+      ".flow-static, .flow-node-svg { font-family: Inter, var(--sans);",
+    );
     const css = fs.readFileSync(path.join("src", "app", "site.css"), "utf8");
     const face = /@font-face\s*{([^}]*)}/.exec(css)?.[1] ?? "";
     expect(face).toMatch(/font-family:\s*"Inter"/);

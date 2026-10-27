@@ -6,6 +6,7 @@ import { asRead } from "@/server/as-read";
 import { refPath, refsAsSeen } from "@/server/refs";
 import { awmlOf, implementationsOf } from "@/server/awml-file";
 import { followOldName, isPageView, pageContext, underOwner, workflowPath, type PageView } from "@/server/page";
+import { layOut } from "@/server/drawing";
 import { partLinks } from "@/server/part-links";
 import { organisationsOf } from "@/server/organisations";
 import { forksOf, readVersion, referrersOf, systemsWith, VIEWS, type FileName, type View } from "@/server/registry";
@@ -174,7 +175,9 @@ export async function loadVersion(
     // viewer may know of both, so it names nothing they can't see.
     links: partLinks(refs.shown, referredBy ?? []),
     systems: systems ?? [],
-    mermaid: drawable ? await engine.draw(readFile(source)!, drawnImplementation(source, placed, readFile(source)!)) : "",
+    // The drawing, laid out here (src/server/drawing.ts), so the page draws it
+    // with no layout of its own.
+    drawing: drawable ? await layOut(await engine.draw(readFile(source)!, drawnImplementation(source, placed, readFile(source)!))) : null,
     summary: v.summary,
     versions: v.versions,
   };

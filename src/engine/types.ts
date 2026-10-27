@@ -91,8 +91,9 @@ export interface Engine {
   checksWith(file: Named, others: Named[]): Promise<ListedCheck[]>;
   // One workflow's summary from its files. The files must pass check.
   summarise(files: Files): Promise<Summary>;
-  // Mermaid text for one file that passes check, drawn in the browser: its
-  // security view, or a workflow's platform view of one implementation.
+  // Mermaid text for one file that passes check, which the registry reads its
+  // drawing from (src/server/drawing.ts): its security view, or a workflow's
+  // platform view of one implementation.
   draw(yaml: string, implementation?: string): Promise<string>;
   // Where a workflow can run: its design judged against platform
   // descriptions, each named by its own id. With an implementation, its

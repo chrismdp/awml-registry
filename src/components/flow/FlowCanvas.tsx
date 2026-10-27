@@ -1,126 +1,201 @@
 "use client";
 
 import "@xyflow/react/dist/base.css";
-import "./flow.css";
 import {
-  BaseEdge,
-  EdgeLabelRenderer,
   Handle,
-  MarkerType,
   NodeToolbar,
-  Panel,
   Position,
   ReactFlow,
   ReactFlowProvider,
   getBezierPath,
   useInternalNode,
+  useNodesInitialized,
   useNodesState,
   useReactFlow,
   type Edge,
   type EdgeProps,
-  type FitViewOptions,
   type InternalNode,
   type Node,
   type NodeMouseHandler,
   type NodeProps,
+  type Viewport,
 } from "@xyflow/react";
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { flowOnly, parseMermaid, triggersOutside, type Graph, type Line, type Note, type Part, type PartKind, type Scope } from "./graph";
-import { containers, layoutElk, SCOPE_TITLE, type Laid, type Point, type Size } from "./layout";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import type { PartLink } from "@/server/part-links";
+import type { Drawing, DrawnLine, DrawnPart, DrawnScope, Note, Point, Rect } from "./drawing";
+import { LabelGraphic, LineGraphic, NoteIcon, NOTE_R, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import type { Body, Physics } from "./physics";
+import { notesBy } from "./StaticDrawing";
 
-// The experiment of issue #62: a workflow's drawing as a graph laid out in the
-// browser, by ELK (layered) or by d3-force (physics), drawn with React Flow so
-// a dragged part takes its lines with it. Nothing dragged is kept.
+// React Flow drawing what the server laid out, so a dragged part takes its
+// lines with it (issue #62). It starts exactly where the server's SVG was
+// (Drawing.tsx), each piece drawn by the same markup (Graphic.tsx), and
+// tells the page once it shows, for the page to hide the SVG. Physics lays
+// the same drawing out again with d3-force. Nothing dragged is kept.
 
-type PartData = { part: Part; notes: Note[] };
-type ScopeData = { scope: Scope; notes: Note[]; depth: number; holds: boolean; href?: string; hull?: boolean };
-type LineData = { line: Line; route?: { points: Point[]; label?: Point }; sourceAt?: Point; targetAt?: Point; straight?: boolean };
+export type Mode = "layered" | "physics";
+
+// What the page's controls and keyboard ask of the drawing.
+export type FlowApi = {
+  zoomBy(factor: number): void;
+  panBy(dx: number, dy: number): void;
+  fit(): void;
+  actualSize(): void;
+  // A part's or box's box in the frame, for a menu beside it.
+  rectOf(id: string): Rect | undefined;
+};
+
+type Shared = {
+  id: string;
+  links: Map<string, PartLink>;
+  hrefs: Record<string, string>;
+  notes: Map<string, Note[]>;
+  target?: string;
+  onNote: (title: string, notes: Note[]) => void;
+};
+type PartData = Shared & { part: DrawnPart };
+type ScopeData = Shared & { scope: DrawnScope; hull?: boolean };
+type LineData = { id: string; line: DrawnLine; physics: boolean; from?: Point; to?: Point };
 type PartNode = Node<PartData, "part">;
 type ScopeNode = Node<ScopeData, "scope">;
 type FlowNode = PartNode | ScopeNode;
 type FlowEdge = Edge<LineData, "line">;
-type Measured = { boxes: Map<string, Size>; labels: Map<string, Size> };
-type Mode = "layered" | "physics";
 
-const FIT: FitViewOptions = { padding: { top: "72px", right: "20px", bottom: "64px", left: "20px" }, maxZoom: 1.1 };
-
-const CAPTION: Record<PartKind, string> = {
-  trigger: "Trigger",
-  context: "Data",
-  connection: "Connection",
-  surface: "Surface",
-  outside: "Outside action",
-  ai: "AI",
-  code: "Code",
-  person: "Person",
-  part: "",
+export type FlowCanvasProps = {
+  drawing: Drawing;
+  id: string;
+  mode: Mode;
+  links: PartLink[];
+  hrefs: Record<string, string>;
+  // Where the server's SVG shows the drawing, for React Flow to start from.
+  viewport: Viewport;
+  // The part the address's fragment names, outlined.
+  target?: string;
+  onReady: () => void;
+  onApi: (api: FlowApi) => void;
+  onNote: (title: string, notes: Note[]) => void;
+  // A press on a linked part, or a box on a system's map, that didn't drag.
+  onFollow: (id: string, e: { ctrlKey: boolean; metaKey: boolean; button?: number }) => void;
+  fitOf: (box: Rect) => Viewport;
 };
 
-const STROKE: Record<Line["style"], string> = { solid: "#5d6472", dotted: "#9aa2af", thick: "#3e424b" };
-
-// Opens a part's notes in the modal.
-const OpenNote = createContext<(title: string, notes: Note[]) => void>(() => {});
-
-export default function FlowCanvas({ text, hrefs }: { text: string; hrefs?: Record<string, string> }) {
+export default function FlowCanvas(p: FlowCanvasProps) {
   return (
     <ReactFlowProvider>
-      <Canvas text={text} hrefs={hrefs} />
+      <Canvas {...p} />
     </ReactFlowProvider>
   );
 }
 
-function Canvas({ text, hrefs }: { text: string; hrefs?: Record<string, string> }) {
-  const base = useMemo(() => {
-    const g = parseMermaid(text);
-    return hrefs ? triggersOutside(g) : g;
-  }, [text, hrefs]);
-  const [mode, setMode] = useState<Mode>("layered");
-  const [flow, setFlow] = useState(false);
-  const [measured, setMeasured] = useState<Measured>();
-  const shown = useMemo(() => (flow ? flowOnly(base) : base), [base, flow]);
+function Canvas(p: FlowCanvasProps) {
+  const { drawing, mode, onReady, onApi, fitOf } = p;
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges] = useState<FlowEdge[]>([]);
-  const [note, setNote] = useState<{ title: string; notes: Note[] }>();
   const physics = useRef<Physics>(undefined);
   const dragged = useRef(false);
-  const { fitView, zoomIn, zoomOut } = useReactFlow();
+  const flow = useReactFlow<FlowNode, FlowEdge>();
+  const initialised = useNodesInitialized();
+  const ready = useRef(false);
+  const shared = useMemo(
+    () => ({
+      id: p.id,
+      links: new Map(p.links.map((l) => [l.part, l])),
+      hrefs: p.hrefs,
+      notes: notesBy(drawing.notes),
+      target: p.target,
+      onNote: p.onNote,
+    }),
+    [p.id, p.links, p.hrefs, drawing.notes, p.target, p.onNote],
+  );
 
-  // Each switch, and the first drawing, lays the graph out afresh.
+  // The page shows React Flow, and hides its SVG, once every part is drawn.
   useEffect(() => {
-    if (!measured) return;
+    if (!initialised || ready.current || !nodes.length) return;
+    ready.current = true;
+    requestAnimationFrame(() => onReady());
+  }, [initialised, nodes.length, onReady]);
+
+  // Whether the reader has left the drawing fitted, so a resize fits it again.
+  const fitted = useRef(true);
+  const frameOf = useCallback(() => document.querySelector<HTMLElement>(`[data-flow="${p.id}"]`), [p.id]);
+  useEffect(() => {
+    onApi({
+      zoomBy: (factor) => {
+        fitted.current = false;
+        const v = flow.getViewport();
+        const frame = frameOf();
+        const cx = (frame?.clientWidth ?? 0) / 2;
+        const cy = (frame?.clientHeight ?? 0) / 2;
+        const zoom = Math.min(2.5, Math.max(0.1, v.zoom * factor));
+        flow.setViewport({ zoom, x: cx - ((cx - v.x) * zoom) / v.zoom, y: cy - ((cy - v.y) * zoom) / v.zoom }, { duration: 120 });
+      },
+      panBy: (dx, dy) => {
+        fitted.current = false;
+        const v = flow.getViewport();
+        flow.setViewport({ ...v, x: v.x + dx, y: v.y + dy });
+      },
+      fit: () => {
+        fitted.current = true;
+        flow.setViewport(fitOf(boundsOf(flow.getNodes())), { duration: 200 });
+      },
+      actualSize: () => {
+        fitted.current = false;
+        const v = flow.getViewport();
+        flow.setViewport({ ...v, zoom: 1 }, { duration: 120 });
+      },
+      rectOf: (id) => {
+        const n = flow.getInternalNode(id);
+        if (!n) return undefined;
+        const v = flow.getViewport();
+        const { x, y } = n.internals.positionAbsolute;
+        return { x: x * v.zoom + v.x, y: y * v.zoom + v.y, width: (n.width ?? 0) * v.zoom, height: (n.height ?? 0) * v.zoom };
+      },
+    });
+  }, [flow, onApi, fitOf, frameOf]);
+
+  // A drawing left fitted is fitted again when its frame changes size, as the
+  // server's SVG is.
+  useEffect(() => {
+    const frame = frameOf();
+    if (!frame) return;
+    const resized = new ResizeObserver(() => fitted.current && flow.setViewport(fitOf(boundsOf(flow.getNodes()))));
+    resized.observe(frame);
+    return () => resized.disconnect();
+  }, [flow, fitOf, frameOf]);
+
+  // The drawing, laid out by the server or by the physics. A new drawing, from
+  // the Flow only switch, is fitted to the frame.
+  const first = useRef(true);
+  useEffect(() => {
     let stopped = false;
-    // Once React Flow has the new nodes, which takes it a frame.
-    const fit = () => requestAnimationFrame(() => requestAnimationFrame(() => !stopped && fitView(FIT)));
+    const refit = !first.current;
+    first.current = false;
+    if (refit) fitted.current = true;
     if (mode === "layered") {
-      layoutElk(shown, measured.boxes, measured.labels).then((laid) => {
-        if (stopped) return;
-        setNodes(elkNodes(shown, laid, hrefs));
-        setEdges(linesOf(shown, laid));
-        fit();
-      });
+      setNodes(layeredNodes(drawing, shared));
+      setEdges(linesOf(drawing, p.id, false));
+      if (refit) requestAnimationFrame(() => !stopped && flow.setViewport(fitOf(drawing.box), { duration: 200 }));
     } else {
-      let first = true;
-      let rested = false;
+      let started = false;
       import("./physics").then(async ({ startPhysics }) => {
-        const started = await startPhysics(shown, measured.boxes, (bodies) => {
-          if (stopped) return;
-          const next = physicsNodes(shown, bodies, hrefs);
-          if (first) setNodes(next);
-          else {
-            const at = new Map(next.map((n) => [n.id, n]));
-            setNodes((old) => old.map((n) => (at.has(n.id) ? { ...n, position: at.get(n.id)!.position, width: at.get(n.id)!.width, height: at.get(n.id)!.height } : n)));
-          }
-          first = false;
-        }, () => {
-          // Fitted again once it first comes to rest, but not after each drag.
-          if (!stopped && !rested) fitView({ ...FIT, duration: 300 });
-          rested = true;
-        });
-        if (stopped) return started.stop();
-        physics.current = started;
-        setEdges(linesOf(shown));
-        fit();
+        const sim = await startPhysics(
+          drawing,
+          (bodies) => {
+            if (stopped) return;
+            const next = physicsNodes(drawing, bodies, shared);
+            if (!started) setNodes(next);
+            else {
+              const at = new Map(next.map((n) => [n.id, n]));
+              setNodes((old) => old.map((n) => (at.has(n.id) ? { ...n, position: at.get(n.id)!.position, width: at.get(n.id)!.width, height: at.get(n.id)!.height } : n)));
+            }
+            started = true;
+          },
+          () => {},
+        );
+        if (stopped) return sim.stop();
+        physics.current = sim;
+        setEdges(linesOf(drawing, p.id, true));
+        requestAnimationFrame(() => !stopped && flow.setViewport(fitOf(boundsOf(flow.getNodes())), { duration: 200 }));
       });
     }
     return () => {
@@ -128,172 +203,166 @@ function Canvas({ text, hrefs }: { text: string; hrefs?: Record<string, string> 
       physics.current?.stop();
       physics.current = undefined;
     };
-  }, [shown, mode, measured, hrefs, setNodes, fitView]);
+    // `shared` changing (a fragment, say) restyles the nodes below, without laying out again.
+  }, [drawing, mode, p.id, setNodes, flow, fitOf]);
+
+  // The outlined part and the links change only what nodes carry.
+  useEffect(() => {
+    setNodes((old) => old.map((n) => ({ ...n, data: { ...n.data, ...shared } }) as FlowNode));
+  }, [shared, setNodes]);
 
   const centre = (n: Node) => ({ x: n.position.x + (n.width ?? 0) / 2, y: n.position.y + (n.height ?? 0) / 2 });
   const onNodeClick: NodeMouseHandler<FlowNode> = (e, node) => {
-    const href = node.type === "scope" ? node.data.href : undefined;
-    if (!href || dragged.current || (e.target as Element).closest("a, button")) return;
-    if (e.ctrlKey || e.metaKey) window.open(href, "_blank", "noopener");
-    else window.location.assign(href);
+    if (dragged.current || (e.target as Element).closest("button, a")) return;
+    const follows = node.type === "part" ? shared.links.has(node.id) : Boolean(shared.hrefs[node.id]);
+    if (follows) p.onFollow(node.id, e);
+  };
+  const onAuxClick = (e: MouseEvent) => {
+    const id = (e.target as Element).closest(".react-flow__node")?.getAttribute("data-id");
+    if (e.button !== 1 || !id || (!shared.links.has(id) && !shared.hrefs[id])) return;
+    e.preventDefault();
+    p.onFollow(id, e);
   };
 
   return (
-    <OpenNote.Provider value={(title, notes) => setNote({ title, notes })}>
-      <div className="flow-frame">
-        {!measured && <Measure graph={base} hrefs={hrefs} onMeasured={setMeasured} />}
-        <ReactFlow<FlowNode, FlowEdge>
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          nodeTypes={NODE_TYPES}
-          edgeTypes={EDGE_TYPES}
-          nodesConnectable={false}
-          edgesFocusable={false}
-          zoomOnScroll={false}
-          panOnScroll={false}
-          preventScrolling={false}
-          minZoom={0.1}
-          maxZoom={2.5}
-          nodeDragThreshold={3}
-          proOptions={{ hideAttribution: true }}
-          onNodeClick={onNodeClick}
-          onNodeDragStart={(_, n) => {
-            dragged.current = false;
-            physics.current?.hold(n.id, centre(n));
-          }}
-          onNodeDrag={(_, n) => {
-            dragged.current = true;
-            physics.current?.hold(n.id, centre(n));
-          }}
-          onNodeDragStop={(_, n) => {
-            physics.current?.release(n.id);
-            setTimeout(() => (dragged.current = false));
-          }}
-          aria-label="Workflow drawing. Drag a part to move it, drag the background to pan, pinch or Ctrl+scroll to zoom."
-        >
-          <Panel position="top-right" className="flow-controls">
-            <div className="flow-pills" role="radiogroup" aria-label="Layout">
-              {(["layered", "physics"] as const).map((m) => (
-                <button key={m} type="button" role="radio" aria-checked={mode === m} onClick={() => setMode(m)}>
-                  {m === "layered" ? "Layered" : "Physics"}
-                </button>
-              ))}
-            </div>
-            <button type="button" className="flow-toggle" aria-pressed={flow} onClick={() => setFlow(!flow)}>
-              Flow only
-            </button>
-          </Panel>
-          <Panel position="bottom-right" className="flow-controls">
-            <div className="flow-pills flow-zoom">
-              <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => zoomIn({ duration: 150 })}>
-                +
-              </button>
-              <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => zoomOut({ duration: 150 })}>
-                −
-              </button>
-              <button type="button" aria-label="Fit the whole drawing" title="Fit the whole drawing" onClick={() => fitView({ ...FIT, duration: 200 })}>
-                Fit
-              </button>
-            </div>
-          </Panel>
-        </ReactFlow>
-        <NoteDialog shown={note} onClose={() => setNote(undefined)} />
-      </div>
-    </OpenNote.Provider>
+    <ReactFlow<FlowNode, FlowEdge>
+      nodes={nodes}
+      edges={edges}
+      onNodesChange={onNodesChange}
+      nodeTypes={NODE_TYPES}
+      edgeTypes={EDGE_TYPES}
+      defaultViewport={p.viewport}
+      nodesConnectable={false}
+      edgesFocusable={false}
+      elementsSelectable={false}
+      disableKeyboardA11y
+      zoomOnScroll={false}
+      panOnScroll={false}
+      preventScrolling={false}
+      zoomOnDoubleClick
+      minZoom={0.1}
+      maxZoom={2.5}
+      nodeDragThreshold={3}
+      proOptions={{ hideAttribution: true }}
+      onNodeClick={onNodeClick}
+      onAuxClick={onAuxClick}
+      onMoveStart={(e) => {
+        // Only the reader's own pan or zoom has an event.
+        if (e) fitted.current = false;
+      }}
+      onNodeDragStart={(_, n) => {
+        dragged.current = false;
+        physics.current?.hold(n.id, centre(n));
+      }}
+      onNodeDrag={(_, n) => {
+        dragged.current = true;
+        physics.current?.hold(n.id, centre(n));
+      }}
+      onNodeDragStop={(_, n) => {
+        physics.current?.release(n.id);
+        setTimeout(() => (dragged.current = false));
+      }}
+    />
   );
 }
 
-// Each part's notes, and each scope's, by what they belong to.
-function notesBy(g: Graph) {
-  const by = new Map<string, Note[]>();
-  for (const n of g.notes) if (n.on) by.set(n.on, [...(by.get(n.on) ?? []), n]);
-  return by;
-}
-
-// How deep each scope is: 0 for one in no other.
-function depths(g: Graph) {
-  const parent = new Map(g.scopes.map((s) => [s.id, s.scope]));
-  const depth = new Map<string, number>();
-  for (const s of g.scopes) {
-    let d = 0;
-    for (let p = parent.get(s.id); p; p = parent.get(p)) d++;
-    depth.set(s.id, d);
-  }
-  return depth;
-}
-
-function scopeData(g: Graph, s: Scope, hrefs?: Record<string, string>, hull = false): ScopeData {
+// The box round some nodes, in the drawing's coordinates, with the margin the
+// server's layout leaves round a drawing, so Fit fits it as it first showed.
+const MARGIN = 12;
+function boundsOf(nodes: Node[]): Rect {
+  if (!nodes.length) return { x: 0, y: 0, width: 1, height: 1 };
+  const abs = new Map(nodes.map((n) => [n.id, n]));
+  const at = (n: Node): Point => {
+    const parent = n.parentId ? abs.get(n.parentId) : undefined;
+    const base = parent ? at(parent) : { x: 0, y: 0 };
+    return { x: base.x + n.position.x, y: base.y + n.position.y };
+  };
+  const rects = nodes.map((n) => ({ ...at(n), width: n.width ?? 0, height: n.height ?? 0 }));
+  const x = Math.min(...rects.map((r) => r.x)) - MARGIN;
+  const y = Math.min(...rects.map((r) => r.y)) - MARGIN;
   return {
-    scope: s,
-    notes: notesBy(g).get(s.id) ?? [],
-    depth: depths(g).get(s.id) ?? 0,
-    holds: containers(g).has(s.id),
-    ...(hrefs?.[s.id] ? { href: hrefs[s.id] } : {}),
-    ...(hull ? { hull } : {}),
+    x,
+    y,
+    width: Math.max(...rects.map((r) => r.x + r.width)) + MARGIN - x,
+    height: Math.max(...rects.map((r) => r.y + r.height)) + MARGIN - y,
   };
 }
 
-// The nodes as ELK placed them, each part inside its scope's box.
-function elkNodes(g: Graph, laid: Laid, hrefs?: Record<string, string>): FlowNode[] {
-  const notes = notesBy(g);
-  const place = (id: string) => {
-    const b = laid.boxes.get(id)!;
-    return { position: { x: b.x, y: b.y }, width: b.width, height: b.height };
+// What a node is called, for someone who can't see it, and whether it leads anywhere.
+function a11y(label: string, link?: PartLink, href?: string): Pick<Node, "focusable" | "ariaRole" | "ariaLabel" | "domAttributes"> {
+  if (href) return { focusable: true, ariaRole: "link", ariaLabel: `Open ${label}` };
+  if (!link || link.to.length === 0) return { focusable: false };
+  const several = link.to.length > 1;
+  return {
+    focusable: true,
+    ariaRole: several ? "button" : "link",
+    ariaLabel: [label, ...link.title.split("\n")].join(". "),
+    ...(several ? { domAttributes: { "aria-haspopup": "menu" } } : {}),
+  };
+}
+
+// The nodes where the server put them, each part inside its scope's box. A
+// scope round parts is the background they sit on, so dragging or pinching
+// it pans and zooms, on a phone too, rather than moving it.
+function layeredNodes(d: Drawing, shared: Shared): FlowNode[] {
+  const scopes = new Map(d.scopes.map((s) => [s.id, s]));
+  const relative = (x: number, y: number, parent?: string) => {
+    const s = parent ? scopes.get(parent) : undefined;
+    return s ? { x: x - s.x, y: y - s.y } : { x, y };
   };
   return [
-    ...g.scopes.map(
-      (s): ScopeNode => ({
-        id: s.id,
-        type: "scope",
-        ...place(s.id),
-        ...(s.scope ? { parentId: s.scope, expandParent: true } : {}),
-        // A scope round parts is the background they sit on, so dragging or
-        // pinching it pans and zooms, on a phone too, rather than moving it.
-        ...(containers(g).has(s.id) ? { draggable: false, selectable: false, focusable: false } : {}),
-        data: scopeData(g, s, hrefs),
-      }),
-    ),
-    ...g.parts.map(
-      (p): PartNode => ({
-        id: p.id,
+    ...[...d.scopes]
+      .sort((a, b) => a.depth - b.depth)
+      .map(
+        (s): ScopeNode => ({
+          id: s.id,
+          type: "scope",
+          position: relative(s.x, s.y, s.scope),
+          width: s.width,
+          height: s.height,
+          ...(s.scope ? { parentId: s.scope, expandParent: true } : {}),
+          ...(s.holds ? { draggable: false, selectable: false, focusable: false } : a11y(s.lines.join(" "), undefined, shared.hrefs[s.id])),
+          data: { ...shared, scope: s },
+        }),
+      ),
+    ...d.parts.map(
+      (part): PartNode => ({
+        id: part.id,
         type: "part",
-        ...place(p.id),
-        ...(p.scope ? { parentId: p.scope, expandParent: true } : {}),
-        data: { part: p, notes: notes.get(p.id) ?? [] },
+        position: relative(part.x, part.y, part.scope),
+        width: part.width,
+        height: part.height,
+        ...(part.scope ? { parentId: part.scope, expandParent: true } : {}),
+        ...a11y(part.lines.join(" "), shared.links.get(part.id)),
+        data: { ...shared, part },
       }),
     ),
   ];
 }
 
 // The nodes where the physics has them, with each scope that holds parts
-// drawn as a soft box round wherever they are, behind the lines.
-function physicsNodes(g: Graph, bodies: Body[], hrefs?: Record<string, string>): FlowNode[] {
-  const notes = notesBy(g);
-  const depth = depths(g);
-  const parts = new Map(g.parts.map((p) => [p.id, p]));
-  const scopes = new Map(g.scopes.map((s) => [s.id, s]));
-  // Each scope's box: round the boxes of the parts in it and of the scopes in
-  // it, with room above for its title, so nested scopes nest.
-  const pad = 20;
-  const boxOf = new Map<string, Point & Size>();
-  const hull = (id: string): (Point & Size) | undefined => {
+// drawn as a soft box round wherever they are, behind the lines: round the
+// boxes of the parts in it and of the scopes in it, with room above for its
+// title, so nested scopes nest.
+function physicsNodes(d: Drawing, bodies: Body[], shared: Shared): FlowNode[] {
+  const parts = new Map(d.parts.map((part) => [part.id, part]));
+  const scopes = new Map(d.scopes.map((s) => [s.id, s]));
+  const boxOf = new Map<string, Rect>();
+  const hull = (id: string): Rect | undefined => {
     if (boxOf.has(id)) return boxOf.get(id);
     const inside = [
       ...bodies.filter((b) => b.scopes[0] === id).map((b) => ({ x: b.x! - b.width / 2, y: b.y! - b.height / 2, width: b.width, height: b.height })),
-      ...g.scopes.filter((s) => s.scope === id).flatMap((s) => hull(s.id) ?? []),
+      ...d.scopes.filter((s) => s.scope === id && s.holds).flatMap((s) => hull(s.id) ?? []),
     ];
     if (!inside.length) return undefined;
-    const x = Math.min(...inside.map((r) => r.x)) - pad;
-    const y = Math.min(...inside.map((r) => r.y)) - SCOPE_TITLE - 4;
-    const right = Math.max(...inside.map((r) => r.x + r.width)) + pad;
-    const bottom = Math.max(...inside.map((r) => r.y + r.height)) + pad;
-    const box = { x, y, width: right - x, height: bottom - y };
+    const x = Math.min(...inside.map((r) => r.x)) - 20;
+    const y = Math.min(...inside.map((r) => r.y)) - 50;
+    const box = { x, y, width: Math.max(...inside.map((r) => r.x + r.width)) + 20 - x, height: Math.max(...inside.map((r) => r.y + r.height)) + 20 - y };
     boxOf.set(id, box);
     return box;
   };
-  const hulls = g.scopes.flatMap((s): ScopeNode[] => {
-    const box = containers(g).has(s.id) ? hull(s.id) : undefined;
+  const hulls = d.scopes.flatMap((s): ScopeNode[] => {
+    const box = s.holds ? hull(s.id) : undefined;
     if (!box) return [];
     return [
       {
@@ -305,283 +374,102 @@ function physicsNodes(g: Graph, bodies: Body[], hrefs?: Record<string, string>):
         draggable: false,
         selectable: false,
         focusable: false,
-        zIndex: -10 + (depth.get(s.id) ?? 0),
-        data: scopeData(g, s, hrefs, true),
+        zIndex: -10 + s.depth,
+        data: { ...shared, scope: { ...s, ...box }, hull: true },
       },
     ];
   });
   const boxes = bodies.map((b): FlowNode => {
     const at = { position: { x: b.x! - b.width / 2, y: b.y! - b.height / 2 }, width: b.width, height: b.height };
     const part = parts.get(b.id);
-    return part
-      ? { id: b.id, type: "part", ...at, data: { part, notes: notes.get(b.id) ?? [] } }
-      : { id: b.id, type: "scope", ...at, data: scopeData(g, scopes.get(b.id)!, hrefs) };
+    if (part) return { id: b.id, type: "part", ...at, ...a11y(part.lines.join(" "), shared.links.get(b.id)), data: { ...shared, part } };
+    const s = scopes.get(b.id)!;
+    return { id: b.id, type: "scope", ...at, ...a11y(s.lines.join(" "), undefined, shared.hrefs[s.id]), data: { ...shared, scope: s } };
   });
   return [...hulls, ...boxes];
 }
 
-function linesOf(g: Graph, laid?: Laid): FlowEdge[] {
-  const marker = (l: Line) => ({ type: MarkerType.ArrowClosed, color: STROKE[l.style], width: 18, height: 18 });
-  return g.lines.map((l) => ({
-    id: l.id,
-    source: l.from,
-    target: l.to,
+function linesOf(d: Drawing, id: string, physics: boolean): FlowEdge[] {
+  const at = new Map([...d.parts, ...d.scopes].map((b) => [b.id, { x: b.x, y: b.y }]));
+  return d.lines.map((line) => ({
+    id: line.id,
+    source: line.from,
+    target: line.to,
     type: "line",
-    ...(l.arrowEnd ? { markerEnd: marker(l) } : {}),
-    ...(l.arrowStart ? { markerStart: marker(l) } : {}),
-    data: laid
-      ? { line: l, route: laid.routes.get(l.id), sourceAt: laid.absolute.get(l.from), targetAt: laid.absolute.get(l.to) }
-      : { line: l, straight: true },
+    data: { id, line, physics, from: at.get(line.from), to: at.get(line.to) },
   }));
 }
 
-// Measures each part, each box with no parts, each scope's title and each
-// line's label as they will be drawn, in the drawing's font, for the layout.
-function Measure({ graph, hrefs, onMeasured }: { graph: Graph; hrefs?: Record<string, string>; onMeasured: (m: Measured) => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const done = useRef(onMeasured);
-  useLayoutEffect(() => {
-    done.current = onMeasured;
-  });
-  useLayoutEffect(() => {
-    let live = true;
-    // The parts are in Inter, served by the registry; the scopes' and boxes' titles in the site's own font.
-    const fonts = ["14px Inter", "12px Inter", '700 14px "Schibsted Grotesk"', '700 16px "Schibsted Grotesk"'];
-    Promise.all(fonts.map((f) => document.fonts.load(f)))
-      .catch(() => [])
-      .then(() => {
-        if (!live || !ref.current) return;
-        const boxes = new Map<string, Size>();
-        const labels = new Map<string, Size>();
-        for (const el of ref.current.querySelectorAll<HTMLElement>("[data-measure]")) {
-          const [kind, id] = el.dataset.measure!.split(":");
-          const r = el.getBoundingClientRect();
-          (kind === "line" ? labels : boxes).set(id, { width: Math.ceil(r.width), height: Math.ceil(r.height) });
-        }
-        done.current({ boxes, labels });
-      });
-    return () => {
-      live = false;
-    };
-  }, [graph]);
-  const holding = containers(graph);
-  return (
-    <div ref={ref} className="flow-measure" aria-hidden>
-      {graph.parts.map((p) => (
-        <PartBody key={p.id} part={p} measure />
-      ))}
-      {graph.scopes.map((s) =>
-        holding.has(s.id) ? (
-          <div key={s.id} className="flow-scope-title" data-measure={`box:${s.id}`}>
-            <ScopeTitle scope={s} />
-          </div>
-        ) : (
-          <BoxBody key={s.id} scope={s} href={hrefs?.[s.id]} measure />
-        ),
-      )}
-      {graph.lines
-        .filter((l) => l.label)
-        .map((l) => (
-          <span key={l.id} className={`flow-line-label ${l.style}`} data-measure={`line:${l.id}`}>
-            {l.label}
-          </span>
-        ))}
-    </div>
-  );
-}
-
-function PartBody({ part, measure }: { part: Part; measure?: boolean }) {
-  const caption = [CAPTION[part.kind], part.verb].filter(Boolean).join(" · ");
-  return (
-    <div className={`flow-part flow-kind-${part.kind}`} {...(measure ? { "data-measure": `box:${part.id}` } : {})}>
-      {caption && <span className="flow-caption">{caption}</span>}
-      <span className="flow-label">{part.label}</span>
-      {part.tier && <span className="flow-tier">{part.tier}</span>}
-    </div>
-  );
-}
-
-// A scope's title: its name, then who it is, as "public: anyone who reads it" gives them.
-function ScopeTitle({ scope }: { scope: Scope }) {
-  const at = scope.dashed ? scope.label.indexOf(": ") : -1;
-  if (at < 0) return <strong>{scope.label}</strong>;
-  return (
-    <>
-      <strong>{scope.label.slice(0, at)}</strong>
-      <span>{scope.label.slice(at + 2)}</span>
-    </>
-  );
-}
-
-// A box with no parts in it, such as a workflow's on a system's map.
-function BoxBody({ scope, href, measure }: { scope: Scope; href?: string; measure?: boolean }) {
-  return (
-    <div className="flow-box" {...(measure ? { "data-measure": `box:${scope.id}` } : {})}>
-      <span className="flow-caption">{scope.dashed ? "Scope" : "Workflow"}</span>
-      {href ? (
-        <a className="flow-box-name nodrag" href={href}>
-          {scope.label}
-          <span className="flow-box-go" aria-hidden>
-            {" →"}
-          </span>
-        </a>
-      ) : (
-        <span className="flow-box-name">{scope.label}</span>
-      )}
-    </div>
-  );
-}
-
-// The outline of each kind of part, drawn at its size: the corners stay the
-// same however tall the part is.
-function outline(kind: PartKind, w: number, h: number): { d: string; extra?: string } {
-  const s = 0.75;
-  const W = w - s;
-  const H = h - s;
-  const rounded = (r: number) =>
-    `M ${s + r} ${s} H ${W - r} A ${r} ${r} 0 0 1 ${W} ${s + r} V ${H - r} A ${r} ${r} 0 0 1 ${W - r} ${H} H ${s + r} A ${r} ${r} 0 0 1 ${s} ${H - r} V ${s + r} A ${r} ${r} 0 0 1 ${s + r} ${s} Z`;
-  switch (kind) {
-    case "trigger":
-      return { d: rounded(Math.min(22, (h - 2 * s) / 2)) };
-    case "context": {
-      const rx = (W - s) / 2;
-      const ry = 9;
-      return {
-        d: `M ${s} ${s + ry} A ${rx} ${ry} 0 0 1 ${W} ${s + ry} V ${H - ry} A ${rx} ${ry} 0 0 1 ${s} ${H - ry} Z`,
-        extra: `M ${s} ${s + ry} A ${rx} ${ry} 0 0 0 ${W} ${s + ry}`,
-      };
-    }
-    case "connection": {
-      const k = 16;
-      return { d: `M ${s + k} ${s} H ${W - k} L ${W} ${h / 2} L ${W - k} ${H} H ${s + k} L ${s} ${h / 2} Z` };
-    }
-    case "outside": {
-      const k = 18;
-      const r = 12;
-      return {
-        d: `M ${s + r} ${s} H ${W - k} L ${W} ${h / 2} L ${W - k} ${H} H ${s + r} A ${r} ${r} 0 0 1 ${s} ${H - r} V ${s + r} A ${r} ${r} 0 0 1 ${s + r} ${s} Z`,
-      };
-    }
-    case "surface":
-      return { d: rounded(12), extra: `M ${s} 24 H ${W}` };
-    case "part":
-      return { d: rounded(8) };
-    default:
-      return { d: rounded(16) };
-  }
-}
-
-function PartNodeView({ data, width = 0, height = 0 }: NodeProps<PartNode>) {
-  const { d, extra } = outline(data.part.kind, width, height);
-  return (
-    <div className={`flow-node flow-kind-${data.part.kind}`} style={{ width, height }}>
-      <svg className="flow-shape" width={width} height={height} aria-hidden>
-        <path d={d} />
-        {extra && <path className="flow-shape-line" d={extra} />}
-      </svg>
-      <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
-      <PartBody part={data.part} />
-      <Handle type="source" position={Position.Bottom} isConnectable={false} className="flow-handle" />
-      {data.notes.length > 0 && <NoteMark title={data.part.label} notes={data.notes} />}
-    </div>
-  );
-}
-
-function ScopeNodeView({ data, width, height }: NodeProps<ScopeNode>) {
-  const { scope, holds, href, hull, depth } = data;
-  const kind = scope.dashed ? "dashed" : href ? "workflow" : "place";
-  return (
-    <div
-      className={`flow-scope ${kind} depth-${depth % 2}${holds ? "" : " alone"}${hull ? " hull" : ""}${href ? " linked" : ""}`}
-      style={{ width, height }}
-      title={href ? `Open ${scope.label}` : undefined}
-    >
-      <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
-      {holds ? (
-        <div className="flow-scope-title">
-          {href ? (
-            <a className="nodrag" href={href}>
-              {scope.label}
-            </a>
-          ) : (
-            <ScopeTitle scope={scope} />
-          )}
-        </div>
-      ) : (
-        <BoxBody scope={scope} href={href} />
-      )}
-      <Handle type="source" position={Position.Bottom} isConnectable={false} className="flow-handle" />
-      {data.notes.length > 0 && <NoteMark title={scope.label} notes={data.notes} />}
-    </div>
-  );
-}
-
-function NoteMark({ title, notes }: { title: string; notes: Note[] }) {
-  const open = useContext(OpenNote);
+// The note marks of a part or a scope: the same icon as the server's SVG, as a
+// button a keyboard reaches. Hovering shows the note; a click or a tap opens it.
+export function NoteButton({ title, notes, at, onNote }: { title: string; notes: Note[]; at: Point; onNote: Shared["onNote"] }) {
   const [tip, setTip] = useState(false);
   return (
     <>
       <button
         type="button"
         className="flow-note-mark nodrag nopan"
+        style={{ left: at.x - NOTE_R, top: at.y - NOTE_R }}
         aria-label={`Note on ${title}`}
         onClick={(e) => {
           e.stopPropagation();
           setTip(false);
-          open(title, notes);
+          onNote(title, notes);
         }}
         onPointerEnter={(e) => e.pointerType === "mouse" && setTip(true)}
         onPointerLeave={() => setTip(false)}
         onFocus={(e) => e.currentTarget.matches(":focus-visible") && setTip(true)}
         onBlur={() => setTip(false)}
       >
-        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
-          <path d="M3 1.5h5.5L11 4v8.5H3z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-          <path d="M5 6.5h4M5 9h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        <svg width={2 * NOTE_R + 16} height={2 * NOTE_R} viewBox={`${-NOTE_R} ${-NOTE_R} ${2 * NOTE_R + 16} ${2 * NOTE_R}`} aria-hidden>
+          <NoteIcon count={notes.length} />
         </svg>
-        {notes.length > 1 && <span>{notes.length}</span>}
       </button>
-      <NodeToolbar isVisible={tip} position={Position.Bottom} align="end" offset={6} className="flow-note-tip">
-        {notes.map((n) => (
-          <p key={n.id}>{n.text}</p>
-        ))}
+      <NodeToolbar isVisible={tip} position={Position.Bottom} align="end" offset={6}>
+        <NoteTip notes={notes} />
       </NodeToolbar>
     </>
   );
 }
 
-// A note in a small modal, as plain text: Escape, Close or a press outside closes it.
-function NoteDialog({ shown, onClose }: { shown?: { title: string; notes: Note[] }; onClose: () => void }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const d = ref.current;
-    if (!d) return;
-    if (shown && !d.open) d.showModal();
-    if (!shown && d.open) d.close();
-  }, [shown]);
+// A part's notes as its icon's tooltip, as text.
+export function NoteTip({ notes }: { notes: Note[] }) {
   return (
-    <dialog
-      ref={ref}
-      className="flow-note-dialog"
-      aria-label="Note"
-      onClose={onClose}
-      onClick={(e: MouseEvent<HTMLDialogElement>) => e.target === e.currentTarget && e.currentTarget.close()}
-    >
-      {shown && (
-        <div className="flow-note-box">
-          <div className="flow-note-head">
-            <h2>Note</h2>
-            <button type="button" className="button" onClick={() => ref.current?.close()}>
-              Close
-            </button>
-          </div>
-          <p className="flow-note-on">{shown.title}</p>
-          {shown.notes.map((n) => (
-            <p key={n.id}>{n.text}</p>
-          ))}
-        </div>
-      )}
-    </dialog>
+    <div className="flow-note-tip" role="tooltip">
+      {notes.map((n) => (
+        <p key={n.id}>{n.text}</p>
+      ))}
+    </div>
+  );
+}
+
+function PartNodeView({ data }: NodeProps<PartNode>) {
+  const { part } = data;
+  const notes = data.notes.get(part.id);
+  return (
+    <div className={`flow-node${data.target === part.id ? " part-target" : ""}${data.links.get(part.id)?.to.length ? " part-linked" : ""}`} style={{ width: part.width, height: part.height }}>
+      <svg className="flow-node-svg" width={part.width} height={part.height}>
+        <PartGraphic part={part} link={data.links.get(part.id)} />
+      </svg>
+      <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
+      <Handle type="source" position={Position.Bottom} isConnectable={false} className="flow-handle" />
+      {notes && <NoteButton title={part.lines.join(" ")} notes={notes} at={{ x: part.width - 3, y: part.height - 3 }} onNote={data.onNote} />}
+    </div>
+  );
+}
+
+function ScopeNodeView({ data, width = 0, height = 0 }: NodeProps<ScopeNode>) {
+  const scope = { ...data.scope, width, height };
+  const notes = data.notes.get(scope.id);
+  return (
+    <div className="flow-node" style={{ width, height }}>
+      <svg className="flow-node-svg" width={width} height={height}>
+        <ScopeGraphic scope={scope} href={data.hrefs[scope.id]} hull={data.hull} />
+      </svg>
+      <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
+      <Handle type="source" position={Position.Bottom} isConnectable={false} className="flow-handle" />
+      {notes && !data.hull && <NoteButton title={scope.name} notes={notes} at={{ x: width - 3, y: height - 3 }} onNote={data.onNote} />}
+    </div>
   );
 }
 
@@ -592,7 +480,7 @@ function rectOf(n: InternalNode) {
 }
 
 // Where a line from the middle of `r` towards `to` leaves its edge, and which side.
-function edgePoint(r: Point & Size, to: Point) {
+function edgePoint(r: Rect, to: Point) {
   const cx = r.x + r.width / 2;
   const cy = r.y + r.height / 2;
   const dx = to.x - cx;
@@ -605,69 +493,44 @@ function edgePoint(r: Point & Size, to: Point) {
   return { x: cx + dx * k, y: cy + dy * k, side };
 }
 
-// A route with its corners rounded.
-function roundedPath(points: Point[], radius = 10) {
-  let d = `M ${points[0].x} ${points[0].y}`;
-  for (let i = 1; i < points.length - 1; i++) {
-    const [a, b, c] = [points[i - 1], points[i], points[i + 1]];
-    const ab = Math.hypot(b.x - a.x, b.y - a.y);
-    const bc = Math.hypot(c.x - b.x, c.y - b.y);
-    const r = Math.min(radius, ab / 2, bc / 2);
-    if (!ab || !bc) continue;
-    const p = { x: b.x - ((b.x - a.x) / ab) * r, y: b.y - ((b.y - a.y) / ab) * r };
-    const q = { x: b.x + ((c.x - b.x) / bc) * r, y: b.y + ((c.y - b.y) / bc) * r };
-    d += ` L ${p.x} ${p.y} Q ${b.x} ${b.y} ${q.x} ${q.y}`;
-  }
-  const last = points[points.length - 1];
-  return `${d} L ${last.x} ${last.y}`;
-}
-
 const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5;
 
-// A line: along ELK's route while neither end has moved from where ELK put it
-// (or both have moved together, as when their scope is dragged), and
+// A line: along the server's route while neither end has moved from where the
+// server put it (or both have moved together, as when their scope does), and
 // otherwise from edge to edge, so it follows a dragged part.
-function LineView({ id, source, target, data, markerEnd, markerStart }: EdgeProps<FlowEdge>) {
+function LineView({ source, target, data }: EdgeProps<FlowEdge>) {
   const s = useInternalNode(source);
   const t = useInternalNode(target);
   if (!s || !t || !data) return null;
+  const { line } = data;
   const sr = rectOf(s);
   const tr = rectOf(t);
-  let path: string | undefined;
+  let d: string | undefined;
   let label: Point | undefined;
-  const r = data.route;
-  if (r && r.points.length >= 2 && data.sourceAt && data.targetAt) {
-    const ds = { x: sr.x - data.sourceAt.x, y: sr.y - data.sourceAt.y };
-    const dt = { x: tr.x - data.targetAt.x, y: tr.y - data.targetAt.y };
+  if (!data.physics && line.points.length >= 2 && data.from && data.to) {
+    const ds = { x: sr.x - data.from.x, y: sr.y - data.from.y };
+    const dt = { x: tr.x - data.to.x, y: tr.y - data.to.y };
     if (near(ds, dt)) {
-      path = roundedPath(r.points.map((p) => ({ x: p.x + ds.x, y: p.y + ds.y })));
-      const mid = r.points[Math.floor(r.points.length / 2)];
-      label = r.label ? { x: r.label.x + ds.x, y: r.label.y + ds.y } : { x: mid.x + ds.x, y: mid.y + ds.y };
+      d = roundedPath(line.points.map((p) => ({ x: p.x + ds.x, y: p.y + ds.y })));
+      if (line.label) label = { x: line.label.x + ds.x, y: line.label.y + ds.y };
     }
   }
-  if (!path) {
+  if (!d) {
     const a = edgePoint(sr, { x: tr.x + tr.width / 2, y: tr.y + tr.height / 2 });
     const b = edgePoint(tr, { x: sr.x + sr.width / 2, y: sr.y + sr.height / 2 });
-    if (data.straight) {
-      path = `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+    if (data.physics) {
+      d = `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
       label = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     } else {
-      const [p, lx, ly] = getBezierPath({ sourceX: a.x, sourceY: a.y, sourcePosition: a.side, targetX: b.x, targetY: b.y, targetPosition: b.side });
-      path = p;
+      const [path, lx, ly] = getBezierPath({ sourceX: a.x, sourceY: a.y, sourcePosition: a.side, targetX: b.x, targetY: b.y, targetPosition: b.side });
+      d = path;
       label = { x: lx, y: ly };
     }
   }
-  const style = data.line.style;
   return (
     <>
-      <BaseEdge id={id} path={path} markerEnd={markerEnd} markerStart={markerStart} className={`flow-line ${style}`} />
-      {data.line.label && label && (
-        <EdgeLabelRenderer>
-          <div className={`flow-line-label ${style}`} style={{ transform: `translate(-50%, -50%) translate(${label.x}px, ${label.y}px)` }}>
-            {data.line.label}
-          </div>
-        </EdgeLabelRenderer>
-      )}
+      <LineGraphic id={data.id} line={line} d={d} />
+      {line.label && label && <LabelGraphic label={line.label} at={label} style={line.style} />}
     </>
   );
 }

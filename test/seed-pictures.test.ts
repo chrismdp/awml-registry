@@ -103,7 +103,7 @@ describe("seeding a registry for the build's pictures", () => {
     expect(toVisitor.html).toContain('href="/acme/dinners"');
     expect(toVisitor.html).toContain('href="/acme/shopping"');
     expect(toVisitor.html).toContain("1 private workflow");
-    expect(toVisitor.html).toContain("subgraph");
+    expect(toVisitor.html).toContain('<svg class="flow-static"');
     expect(toVisitor.html).not.toContain("acme/cupboards");
     expect(toVisitor.html).not.toContain("The family&#x27;s cupboards");
     const toAna = await renderPage(SystemPage, { owner: "acme", slug: "kitchen" }, { as: { cookie } });

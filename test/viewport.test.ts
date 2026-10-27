@@ -1,145 +1,53 @@
+// The maths of the frame a drawing is shown in (src/components/viewport.ts):
+// fitting a drawing, starting React Flow just where the server's SVG shows
+// it, and placing a part's menu.
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  actualSize,
-  clampZoom,
-  fit,
-  keepInView,
-  MAX_ZOOM,
-  MIN_ZOOM,
-  move,
-  naturalSize,
-  pan,
-  pinch,
-  placeMenu,
-  reveal,
-  zoomAt,
-  type View,
-} from "@/components/viewport";
+import { fit, INSET, MAX_ZOOM, placeMenu, viewOf } from "@/components/viewport";
 
 const frame = { width: 800, height: 600 };
-
-// Where a point of the drawing is in the frame.
-const onScreen = (v: View, p: { x: number; y: number }) => ({ x: v.x + p.x * v.k, y: v.y + p.y * v.k });
-// Which point of the drawing is under a point of the frame.
-const under = (v: View, p: { x: number; y: number }) => ({ x: (p.x - v.x) / v.k, y: (p.y - v.y) / v.k });
+const room = { width: frame.width - INSET.left - INSET.right, height: frame.height - INSET.top - INSET.bottom };
 
 describe("the drawing's viewport", () => {
-  it("fits a large drawing whole and centred", () => {
-    const v = fit(frame, { width: 4000, height: 1000 });
-    expect(v.k).toBeCloseTo(0.2);
-    expect(v.x).toBeCloseTo(0);
-    expect(v.y).toBeCloseTo((600 - 200) / 2);
+  it("fits a wide drawing by its width, centred in the room the controls leave", () => {
+    const v = fit(frame, { x: 0, y: 0, width: 4000, height: 1000 });
+    expect(v.zoom).toBeCloseTo(room.width / 4000);
+    expect(v.x).toBeCloseTo(INSET.left);
+    expect(v.y).toBeCloseTo(INSET.top + (room.height - 1000 * v.zoom) / 2);
   });
 
   it("fits a tall drawing by its height", () => {
-    const v = fit(frame, { width: 300, height: 3000 });
-    expect(v.k).toBeCloseTo(0.2);
-    expect(v.x).toBeCloseTo((800 - 60) / 2);
-    expect(v.y).toBeCloseTo(0);
+    const v = fit(frame, { x: 0, y: 0, width: 300, height: 3000 });
+    expect(v.zoom).toBeCloseTo(room.height / 3000);
+    expect(v.y).toBeCloseTo(INSET.top);
   });
 
-  it("leaves a small drawing at 100%, centred", () => {
-    expect(fit(frame, { width: 200, height: 100 })).toEqual({ x: 300, y: 250, k: 1 });
+  it("scales a small drawing up no further than MAX_ZOOM, centred", () => {
+    const v = fit(frame, { x: 0, y: 0, width: 200, height: 100 });
+    expect(v.zoom).toBe(MAX_ZOOM);
+    expect(v.x).toBeCloseTo(INSET.left + (room.width - 200 * MAX_ZOOM) / 2);
   });
 
-  it("never fits below 10%", () => {
-    expect(fit(frame, { width: 80000, height: 100 }).k).toBe(MIN_ZOOM);
+  it("allows for a drawing whose box doesn't start at the origin", () => {
+    const at0 = fit(frame, { x: 0, y: 0, width: 4000, height: 1000 });
+    const moved = fit(frame, { x: 100, y: 50, width: 4000, height: 1000 });
+    expect(moved.x).toBeCloseTo(at0.x - 100 * at0.zoom);
+    expect(moved.y).toBeCloseTo(at0.y - 50 * at0.zoom);
   });
 
-  it("zooms around a point, which stays where it is", () => {
-    const v = { x: 30, y: -40, k: 0.5 };
-    const p = { x: 123, y: 456 };
-    const drawn = under(v, p);
-    const zoomed = zoomAt(v, 1.25, p);
-    expect(zoomed.k).toBeCloseTo(0.625);
-    const after = onScreen(zoomed, drawn);
-    expect(after.x).toBeCloseTo(p.x);
-    expect(after.y).toBeCloseTo(p.y);
-    const out = zoomAt(zoomed, 1 / 1.25, p);
-    expect(out.x).toBeCloseTo(v.x);
-    expect(out.y).toBeCloseTo(v.y);
-    expect(out.k).toBeCloseTo(v.k);
+  it("starts where an SVG of the drawing shows it, fitted inside the SVG's box and centred", () => {
+    const drawing = { x: 0, y: 0, width: 1000, height: 500 };
+    // An SVG box twice as tall as the drawing's shape: fitted by width, centred down it.
+    const v = viewOf({ x: 20, y: 72, width: 500, height: 500 }, drawing);
+    expect(v).toEqual({ zoom: 0.5, x: 20, y: 72 + (500 - 250) / 2 });
   });
 
-  it("keeps the zoom between 10% and 400%", () => {
-    expect(MIN_ZOOM).toBe(0.1);
-    expect(MAX_ZOOM).toBe(4);
-    expect(clampZoom(0.01)).toBe(0.1);
-    expect(clampZoom(9)).toBe(4);
-    expect(clampZoom(1.5)).toBe(1.5);
-    const top = zoomAt({ x: 0, y: 0, k: 3.9 }, 1.25, { x: 100, y: 100 });
-    expect(top.k).toBe(4);
-    expect(onScreen(top, under({ x: 0, y: 0, k: 3.9 }, { x: 100, y: 100 })).x).toBeCloseTo(100);
-    expect(zoomAt({ x: 0, y: 0, k: 0.11 }, 1 / 1.25, { x: 0, y: 0 }).k).toBe(0.1);
-    expect(zoomAt({ x: 0, y: 0, k: 4 }, 1.25, { x: 50, y: 50 })).toEqual({ x: 0, y: 0, k: 4 });
-  });
-
-  it("shows the drawing at 100% keeping the frame's centre where it is", () => {
-    const v = { x: 100, y: 50, k: 0.25 };
-    const centre = under(v, { x: 400, y: 300 });
-    const actual = actualSize(v, frame);
-    expect(actual.k).toBe(1);
-    expect(onScreen(actual, centre).x).toBeCloseTo(400);
-    expect(onScreen(actual, centre).y).toBeCloseTo(300);
-  });
-
-  it("pans, and moves a fifth of the frame for each arrow", () => {
-    const v = { x: 10, y: 20, k: 2 };
-    expect(pan(v, 5, -7)).toEqual({ x: 15, y: 13, k: 2 });
-    // Moving up shows what is above, so the drawing goes down.
-    expect(move(v, frame, "up")).toEqual({ x: 10, y: 140, k: 2 });
-    expect(move(v, frame, "down")).toEqual({ x: 10, y: -100, k: 2 });
-    expect(move(v, frame, "left")).toEqual({ x: 170, y: 20, k: 2 });
-    expect(move(v, frame, "right")).toEqual({ x: -150, y: 20, k: 2 });
-  });
-
-  it("keeps part of the drawing in at least a quarter of the frame", () => {
-    const drawing = { width: 1000, height: 1000 };
-    // Shown at 1000×1000: a quarter of the frame is 200 wide and 150 tall.
-    expect(keepInView({ x: 5000, y: 5000, k: 1 }, frame, drawing)).toEqual({ x: 600, y: 450, k: 1 });
-    expect(keepInView({ x: -5000, y: -5000, k: 1 }, frame, drawing)).toEqual({ x: -800, y: -850, k: 1 });
-    expect(keepInView({ x: -100, y: 30, k: 1 }, frame, drawing)).toEqual({ x: -100, y: 30, k: 1 });
-    // A drawing smaller than a quarter of the frame stays whole inside it.
-    expect(keepInView({ x: 5000, y: -5000, k: 0.1 }, frame, drawing)).toEqual({ x: 700, y: 0, k: 0.1 });
-  });
-
-  it("pinches from one pair of pointers to the next, around their midpoint", () => {
-    const v = { x: 0, y: 0, k: 1 };
-    const before: [{ x: number; y: number }, { x: number; y: number }] = [
-      { x: 100, y: 100 },
-      { x: 200, y: 100 },
-    ];
-    // The fingers spread to twice as far apart and the pair moves 30 right, 10 down.
-    const after: typeof before = [
-      { x: 80, y: 110 },
-      { x: 280, y: 110 },
-    ];
-    const pinched = pinch(v, before, after);
-    expect(pinched.k).toBeCloseTo(2);
-    const mid = onScreen(pinched, under(v, { x: 150, y: 100 }));
-    expect(mid.x).toBeCloseTo(180);
-    expect(mid.y).toBeCloseTo(110);
-    // Two fingers moving together only move the drawing.
-    expect(
-      pinch(v, before, [
-        { x: 110, y: 90 },
-        { x: 210, y: 90 },
-      ]),
-    ).toEqual({ x: 10, y: -10, k: 1 });
-    // Fingers on one spot don't divide by nothing.
-    expect(pinch(v, [before[0], before[0]], [before[0], before[0]])).toEqual(v);
-  });
-
-  it("moves the drawing as little as it takes to show a part whole, a margin inside the frame", () => {
-    const v = { x: -300, y: -200, k: 2 };
-    // Already in view: it stays.
-    expect(reveal(v, frame, { x: 100, y: 100, width: 200, height: 80 })).toEqual(v);
-    // Off the right and the bottom: in by just enough.
-    expect(reveal(v, frame, { x: 700, y: 560, width: 200, height: 80 })).toEqual({ x: -416, y: -256, k: 2 });
-    // Off the left and the top.
-    expect(reveal(v, frame, { x: -150, y: -40, width: 200, height: 80 })).toEqual({ x: -134, y: -144, k: 2 });
-    // Bigger than the frame: its top-left corner.
-    expect(reveal(v, frame, { x: 300, y: 300, width: 900, height: 700 })).toEqual({ x: -584, y: -484, k: 2 });
+  it("gives the server's SVG the same room as the fit, so the two fit a drawing alike", () => {
+    const css = fs.readFileSync(path.join(__dirname, "../src/components/flow/flow.css"), "utf8");
+    const { top, right, bottom, left } = INSET;
+    expect(css).toContain(`.flow-frame .flow-static { position: absolute; inset: ${top}px ${right}px ${bottom}px ${left}px;`);
+    expect(css).toContain(`width: calc(100% - ${left + right}px); height: calc(100% - ${top + bottom}px); margin: auto;`);
   });
 
   it("puts a part's menu under it, or above it when there's no room below, inside the frame", () => {
@@ -156,12 +64,5 @@ describe("the drawing's viewport", () => {
     expect(placeMenu({ x: 100, y: 250, width: 150, height: 50 }, { width: 220, height: 400 }, frame)).toEqual({ x: 100, y: 192 });
     // Taller than the frame: at its top.
     expect(placeMenu({ x: 100, y: 250, width: 150, height: 50 }, { width: 220, height: 900 }, frame)).toEqual({ x: 100, y: 8 });
-  });
-
-  it("reads a drawing's natural size from its viewBox", () => {
-    expect(naturalSize("0 0 1234.5 678")).toEqual({ width: 1234.5, height: 678 });
-    expect(naturalSize("-8 -8 100,50")).toEqual({ width: 100, height: 50 });
-    expect(naturalSize(null)).toBeUndefined();
-    expect(naturalSize("nonsense")).toBeUndefined();
   });
 });

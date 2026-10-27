@@ -90,6 +90,30 @@ describe("reading a drawing's graph from the engine's Mermaid text", () => {
     expect(issue.lines.filter((l) => notes.has(l.from) || notes.has(l.to))).toEqual([]);
   });
 
+  it("reads the colours the engine gives each place a platform view puts parts", () => {
+    const home = parseMermaid(fixture("dinners-home.mmd"));
+    expect(home.scopes.find((s) => s.id === "server")).toEqual({
+      id: "server",
+      label: "Server: claude-sonnet-4-5",
+      dashed: false,
+      fill: "#e3ebfa",
+      stroke: "#b9c8e8",
+    });
+    expect(home.scopes.find((s) => s.id === "banking")).toMatchObject({ fill: "#f6e3ea", stroke: "#e3bccb" });
+    // A security view's scopes are dashed, and keep no colours.
+    expect(dinners.scopes.every((s) => s.fill === undefined)).toBe(true);
+  });
+
+  it("takes only a colour from a style, and marks a line the engine draws red as breaking a rule", () => {
+    // The registry draws only files that pass check, so no stored drawing has a red line; this
+    // is the style the engine gives one (stroke #d0342c, in vendor/awml/awml.wasm).
+    const g = parseMermaid(
+      'flowchart TB\n  subgraph p["P"]\n    a("A")\n    b("B")\n  end\n  a --> b\n  a -.-> b\n  style p fill:url(javascript:x),stroke:#123456\n  linkStyle 1 stroke:#d0342c,stroke-width:2.5px,color:#b0271f',
+    );
+    expect(g.lines.map((l) => l.broken ?? false)).toEqual([false, true]);
+    expect(g.scopes[0]).toEqual({ id: "p", label: "P", dashed: false });
+  });
+
   it("reads a system's map: a box per workflow, and lines to and from the boxes", () => {
     expect(map.scopes.map((s) => [s.id, s.label, s.dashed])).toEqual([
       ["w1", "An issue becomes a pull request", false],

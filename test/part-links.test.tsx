@@ -6,7 +6,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { loadVersion } from "@/app/[owner]/[slug]/load";
-import { destination, findPart, markPart, outlinePart, partInHash, PartMenu } from "@/components/PartLinks";
+import { StaticDrawing } from "@/components/flow/StaticDrawing";
+import { destination, partInHash } from "@/components/links";
+import { PartMenu } from "@/components/PartLinks";
+import { layOut } from "@/server/drawing";
 import { partLinks, type PartLink } from "@/server/part-links";
 import { orgWith, person, request, storeVersion, type Who } from "./helpers";
 import { pageRequest } from "./pages";
@@ -50,7 +53,7 @@ async function pageOf(owner: string, slug: string, view: "security" | "platform"
   pageRequest.headers = new Headers();
   if (as) pageRequest.headers.set("cookie", as.cookie);
   const props = await loadVersion(owner, slug, "latest", view);
-  expect(props.mermaid).not.toBe("");
+  expect(props.drawing).not.toBeNull();
   return props;
 }
 
@@ -77,8 +80,8 @@ describe("a part with a ref, marked in the drawing", () => {
     ];
     for (const view of ["security", "platform"] as const) {
       const page = await pageOf("acme", "dinners", view);
-      // The drawing has the part as a node, for the mark to find.
-      expect(page.mermaid).toMatch(/^\s+list[[(]/m);
+      // The drawing has the part, for the mark to go on.
+      expect(page.drawing!.full.parts.map((p) => p.id)).toContain("list");
       expect(page.links).toEqual(linked);
     }
     expect(destination(linked[0])).toBe("/acme/shopping#list");
@@ -181,7 +184,7 @@ describe("parts linked across tenants", () => {
         const page = await pageOf("beta", "plans", view, who);
         expect(page.links).toEqual(hidden);
         expect(JSON.stringify(page.links)).not.toContain("acme");
-        expect(page.mermaid).toMatch(/^\s+list[[(]/m);
+        expect(page.drawing!.full.parts.map((p) => p.id)).toContain("list");
       }
     expect(destination(hidden[0])).toBeNull();
   });
@@ -207,146 +210,54 @@ describe("parts linked across tenants", () => {
   });
 });
 
-// Just enough of an SVG document for marking a drawn node: Mermaid draws a
-// part as <g class="node" id="{drawing}-flowchart-{part}-{n}">, its label in
-// a <span class="nodeLabel">.
-class FakeElement {
-  attributes = new Map<string, string>();
-  children: FakeElement[] = [];
-  classes = new Set<string>();
-  textContent = "";
-  innerText = "";
-  classList = {
-    add: (c: string) => this.classes.add(c),
-    remove: (c: string) => this.classes.delete(c),
-    contains: (c: string) => this.classes.has(c),
-  };
-  constructor(
-    public tagName: string,
-    public ownerDocument: FakeDocument,
-    public id = "",
-  ) {}
-  get firstChild() {
-    return this.children[0] ?? null;
-  }
-  setAttribute(name: string, value: string) {
-    this.attributes.set(name, value);
-  }
-  getAttribute(name: string) {
-    return this.attributes.get(name) ?? null;
-  }
-  appendChild(child: FakeElement) {
-    this.children.push(child);
-    return child;
-  }
-  insertBefore(child: FakeElement, before: FakeElement | null) {
-    const at = before ? this.children.indexOf(before) : -1;
-    this.children.splice(at < 0 ? this.children.length : at, 0, child);
-    return child;
-  }
-  getBBox() {
-    return { x: -50, y: -20, width: 100, height: 40 };
-  }
-  querySelector(selector: string) {
-    return selector === ".nodeLabel" ? (this.querySelectorAll(".nodeLabel")[0] ?? null) : null;
-  }
-  querySelectorAll(selector: string) {
-    const all: FakeElement[] = [];
-    const walk = (e: FakeElement) => e.children.forEach((c) => (all.push(c), walk(c)));
-    walk(this);
-    if (selector === "g.node") return all.filter((e) => e.tagName === "g" && e.classes.has("node"));
-    if (selector === ".part-target") return all.filter((e) => e.classes.has("part-target"));
-    if (selector === ".nodeLabel") return all.filter((e) => e.classes.has("nodeLabel"));
-    throw new Error(`no fake for ${selector}`);
-  }
-}
-class FakeDocument {
-  createElementNS(_ns: string, tag: string) {
-    return new FakeElement(tag, this);
-  }
+// A drawing of a workflow whose list is linked, laid out as the server lays it out.
+async function drawn() {
+  const text = `flowchart TB\n  list[("Shopping list")]\n  plan("<small>🤖</small><br>Plan the week#39;s dinners")\n  list -.-> plan\n  class list ctx\n  class plan ai`;
+  return (await layOut(text)).full;
 }
 
-function drawing() {
-  const doc = new FakeDocument();
-  const root = new FakeElement("div", doc);
-  for (const [id, cls] of [
-    ["m1-flowchart-list-0", "node"],
-    ["m1-flowchart-list_old-1", "node"],
-    ["m1-flowchart-plan-2", "node"],
-    ["list", "cluster"],
-  ]) {
-    const g = new FakeElement("g", doc, id);
-    g.classList.add(cls);
-    const label = new FakeElement("span", doc);
-    label.classList.add("nodeLabel");
-    // A label line by line, as the browser reads it.
-    label.innerText = id.includes("list") ? "📋\nShopping   list" : "Plan the week's dinners";
-    g.appendChild(label);
-    root.appendChild(g);
-  }
-  return root as unknown as HTMLElement;
-}
+// The SVG the server sends for a drawing, with the links given.
+const svgOf = async (links: PartLink[]) => renderToStaticMarkup(<StaticDrawing drawing={await drawn()} id="t" links={links} />);
+// A part's piece of that SVG.
+const partIn = (svg: string, part: string) => new RegExp(`<g transform="[^"]+" data-part="${part}">[^]*?</g></g>`).exec(svg)?.[0] ?? "";
 
-describe("finding and marking a part in the drawing", () => {
-  it("finds a part's node by its id, and only that part's", () => {
-    const root = drawing();
-    expect(findPart(root, "list")?.id).toBe("m1-flowchart-list-0");
-    expect(findPart(root, "plan")?.id).toBe("m1-flowchart-plan-2");
-    expect(findPart(root, "lis")).toBeNull();
-    expect(findPart(root, "missing")).toBeNull();
+describe("marking a linked part in the drawing", () => {
+  it("marks a part it may follow with a link to its workflow, named by the part and where it leads", async () => {
+    const svg = await svgOf([{ part: "list", title: "Linked to acme/shopping#list", to: [{ label: "acme/shopping", href: "/acme/shopping#list" }] }]);
+    const list = partIn(svg, "list");
+    expect(list).toContain("<title>Linked to acme/shopping#list</title>");
+    expect(list).toContain('<a href="/acme/shopping#list" aria-label="Shopping list. Linked to acme/shopping#list">');
+    // The chain mark in its top-right corner, its circle (radius 9, half of a 2px stroke)
+    // inside the part's box, so a part at the drawing's edge doesn't lose it.
+    const { width } = (await drawn()).parts.find((p) => p.id === "list")!;
+    expect(list).toContain(`<g class="part-link-mark" transform="translate(${width - 10}, 10)" aria-hidden="true"><circle r="9">`);
+    // The part without a link has no mark.
+    expect(partIn(svg, "plan")).not.toContain("part-link-mark");
   });
 
-  it("marks a node it may follow as a focusable link with its tooltip", () => {
-    const node = findPart(drawing(), "list")! as unknown as FakeElement;
-    markPart(node as unknown as SVGGElement, {
-      part: "list",
-      title: "Linked to acme/shopping#list",
-      to: [{ label: "acme/shopping", href: "/acme/shopping#list" }],
-    });
-    expect(node.getAttribute("data-part-link")).toBe("list");
-    expect(node.getAttribute("tabindex")).toBe("0");
-    expect(node.getAttribute("role")).toBe("link");
-    // Its own name first, then where it leads.
-    expect(node.getAttribute("aria-label")).toBe("📋 Shopping list. Linked to acme/shopping#list");
-    expect(node.classes.has("part-linked")).toBe(true);
-    expect(node.children[0].tagName).toBe("title");
-    expect(node.children[0].textContent).toBe("Linked to acme/shopping#list");
-    const mark = node.children.at(-1)!;
-    expect(mark.classes.has("part-link-mark")).toBe(true);
-    // In the node's top-right corner, its circle (radius 9, half of a 2px stroke) inside the
-    // node's box, so a node at the drawing's edge doesn't lose it.
-    expect(mark.getAttribute("transform")).toBe("translate(40, -10)");
-    expect(mark.children[0].tagName).toBe("circle");
-    expect(mark.children[0].getAttribute("r")).toBe("9");
+  it("marks a part with several places to go, whose menu the page opens, with no link of its own", async () => {
+    const svg = await svgOf([
+      {
+        part: "list",
+        title: "Used by a/b and c/d",
+        to: [
+          { label: "a/b", href: "/a/b" },
+          { label: "c/d", href: "/c/d" },
+        ],
+      },
+    ]);
+    const list = partIn(svg, "list");
+    expect(list).toContain("<title>Used by a/b and c/d</title>");
+    expect(list).toContain('class="part-link-mark"');
+    expect(list).not.toContain("<a ");
   });
 
-  it("marks a node with several places to go as a button that opens a menu", () => {
-    const node = findPart(drawing(), "list")! as unknown as FakeElement;
-    markPart(node as unknown as SVGGElement, {
-      part: "list",
-      title: "Used by a/b and c/d",
-      to: [
-        { label: "a/b", href: "/a/b" },
-        { label: "c/d", href: "/c/d" },
-      ],
-    });
-    expect(node.getAttribute("role")).toBe("button");
-    expect(node.getAttribute("aria-haspopup")).toBe("menu");
-    expect(node.getAttribute("aria-expanded")).toBe("false");
-    expect(node.getAttribute("aria-label")).toBe("📋 Shopping list. Used by a/b and c/d");
-  });
-
-  it("marks a node it may not follow, with no link and no focus", () => {
-    const node = findPart(drawing(), "list")! as unknown as FakeElement;
-    markPart(node as unknown as SVGGElement, { part: "list", title: "Linked to a workflow you can't see", to: [] });
-    expect(node.getAttribute("tabindex")).toBeNull();
-    expect(node.getAttribute("role")).toBeNull();
-    expect(node.getAttribute("data-part-link")).toBeNull();
-    expect(node.getAttribute("aria-label")).toBeNull();
-    expect(node.classes.has("part-linked")).toBe(true);
-    expect(node.classes.has("part-link-off")).toBe(true);
-    expect(node.children[0].textContent).toBe("Linked to a workflow you can't see");
-    expect(node.children.at(-1)!.classes.has("part-link-mark")).toBe(true);
+  it("marks a part it may not follow, with no link", async () => {
+    const svg = await svgOf([{ part: "list", title: "Linked to a workflow you can't see", to: [] }]);
+    const list = partIn(svg, "list");
+    expect(list).toContain("<title>Linked to a workflow you can&#x27;t see</title>");
+    expect(list).toContain('class="part-link-mark off"');
+    expect(list).not.toContain("<a ");
   });
 });
 
@@ -360,15 +271,4 @@ describe("the page a link opens", () => {
     expect(partInHash("#not a part")).toBeNull();
   });
 
-  it("outlines the part the fragment names, and only it", () => {
-    const root = drawing();
-    expect(outlinePart(root, "#plan")?.id).toBe("m1-flowchart-plan-2");
-    const plan = findPart(root, "plan") as unknown as FakeElement;
-    expect(plan.classes.has("part-target")).toBe(true);
-    expect(outlinePart(root, "#list")?.id).toBe("m1-flowchart-list-0");
-    expect(plan.classes.has("part-target")).toBe(false);
-    expect((findPart(root, "list") as unknown as FakeElement).classes.has("part-target")).toBe(true);
-    expect(outlinePart(root, "#nothing")).toBeNull();
-    expect((findPart(root, "list") as unknown as FakeElement).classes.has("part-target")).toBe(false);
-  });
 });

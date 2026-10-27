@@ -3,6 +3,7 @@ import { rowsOf } from "@/app/[owner]/[slug]/load";
 import type { CheckedFile } from "@/components/Checks";
 import type { ListedMember, SystemPanel, SystemViewProps } from "@/components/SystemView";
 import { engine, type Named } from "@/engine";
+import { layOut, mapLinks } from "@/server/drawing";
 import { asRead, descriptionAsRead } from "@/server/as-read";
 import { followOldName, pageContext, systemPath, underOwner, type SystemTab } from "@/server/page";
 import { notePrivatePlatformView, visiblePlatforms } from "@/server/platforms";
@@ -63,7 +64,25 @@ export async function loadSystem(owner: string, slug: string, n: string, tab: Sy
   );
 
   let panel: SystemPanel = { tab: "checks" };
-  if (tab === "map") panel = { tab, ...(await attempt(async () => (drawn.length ? { mermaid: await engine.drawMap(drawn) } : {}))) };
+  if (tab === "map") {
+    // The engine names each workflow's box w1, w2 and on, in the order the
+    // members drawn are given to it, and is given only members the viewer
+    // may see, so a box never leads to a workflow they may not see (#61).
+    const boxes = read.flatMap((r) =>
+      r.file && r.drawn && r.member.state === "found"
+        ? [{ title: r.member.title, address: `${r.member.owner}/${r.member.slug}`, href: `/${r.member.owner}/${r.member.slug}` }]
+        : [],
+    );
+    const hrefs = Object.fromEntries(boxes.map((b, i) => [`w${i + 1}`, b.href]));
+    panel = {
+      tab,
+      ...(await attempt(async () => {
+        if (!drawn.length) return {};
+        const drawing = await layOut(await engine.drawMap(drawn), { map: true });
+        return { drawing, hrefs, links: mapLinks(drawing.full, Object.fromEntries(boxes.map((b, i) => [`w${i + 1}`, b]))) };
+      })),
+    };
+  }
   if (tab === "who-waits")
     panel = { tab, ...(await attempt(async () => (drawn.length ? { summary: await engine.summariseAcross(drawn) } : {}))) };
   if (tab === "where-it-runs") {

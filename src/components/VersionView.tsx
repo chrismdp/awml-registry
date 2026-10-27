@@ -14,8 +14,8 @@ import { ConvertedNote } from "./ConvertedNote";
 import { CopyButton } from "./CopyButton";
 import { ForkForm } from "./ForkForm";
 import { Versions, type ListedVersion } from "./VersionList";
-import { FlowDrawing } from "./FlowDrawing";
-import { PanZoom } from "./PanZoom";
+import { Drawing } from "./Drawing";
+import type { Drawings } from "./flow/drawing";
 import { count } from "./words";
 
 export type VersionViewProps = {
@@ -61,12 +61,11 @@ export type VersionViewProps = {
   links: PartLink[];
   // The systems the viewer may see whose latest version has this workflow.
   systems: ListedSystem[];
-  // The shown file drawn, or "" when it is not a drawing view or the file has mistakes.
-  mermaid: string;
+  // The shown file drawn, laid out by the server, or null when it is not a
+  // drawing view or the file has mistakes.
+  drawing: Drawings | null;
   summary: Summary;
   versions: ListedVersion[];
-  // "flow" draws it laid out in the browser instead (issue #62's experiment).
-  draw?: "flow";
 };
 
 const TAB: Record<PageView, string> = {
@@ -84,7 +83,7 @@ export function VersionView(p: VersionViewProps) {
   const { publishingLabels } = names(s);
   const tabs: PageView[] = [...p.views, "yaml", "checks"];
   // Moving between the tabs is a client navigation that keeps the scroll
-  // position, so only the new tab is fetched and Mermaid stays loaded.
+  // position, so only the new tab is fetched and React Flow stays loaded.
   const tablist = (
     <div role="tablist" aria-label="View" className="tabs">
       {tabs.map((view) => (
@@ -192,12 +191,8 @@ export function VersionView(p: VersionViewProps) {
             <figure className="figure" role="tabpanel" aria-label={`${p.title}, ${TAB[p.shown].toLowerCase()}`}>
               {p.nowhere ? (
                 <p className="cannot-draw">This workflow doesn&apos;t say where it runs yet.</p>
-              ) : p.mermaid ? (
-                p.draw === "flow" ? (
-                  <FlowDrawing text={p.mermaid} />
-                ) : (
-                  <PanZoom text={p.mermaid} links={p.links} />
-                )
+              ) : p.drawing ? (
+                <Drawing drawings={p.drawing} links={p.links} />
               ) : (
                 <CannotDraw file={p.checks.find((f) => f.name === p.drawnFrom)!} checks={`${p.address}/checks`} />
               )}

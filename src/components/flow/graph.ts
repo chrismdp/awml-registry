@@ -20,9 +20,10 @@ export type Part = {
   scope?: string;
 };
 
-// A scope (dashed, who may see), a place a platform view puts parts (filled),
-// or a workflow's box on a system's map.
-export type Scope = { id: string; label: string; dashed: boolean; scope?: string };
+// A scope (dashed, who may see), a place a platform view puts parts (filled,
+// in the colours the engine gives each place), or a workflow's box on a
+// system's map.
+export type Scope = { id: string; label: string; dashed: boolean; scope?: string; fill?: string; stroke?: string };
 
 export type LineStyle = "solid" | "dotted" | "thick";
 
@@ -34,6 +35,8 @@ export type Line = {
   label?: string;
   arrowStart: boolean;
   arrowEnd: boolean;
+  // Drawn red by the engine: a line that breaks a rule.
+  broken?: boolean;
 };
 
 // A note, and the part (or scope) it belongs to.
@@ -77,6 +80,15 @@ function nodeText(rest: string): { text: string; shape?: string } | undefined {
   return quoted ? { text: quoted[1] } : undefined;
 }
 
+// A colour a style gives, such as fill:#e3ebfa, when it is one: only a hex
+// colour is taken, so nothing but a colour reaches the page's styles.
+function colour(style: string, name: string) {
+  return new RegExp(`(?:^|,)${name}:(#[0-9a-fA-F]{3,8})(?:,|$)`).exec(style)?.[1].toLowerCase();
+}
+
+// The red the engine draws a line that breaks a rule in.
+const BROKEN = "#d0342c";
+
 // A line: a, then <?, then -- or -.- or == with more of the same, then >?,
 // an optional |"label"|, then b.
 const LINE = /^(\w+)\s+(<)?(-{2,}|-\.+-|={2,})(>)?(?:\|"(.*)"\|)?\s+(\w+)$/;
@@ -100,12 +112,18 @@ export function parseMermaid(text: string): Graph {
     else if ((m = /^class\s+([\w,]+)\s+(\w+)$/.exec(row))) for (const id of m[1].split(",")) kinds.set(id, m[2]);
     else if ((m = /^style\s+(\w+)\s+(.*)$/.exec(row))) {
       const scope = scopes.find((s) => s.id === m![1]);
-      if (scope) scope.dashed = m[2].includes("stroke-dasharray");
+      if (!scope) continue;
+      scope.dashed = m[2].includes("stroke-dasharray");
+      const fill = colour(m[2], "fill");
+      const stroke = colour(m[2], "stroke");
+      if (!scope.dashed && fill && stroke) Object.assign(scope, { fill, stroke });
     } else if ((m = /^linkStyle\s+([\d,]+)\s+(.*)$/.exec(row))) {
-      if (!m[2].includes("marker-end:none")) continue;
+      const noEnd = m[2].includes("marker-end:none");
+      const broken = colour(m[2], "stroke") === BROKEN;
       for (const i of m[1].split(",").map(Number)) {
         const l = lines.find((l) => l.index === i);
-        if (l) l.arrowEnd = false;
+        if (l && noEnd) l.arrowEnd = false;
+        if (l && broken) l.broken = true;
       }
     } else if ((m = LINE.exec(row))) {
       const [, from, start, stroke, end, label, to] = m;

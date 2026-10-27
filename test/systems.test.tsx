@@ -13,6 +13,7 @@ import { addMember, createOrganisation, removeMember } from "@/server/organisati
 import { readSystemVersion } from "@/server/systems";
 import { listTokens, revokeToken } from "@/server/tokens";
 import SystemPage from "@/app/[owner]/systems/[slug]/page";
+import { loadSystem } from "@/app/[owner]/systems/[slug]/load";
 import SystemChecksPage from "@/app/[owner]/systems/[slug]/checks/page";
 import SystemWaitsPage from "@/app/[owner]/systems/[slug]/who-waits/page";
 import SystemRunsPage from "@/app/[owner]/systems/[slug]/where-it-runs/page";
@@ -25,7 +26,7 @@ import OwnerPage from "@/app/[owner]/page";
 import GalleryPage from "@/app/gallery/page";
 import { BASE, example, orgWith, person, request, storeVersion, type Who } from "./helpers";
 import { call } from "./mcp-client";
-import { renderPage } from "./pages";
+import { pageRequest, renderPage } from "./pages";
 
 // A workflow that the fit can judge: one scope any company may process, a
 // trigger that waits up to an hour, a note kept in the scope and a step a
@@ -332,9 +333,9 @@ describe("a system's page", () => {
       for (const member of ["acme/shopping", "acme/dinners", "ana/notes"]) expect(page.html).toContain(`href="/${member}"`);
       expect(page.html).not.toContain("shown incomplete");
     }
-    // The map draws a box for each workflow, under its title.
-    for (const words of ["Shopping", "Dinners", "Notes"]) {
-      for (const page of [map, mapV1]) expect(page.html).toContain(`[&quot;${words}&quot;]`);
+    // The map draws a box for each workflow, named by its title, which opens its page (#61).
+    for (const [words, member] of [["Shopping", "acme/shopping"], ["Dinners", "acme/dinners"], ["Notes", "ana/notes"]]) {
+      for (const page of [map, mapV1]) expect(page.html).toContain(`<a href="/${member}" aria-label="Open ${words}">`);
       for (const page of [waits, waitsV1]) expect(page.html).toContain(`${words} step`);
     }
     for (const member of ["acme/shopping", "acme/dinners", "ana/notes"]) expect(checks.html).toContain(`${member}.yaml`);
@@ -386,6 +387,32 @@ describe("a system's page", () => {
         expect(page.html).not.toMatch(/notes/i);
       }
     }
+  });
+
+  it("never sends a viewer a member they may not see: no box, no part and no link in the map's drawing", async () => {
+    const { ana, bea } = await world();
+    await pushedSystem("ana", "home", { token: ana.token }, kitchen(["acme/shopping", "ana/notes", "acme/dinners"]));
+    // What the page hands the browser to draw, as Bea and as someone signed out.
+    const panelAs = async (who?: { cookie: string }) => {
+      pageRequest.headers = new Headers();
+      if (who) pageRequest.headers.set("cookie", who.cookie);
+      return (await loadSystem("ana", "home", "latest", "map")).panel;
+    };
+    for (const panel of [await panelAs(bea), await panelAs()]) {
+      const sent = JSON.stringify(panel);
+      expect(sent).toContain("Shopping note");
+      for (const hidden of ["Notes", "Dinners", "ana/notes", "acme/dinners"]) expect(sent).not.toContain(hidden);
+      expect(panel).toMatchObject({ hrefs: { w1: "/acme/shopping" } });
+    }
+    // Ana, who may see all three, gets a box for each, each leading to its page.
+    const own = await panelAs(ana);
+    expect(own).toMatchObject({ hrefs: { w1: "/acme/shopping", w2: "/ana/notes", w3: "/acme/dinners" } });
+    if (own.tab !== "map" || !own.drawing) throw new Error("no map");
+    expect(own.drawing.full.scopes.map((sc) => [sc.id, sc.lines.join(" ")])).toEqual([
+      ["w1", "Shopping"],
+      ["w2", "Notes"],
+      ["w3", "Dinners"],
+    ]);
   });
 
   it("counts two hidden members as 2 private workflows, whoever's they are", async () => {
@@ -457,7 +484,7 @@ lines:
     expect(map.html).toContain(" · acme/broken · not drawn");
     expect(map.html).not.toContain(" · acme/shopping · not drawn");
     // With one member drawn, the map is its drawing, without the broken one's parts.
-    const drawing = /<pre>([\s\S]*)<\/pre>/.exec(map.html)![1];
+    const drawing = /<svg class="flow-static"[\s\S]*?<\/svg>/.exec(map.html)![0];
     expect(drawing).toContain("Shopping note");
     expect(drawing).not.toMatch(/Start|Work/);
     const checks = await tab("acme", "kitchen", "checks");

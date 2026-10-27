@@ -1,6 +1,5 @@
 import type { Simulation, SimulationLinkDatum, SimulationNodeDatum } from "d3-force";
-import type { Graph } from "./graph";
-import { containers, type Point, type Size } from "./layout";
+import type { Drawing, Point } from "./drawing";
 
 // A box the physics moves: a part, or a scope with no parts, by its centre.
 export type Body = SimulationNodeDatum & { id: string; width: number; height: number; scopes: string[]; rank: number };
@@ -25,7 +24,7 @@ const KEPT = 0.6;
 // The layers the solid lines make, top to bottom: each part one below the
 // lowest part with a solid line into it, cycles cut short. A part reached only
 // by dotted lines sits beside what it is joined to.
-function ranks(g: Graph, ids: string[]) {
+function ranks(g: Drawing, ids: string[]) {
   const rank = new Map(ids.map((id) => [id, 0]));
   const solid = g.lines.filter((l) => l.style !== "dotted" && rank.has(l.from) && rank.has(l.to));
   for (let pass = 0; pass < ids.length; pass++) {
@@ -55,14 +54,8 @@ function ranks(g: Graph, ids: string[]) {
 // keeps the flow reading top to bottom. Scopes are soft groupings, drawn
 // around wherever their parts settle. `tick` is told each time the parts move,
 // and `settled` each time they come to rest.
-export async function startPhysics(
-  g: Graph,
-  sizes: Map<string, Size>,
-  tick: (bodies: Body[]) => void,
-  settled: () => void,
-): Promise<Physics> {
+export async function startPhysics(g: Drawing, tick: (bodies: Body[]) => void, settled: () => void): Promise<Physics> {
   const d3 = await import("d3-force");
-  const holding = containers(g);
   const parentOf = new Map<string, string | undefined>([
     ...g.parts.map((p) => [p.id, p.scope] as const),
     ...g.scopes.map((s) => [s.id, s.scope] as const),
@@ -72,10 +65,11 @@ export async function startPhysics(
     for (let s = parentOf.get(id); s; s = parentOf.get(s)) out.push(s);
     return out;
   };
-  const ids = [...g.parts.map((p) => p.id), ...g.scopes.filter((s) => !holding.has(s.id)).map((s) => s.id)];
+  const sizes = new Map([...g.parts, ...g.scopes.filter((s) => !s.holds)].map((b) => [b.id, { width: b.width, height: b.height }]));
+  const ids = [...sizes.keys()];
   const rank = ranks(g, ids);
   const bodies: Body[] = ids.map((id, i) => {
-    const size = sizes.get(id) ?? { width: 160, height: 48 };
+    const size = sizes.get(id)!;
     const r = rank.get(id) ?? 0;
     return { id, ...size, scopes: chain(id), rank: r, x: ((i % 5) - 2) * 220 + (r % 2) * 60, y: r * LAYER };
   });
@@ -114,7 +108,7 @@ export async function startPhysics(
   // not in it that has wandered inside its box.
   const scopes = (alpha: number) => {
     for (const s of g.scopes) {
-      if (!holding.has(s.id)) continue;
+      if (!s.holds) continue;
       const inside = bodies.filter((b) => b.scopes.includes(s.id));
       if (!inside.length) continue;
       const cx = inside.reduce((t, b) => t + b.x!, 0) / inside.length;
