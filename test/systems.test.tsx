@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { auditEvent, workflow as workflowTable } from "@/db/schema";
+import { addMember } from "@/server/organisations";
 import { listTokens, revokeToken } from "@/server/tokens";
 import SystemPage from "@/app/[owner]/systems/[slug]/page";
 import SystemChecksPage from "@/app/[owner]/systems/[slug]/checks/page";
@@ -91,6 +92,12 @@ const kitchen = (members: string[], more: Record<string, unknown> = {}) => ({
   ...more,
 });
 
+// The refusal of a member the system's owner may not hold, the same whether
+// it is private to the owner, private to the pusher or missing.
+const ACME_MAY_HOLD = "is not a workflow acme's systems may hold: a public one, or one of acme's own.";
+const ANA_MAY_HOLD =
+  "is not a workflow ana's systems may hold: a public one, one of ana's own, or one of an organisation ana belongs to.";
+
 type Tab = "map" | "checks" | "who-waits" | "where-it-runs";
 const TABS: Tab[] = ["map", "checks", "who-waits", "where-it-runs"];
 const LATEST = { map: SystemPage, checks: SystemChecksPage, "who-waits": SystemWaitsPage, "where-it-runs": SystemRunsPage };
@@ -159,19 +166,49 @@ describe("pushing a system", () => {
 
   it("refuses a member the pusher may not see with the same 422 as a missing one", async () => {
     const { ana } = await world();
-    const hidden = await pushSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "beta/secret"]));
-    const missing = await pushSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "beta/nothing"]));
-    expect(hidden).toEqual({ status: 422, body: { errors: ["members: beta/secret is not a workflow you can see."] } });
-    expect(missing).toEqual({ status: 422, body: { errors: ["members: beta/nothing is not a workflow you can see."] } });
+    const hidden = await pushSystem("ana", "home", { token: ana.token }, kitchen(["acme/shopping", "beta/secret"]));
+    const missing = await pushSystem("ana", "home", { token: ana.token }, kitchen(["acme/shopping", "beta/nothing"]));
+    expect(hidden).toEqual({ status: 422, body: { errors: [`members: beta/secret ${ANA_MAY_HOLD}`] } });
+    expect(missing).toEqual({ status: 422, body: { errors: [`members: beta/nothing ${ANA_MAY_HOLD}`] } });
+    const toAcme = await pushSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "beta/secret"]));
+    expect(toAcme).toEqual({ status: 422, body: { errors: [`members: beta/secret ${ACME_MAY_HOLD}`] } });
   });
 
-  it("takes another owner's public workflow as a member, and a person's own private one", async () => {
+  it("refuses an organisation's system a member's own private workflow, with the same 422 as a missing one", async () => {
     const { ana } = await world();
-    await pushedSystem("ana", "home", { token: ana.token }, kitchen(["beta/bakes", "ana/notes"], { visibility: "private" }));
+    const personal = await pushSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "ana/notes"]));
+    const missing = await pushSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "ana/nothing"]));
+    expect(personal).toEqual({ status: 422, body: { errors: [`members: ana/notes ${ACME_MAY_HOLD}`] } });
+    expect(missing).toEqual({ status: 422, body: { errors: [`members: ana/nothing ${ACME_MAY_HOLD}`] } });
+    expect((await tab("acme", "kitchen", "map", ana)).status).toBe(404);
+  });
+
+  it("refuses an organisation's system another organisation's private workflow, even from someone in both", async () => {
+    const { ana, bea } = await world();
+    const joined = await addMember(await getDb(), bea.id, "beta", "ana", "member");
+    expect(joined.ok).toBe(true);
+    const other = await pushSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "beta/secret"]));
+    const missing = await pushSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "beta/nothing"]));
+    expect(other).toEqual({ status: 422, body: { errors: [`members: beta/secret ${ACME_MAY_HOLD}`] } });
+    expect(missing).toEqual({ status: 422, body: { errors: [`members: beta/nothing ${ACME_MAY_HOLD}`] } });
+    expect((await tab("acme", "kitchen", "map", ana)).status).toBe(404);
+    // Her own system takes the private workflows of both her organisations.
+    await pushedSystem("ana", "home", { token: ana.token }, kitchen(["beta/secret", "acme/dinners"], { visibility: "private" }));
+    const map = await tab("ana", "home", "map", ana);
+    expect(map.html).toContain('href="/beta/secret"');
+    expect(map.html).toContain('href="/acme/dinners"');
+  });
+
+  it("takes another owner's public workflow into a person's system and an organisation's, beside each owner's private ones", async () => {
+    const { ana } = await world();
+    await pushedSystem("ana", "home", { token: ana.token }, kitchen(["beta/bakes", "ana/notes", "acme/dinners"], { visibility: "private" }));
     const map = await tab("ana", "home", "map", ana);
     expect(map.html).toContain('href="/beta/bakes"');
-    expect(map.html).toContain("Bakes");
-    expect(map.html).toContain("Notes");
+    for (const title of ["Bakes", "Notes", "Dinners"]) expect(map.html).toContain(title);
+    await pushedSystem("acme", "kitchen", { token: ana.token }, kitchen(["beta/bakes", "acme/dinners"]));
+    const acmeMap = await tab("acme", "kitchen", "map", ana);
+    expect(acmeMap.html).toContain('href="/beta/bakes"');
+    expect(acmeMap.html).toContain('href="/acme/dinners"');
   });
 
   it("lets nobody push to an owner they can't push workflows to", async () => {

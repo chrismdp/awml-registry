@@ -93,8 +93,10 @@ describe("seeding a registry for the build's pictures", () => {
     ]);
   });
 
-  it("pushes acme/systems/kitchen, public, holding ana's private dinners, which a visitor sees only counted", async () => {
+  it("pushes acme/systems/kitchen, public, holding acme's private cupboards, which a visitor sees only counted", async () => {
     const { cookie } = await seeded();
+    expect((await read("/api/v1/acme/cupboards")).status).toBe(404);
+    expect((await read("/api/v1/acme/cupboards", cookie)).body).toMatchObject({ visibility: "private" });
     const toVisitor = await renderPage(SystemPage, { owner: "acme", slug: "kitchen" });
     expect(toVisitor.status).toBe(200);
     expect(toVisitor.html).toContain("<h1>The family&#x27;s kitchen</h1>");
@@ -102,9 +104,13 @@ describe("seeding a registry for the build's pictures", () => {
     expect(toVisitor.html).toContain('href="/acme/shopping"');
     expect(toVisitor.html).toContain("1 private workflow");
     expect(toVisitor.html).toContain("subgraph");
+    expect(toVisitor.html).not.toContain("acme/cupboards");
+    expect(toVisitor.html).not.toContain("The family&#x27;s cupboards");
     const toAna = await renderPage(SystemPage, { owner: "acme", slug: "kitchen" }, { as: { cookie } });
-    expect(toAna.html).toContain('href="/ana/dinners"');
+    expect(toAna.html).toContain('href="/acme/cupboards"');
+    expect(toAna.html).toContain("The family&#x27;s cupboards");
     expect(toAna.html).not.toContain("private workflow");
+    expect(toAna.html).not.toContain("not drawn");
   });
 
   it("pushes acme's platforms, the worker at two versions with its recipe and one kept private", async () => {

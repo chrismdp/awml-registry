@@ -1,0 +1,17 @@
+awml: "0.6"
+title: The family's pantry
+description: |
+  This workflow keeps count of what is in the family's cupboards, so the family knows what has
+  run out before the shopping is done. The family is fictional.
+scopes:
+  - { id: carers, label: "carers: + June, Beth" }
+  - { id: family, label: "family: parents, kids", in: carers }
+parts:
+  - { id: scan, kind: trigger, label: "A barcode scanned in the kitchen" }
+  - { id: count, kind: code, op: do, label: "Count what's in and what's run out", in: family }
+  - { id: cupboards, kind: context, label: "What's in the cupboards", in: family }
+  - { id: chat, kind: surface, label: "Family chat", in: family }
+lines:
+  - { from: scan, to: count, kind: start }
+  - { from: count, to: cupboards, kind: data }
+  - { from: cupboards, to: chat, kind: data, label: "what's run out" }

@@ -2,8 +2,11 @@
 // of their own at /{owner}/systems/{slug}. A system is owned, versioned and
 // kept private exactly as a platform is. Each version holds a title, a
 // Markdown description and its members, which follow their latest version, so
-// a version records only which workflows are in it. A member may be any
-// workflow the pusher may see, another owner's public one included; a viewer
+// a version records only which workflows are in it. What a system may hold is
+// judged by what its owner may see, as a workflow's refs are: a public
+// workflow of any owner, the owner's own, and for a person, the private ones
+// of their organisations. So an organisation's system holds only its own
+// workflows and public ones. The pusher must see each member too. A viewer
 // sees only the members they may see, and of the others only how many there
 // are.
 import { and, desc, eq, inArray, max, or, sql } from "drizzle-orm";
@@ -12,7 +15,7 @@ import { membership, system, systemMember, systemVersion, user, version, workflo
 import type { Files } from "@/engine";
 import { record } from "./audit";
 import { awmlOf } from "./awml-file";
-import { findOwner, isOwnerOrMember, type Owner } from "./owners";
+import { findOwner, isOwnerOrMember, ownerMaySee, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH, type Visibility } from "./push";
 import { refuse, type Result } from "./result";
 import { systemSlugProblem } from "./slugs";
@@ -38,9 +41,10 @@ async function findSystem(db: Db, owner: Owner, slug: string) {
 
 const MEMBER = /^([^/\s]+)\/([^/\s]+)$/;
 
-// A workflow the viewer may see, by its owner and slug, or null: a private
-// workflow is the same as one that doesn't exist to anyone outside it.
-async function seenWorkflow(db: Db, viewer: Viewer, ownerSlug: string, slug: string) {
+// A workflow a system of the holder may have as a member, by its owner and
+// slug, or null: one the holder may see and the pusher may see too. A private
+// workflow outside either is the same as one that doesn't exist.
+async function heldWorkflow(db: Db, viewer: Viewer, holder: Owner, ownerSlug: string, slug: string) {
   const owner = await findOwner(db, ownerSlug);
   if (!owner) return null;
   const [w] = await db
@@ -55,13 +59,26 @@ async function seenWorkflow(db: Db, viewer: Viewer, ownerSlug: string, slug: str
     .limit(1);
   if (!w) return null;
   if (w.visibility === "private" && !(await isOwnerOrMember(db, owner, viewer?.id))) return null;
+  if (!(await ownerMaySee(db, holder, owner, w.visibility))) return null;
   return { id: w.id, owner: owner.slug, slug };
 }
 
-// The members a push names, each a workflow the pusher may see, once each.
-// One the pusher may not see is refused as a missing one is, so a push tells
-// nobody whether a private workflow is there.
-async function membersOf(db: Db, viewer: Viewer, members: unknown): Promise<Result<{ found: { id: string; owner: string; slug: string }[] }>> {
+// The refusal of a member, the same whether the system's owner may not hold
+// it, the pusher may not see it or it doesn't exist.
+const notHeld = (m: string, holder: Owner) =>
+  holder.type === "organisation"
+    ? `members: ${m} is not a workflow ${holder.slug}'s systems may hold: a public one, or one of ${holder.slug}'s own.`
+    : `members: ${m} is not a workflow ${holder.slug}'s systems may hold: a public one, one of ${holder.slug}'s own, or one of an organisation ${holder.slug} belongs to.`;
+
+// The members a push names, once each, each a workflow the system's owner may
+// hold and the pusher may see. Any other is refused as a missing one is, so a
+// push tells nobody whether a private workflow is there.
+async function membersOf(
+  db: Db,
+  viewer: Viewer,
+  holder: Owner,
+  members: unknown,
+): Promise<Result<{ found: { id: string; owner: string; slug: string }[] }>> {
   if (!Array.isArray(members) || members.length === 0)
     return refuse(422, "members: name at least one workflow, as owner/slug.");
   const errors: string[] = [];
@@ -78,8 +95,8 @@ async function membersOf(db: Db, viewer: Viewer, members: unknown): Promise<Resu
       continue;
     }
     named.add(m);
-    const w = await seenWorkflow(db, viewer, match[1], match[2]);
-    if (!w) errors.push(`members: ${m} is not a workflow you can see.`);
+    const w = await heldWorkflow(db, viewer, holder, match[1], match[2]);
+    if (!w) errors.push(notHeld(m, holder));
     else found.push(w);
   }
   return errors.length ? refuse(422, ...errors) : { ok: true, found };
@@ -114,7 +131,7 @@ export async function pushSystemVersion(
   if (!pushed.ok) return pushed;
   const { visibility } = pushed;
 
-  const members = await membersOf(db, viewer, body.members);
+  const members = await membersOf(db, viewer, owner, body.members);
   if (!members.ok) return members;
 
   let s = existing;

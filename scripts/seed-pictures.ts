@@ -16,13 +16,16 @@
 //   acme/dinners#favourites, so acme/dinners is referred to by it;
 // - acme/pantry, public, a copy of acme/shopping under another title, so dinners' favourites are
 //   referred to by two workflows and their mark opens a menu;
+// - acme/cupboards, private;
 // - ana/dinners, private;
 // - ana/family-dinners, public, a fork of acme/dinners at version 1;
 // - acme/platforms/worker, public, at two versions: without an install recipe, then with one;
 // - acme/platforms/codex-laptop, public;
 // - acme/platforms/cowork-mac-mini, private;
-// - acme/systems/kitchen, public, holding acme/dinners, acme/shopping and ana's private
-//   ana/dinners, so a visitor sees "1 private workflow" where ana sees all three.
+// - acme/systems/kitchen, public, holding acme/dinners, acme/shopping and acme's private
+//   acme/cupboards, so a visitor sees "1 private workflow" where ana sees all three. An
+//   organisation's system may hold only its own workflows and public ones, so ana's private
+//   ana/dinners can't be in it.
 //
 // A change that needs more data to show adds it here. The pictures of main use main's copy of
 // this file, and the pictures of the change use the change's copy.
@@ -49,6 +52,10 @@ const designOnly = (workflow: string) => workflow.slice(0, workflow.indexOf("imp
 // A second workflow referring to dinners' favourites, so that part leads to two.
 const pantry = fixture("shopping.yaml").replace("title: The family's shopping", "title: The family's pantry");
 
+// A private workflow of acme's own for the kitchen system, under its own slug and title so it
+// isn't taken for the public acme/pantry.
+const cupboards = fixture("pantry.yaml").replace("title: The family's pantry", "title: The family's cupboards");
+
 const recipe = `# Install on a code worker
 
 1. Make a container from the workflow's code.
@@ -57,10 +64,10 @@ const recipe = `# Install on a code worker
 4. Check the worker's log after the first run.
 `;
 
-const kitchen = `Everything that keeps the family's kitchen going: **dinners** planned each week, and the
-**shopping** topped up from the same list.
+const kitchen = `Everything that keeps the family's kitchen going: **dinners** planned each week, the
+**shopping** topped up from the same list, and the cupboards counted.
 
-Ana keeps her own copy of the dinners private.
+Acme keeps the cupboards private.
 `;
 
 export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ cookie: string }> {
@@ -113,6 +120,7 @@ export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ c
     ["/api/v1/acme/client-email/versions", { workflow: fixture("client-email.yaml"), visibility: "public" }],
     ["/api/v1/acme/shopping/versions", { workflow: fixture("shopping.yaml"), visibility: "public" }],
     ["/api/v1/acme/pantry/versions", { workflow: pantry, visibility: "public" }],
+    ["/api/v1/acme/cupboards/versions", { workflow: cupboards, visibility: "private" }],
     ["/api/v1/ana/dinners/versions", { workflow: fixture("dinners.yaml"), visibility: "private" }],
     ["/api/v1/platforms/acme/worker/versions", { description: fixture("platforms/worker.yaml"), visibility: "public" }],
     ["/api/v1/platforms/acme/worker/versions", { description: fixture("platforms/worker.yaml"), recipe }],
@@ -134,7 +142,7 @@ export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ c
       json: {
         title: "The family's kitchen",
         description: kitchen,
-        members: ["acme/dinners", "acme/shopping", "ana/dinners"],
+        members: ["acme/dinners", "acme/shopping", "acme/cupboards"],
         visibility: "public",
       },
     },

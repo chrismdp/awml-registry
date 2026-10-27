@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@/db/client";
 import { membership, organisation, user } from "@/db/schema";
+import type { Visibility } from "./push";
 
 export type Role = "owner" | "member";
 
@@ -38,4 +39,12 @@ export async function isOwnerOrMember(db: Db, owner: Owner, userId: string | und
   if (!userId) return false;
   if (owner.type === "user") return owner.id === userId;
   return (await roleIn(db, owner.id, userId)) !== null;
+}
+
+// Whether an owner may see a workflow of another: a public one, its own, and
+// for a person, a private one of an organisation they belong to. What a
+// workflow's refs may name and what a system may hold both go by it.
+export async function ownerMaySee(db: Db, owner: Owner, of: Owner, visibility: Visibility) {
+  if (visibility === "public" || (owner.type === of.type && owner.id === of.id)) return true;
+  return owner.type === "user" && isOwnerOrMember(db, of, owner.id);
 }
