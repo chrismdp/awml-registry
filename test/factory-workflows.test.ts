@@ -519,6 +519,58 @@ describe("review.yml", () => {
     },
   );
 
+  // GitHub's diff names a binary file without its contents, so the review applies the rest and
+  // tells the reviewers which binary files changed, rather than failing and posting no checks.
+  it.runIf(canRehearse)("applies a patch with binary files, and lists them for the reviewers", () => {
+    const bring = stepWithId(jobs().review, "bring").run ?? "";
+    const answers = `
+  *"vnd.github.diff"*) cat "$PATCH" ;;
+  "api repos/owner/repo/compare/"*) jq -n --arg sha "$BASE" '{merge_base_commit: {sha: $sha}}' | answer ;;`;
+    const root = scratch();
+    const repo = join(root, "repo");
+    for (const [file, text] of Object.entries({
+      ".github/review-bugs-prompt.md": "Review for bugs.\n",
+      ".github/review-security-prompt.md": "Review for security.\n",
+      "REVIEW.md": "What failure looks like.\n",
+      "README.md": "A registry\n",
+      "logo.png": "\x89PNG\x00old",
+      "vendor/awml/old.png": "\x89PNG\x00gone",
+    }))
+      put(join(repo, file), text);
+    git(repo, "init", "-q");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "The registry's main");
+    const base = git(repo, "rev-parse", "HEAD");
+    put(join(repo, "README.md"), "A registry\nOf workflows\n");
+    put(join(repo, "logo.png"), "\x89PNG\x00new");
+    put(join(repo, "fonts/Registry.ttf"), "\x00\x01font");
+    rmSync(join(repo, "vendor/awml/old.png"));
+    git(repo, "add", "-A");
+    // GitHub's diff, like git's without --binary, says only that a binary file differs.
+    const diff = git(repo, "diff", "--cached");
+    expect(diff).toContain("Binary files a/vendor/awml/old.png and /dev/null differ");
+    put(join(root, "change.patch"), `${diff}\n`);
+    git(repo, "reset", "-q", "--hard");
+    const event = join(root, "event.json");
+    put(event, `{"pull_request": {"title": "Add a line", "body": "A second line."}}`);
+    const run = rehearse(bring, {
+      root,
+      cwd: repo,
+      env: {
+        HEAD_SHA: "cd".repeat(20),
+        BASE: base,
+        PATCH: join(root, "change.patch"),
+        GITHUB_EVENT_PATH: event,
+      },
+      answers,
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(git(repo, "diff", "--cached", "--name-only")).toBe("README.md");
+    const told = readIfThere(join(root, "runner/review/pull-request.md"));
+    for (const path of ["logo.png", "fonts/Registry.ttf", "vendor/awml/old.png"])
+      expect(told, `the reviewers aren't told that ${path} changed`).toContain(`\n- ${path}\n`);
+  });
+
   // Each review is posted as a check on the pull request's head commit: Bug review and Security
   // review. One that finds nothing passes, one with an Important finding fails, and one with only
   // Nits or Pre-existing faults is neutral, with its findings ranked Important, Nit, Pre-existing,
