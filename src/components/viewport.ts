@@ -6,6 +6,8 @@
 export type View = { x: number; y: number; k: number };
 export type Size = { width: number; height: number };
 export type Point = { x: number; y: number };
+// A box in the frame, such as where a part of the drawing is shown.
+export type Box = { x: number; y: number; width: number; height: number };
 export type Direction = "up" | "down" | "left" | "right";
 
 export const MIN_ZOOM = 0.1;
@@ -70,6 +72,30 @@ export function keepInView(v: View, frame: Size, drawing: Size): View {
     x: along(v.x, drawing.width * v.k, frame.width),
     y: along(v.y, drawing.height * v.k, frame.height),
     k: v.k,
+  };
+}
+
+// The view moved as little as it takes to show a box whole, a margin inside
+// the frame's edges, or from its top-left corner when it is bigger than that.
+export function reveal(v: View, frame: Size, box: Box, margin = 16): View {
+  const by = (at: number, size: number, room: number) => {
+    if (at < margin || size > room - 2 * margin) return margin - at;
+    return Math.min(0, room - margin - (at + size));
+  };
+  return pan(v, by(box.x, box.width, frame.width), by(box.y, box.height, frame.height));
+}
+
+// Where a menu opened from a box in the frame goes: under it, or above it
+// when only above has room for it, and inside the frame, a margin from its
+// edges, as far as it fits.
+export function placeMenu(from: Box, menu: Size, frame: Size, gap = 6, margin = 8): Point {
+  const inside = (at: number, size: number, room: number) => Math.max(margin, Math.min(at, room - margin - size));
+  const below = from.y + from.height + gap;
+  const above = from.y - gap - menu.height;
+  const roomBelow = below + menu.height <= frame.height - margin;
+  return {
+    x: inside(from.x, menu.width, frame.width),
+    y: inside(roomBelow || above < margin ? below : above, menu.height, frame.height),
   };
 }
 

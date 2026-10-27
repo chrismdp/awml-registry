@@ -14,6 +14,8 @@
 // - acme/client-email, public;
 // - acme/shopping, public, whose favourites refer to dinners.yaml#favourites, stored as
 //   acme/dinners#favourites, so acme/dinners is referred to by it;
+// - acme/pantry, public, a copy of acme/shopping under another title, so dinners' favourites are
+//   referred to by two workflows and their mark opens a menu;
 // - ana/dinners, private;
 // - ana/family-dinners, public, a fork of acme/dinners at version 1;
 // - acme/platforms/worker, public, at two versions: without an install recipe, then with one;
@@ -41,6 +43,9 @@ const fixture = (name: string) => readFileSync(new URL(`../test/fixtures/${name}
 // A workflow's design without its implementations, as a first version that
 // doesn't yet say where it runs.
 const designOnly = (workflow: string) => workflow.slice(0, workflow.indexOf("implementations:"));
+
+// A second workflow referring to dinners' favourites, so that part leads to two.
+const pantry = fixture("shopping.yaml").replace("title: The family's shopping", "title: The family's pantry");
 
 const recipe = `# Install on a code worker
 
@@ -99,6 +104,7 @@ export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ c
     ["/api/v1/acme/dinners/versions", { workflow: fixture("dinners.yaml") }],
     ["/api/v1/acme/client-email/versions", { workflow: fixture("client-email.yaml"), visibility: "public" }],
     ["/api/v1/acme/shopping/versions", { workflow: fixture("shopping.yaml"), visibility: "public" }],
+    ["/api/v1/acme/pantry/versions", { workflow: pantry, visibility: "public" }],
     ["/api/v1/ana/dinners/versions", { workflow: fixture("dinners.yaml"), visibility: "private" }],
     ["/api/v1/platforms/acme/worker/versions", { description: fixture("platforms/worker.yaml"), visibility: "public" }],
     ["/api/v1/platforms/acme/worker/versions", { description: fixture("platforms/worker.yaml"), recipe }],

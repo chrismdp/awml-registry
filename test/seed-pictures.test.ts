@@ -70,7 +70,23 @@ describe("seeding a registry for the build's pictures", () => {
     expect(shopping.body.visibility).toBe("public");
     expect(shopping.body.files.workflow).toContain("ref: acme/dinners#favourites");
     const dinners = await read("/api/v1/acme/dinners");
+    expect(dinners.body.referredBy).toContainEqual({
+      owner: "acme",
+      slug: "shopping",
+      title: "The family's shopping",
+      visibility: "public",
+      parts: ["favourites"],
+    });
+  });
+
+  it("pushes acme/pantry, referring to the same part, so dinners' favourites lead to two workflows", async () => {
+    await seeded();
+    const pantry = await read("/api/v1/acme/pantry/v/1");
+    expect(pantry.body.visibility).toBe("public");
+    expect(pantry.body.files.workflow).toContain("ref: acme/dinners#favourites");
+    const dinners = await read("/api/v1/acme/dinners");
     expect(dinners.body.referredBy).toEqual([
+      { owner: "acme", slug: "pantry", title: "The family's pantry", visibility: "public", parts: ["favourites"] },
       { owner: "acme", slug: "shopping", title: "The family's shopping", visibility: "public", parts: ["favourites"] },
     ]);
   });

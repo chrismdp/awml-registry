@@ -6,6 +6,7 @@ import { asRead } from "@/server/as-read";
 import { refPath, refsAsSeen } from "@/server/refs";
 import { awmlOf, implementationsOf } from "@/server/awml-file";
 import { followOldName, isPageView, pageContext, underOwner, workflowPath, type PageView } from "@/server/page";
+import { partLinks } from "@/server/part-links";
 import { organisationsOf } from "@/server/organisations";
 import { forksOf, readVersion, referrersOf, VIEWS, type FileName, type View } from "@/server/registry";
 
@@ -168,6 +169,9 @@ export async function loadVersion(
     checks: shownChecks,
     refs: refs.shown,
     referredBy: referredBy ?? [],
+    // The parts the drawing marks as linked to other workflows, from what the
+    // viewer may know of both, so it names nothing they can't see.
+    links: partLinks(refs.shown, referredBy ?? []),
     mermaid: drawable ? await engine.draw(readFile(source)!, drawnImplementation(source, placed, readFile(source)!)) : "",
     summary: v.summary,
     versions: v.versions,

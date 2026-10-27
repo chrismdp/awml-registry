@@ -10,6 +10,8 @@ import {
   naturalSize,
   pan,
   pinch,
+  placeMenu,
+  reveal,
   zoomAt,
   type View,
 } from "@/components/viewport";
@@ -126,6 +128,34 @@ describe("the drawing's viewport", () => {
     ).toEqual({ x: 10, y: -10, k: 1 });
     // Fingers on one spot don't divide by nothing.
     expect(pinch(v, [before[0], before[0]], [before[0], before[0]])).toEqual(v);
+  });
+
+  it("moves the drawing as little as it takes to show a part whole, a margin inside the frame", () => {
+    const v = { x: -300, y: -200, k: 2 };
+    // Already in view: it stays.
+    expect(reveal(v, frame, { x: 100, y: 100, width: 200, height: 80 })).toEqual(v);
+    // Off the right and the bottom: in by just enough.
+    expect(reveal(v, frame, { x: 700, y: 560, width: 200, height: 80 })).toEqual({ x: -416, y: -256, k: 2 });
+    // Off the left and the top.
+    expect(reveal(v, frame, { x: -150, y: -40, width: 200, height: 80 })).toEqual({ x: -134, y: -144, k: 2 });
+    // Bigger than the frame: its top-left corner.
+    expect(reveal(v, frame, { x: 300, y: 300, width: 900, height: 700 })).toEqual({ x: -584, y: -484, k: 2 });
+  });
+
+  it("puts a part's menu under it, or above it when there's no room below, inside the frame", () => {
+    const menu = { width: 220, height: 120 };
+    // Under the part, at its left edge.
+    expect(placeMenu({ x: 100, y: 100, width: 150, height: 50 }, menu, frame)).toEqual({ x: 100, y: 156 });
+    // No room below: above it.
+    expect(placeMenu({ x: 100, y: 450, width: 150, height: 50 }, menu, frame)).toEqual({ x: 100, y: 324 });
+    // Near the right edge: in from it.
+    expect(placeMenu({ x: 700, y: 100, width: 150, height: 50 }, menu, frame)).toEqual({ x: 572, y: 156 });
+    // Partly off the left: in from it.
+    expect(placeMenu({ x: -60, y: 100, width: 150, height: 50 }, menu, frame)).toEqual({ x: 8, y: 156 });
+    // A tall menu with room neither below nor above: as low as fits.
+    expect(placeMenu({ x: 100, y: 250, width: 150, height: 50 }, { width: 220, height: 400 }, frame)).toEqual({ x: 100, y: 192 });
+    // Taller than the frame: at its top.
+    expect(placeMenu({ x: 100, y: 250, width: 150, height: 50 }, { width: 220, height: 900 }, frame)).toEqual({ x: 100, y: 8 });
   });
 
   it("reads a drawing's natural size from its viewBox", () => {

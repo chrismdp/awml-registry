@@ -63,6 +63,13 @@ describe("zooming and moving a workflow's drawing", () => {
     expect(onControl(at(false))).toBe(false);
   });
 
+  it("clips the drawn frame instead of hiding its overflow, so focusing a part can't scroll it out of step with its view", () => {
+    const css = fs.readFileSync(path.join(__dirname, "../src/app/site.css"), "utf8");
+    const drawn = /^\.panzoom\.drawn \{([^}]*)\}/m.exec(css)![1];
+    expect(drawn).toContain("overflow: clip;");
+    expect(drawn).not.toContain("overflow: hidden;");
+  });
+
   it("puts a workflow page's drawing in a focusable frame, without controls until it is drawn", async () => {
     const owner = await pushed("dinners", dinners);
     const { html } = await renderPage(WorkflowPage, { owner, slug: "dinners" });
