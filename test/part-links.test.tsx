@@ -6,17 +6,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { loadVersion } from "@/app/[owner]/[slug]/load";
-import {
-  destination,
-  findPart,
-  markPart,
-  outlinePart,
-  partInHash,
-  partLinks,
-  PartMenu,
-  type PartLink,
-} from "@/components/part-links";
-import { orgWith, person, request, type Who } from "./helpers";
+import { destination, findPart, markPart, outlinePart, partInHash, PartMenu } from "@/components/PartLinks";
+import { partLinks, type PartLink } from "@/server/part-links";
+import { orgWith, person, request, storeVersion, type Who } from "./helpers";
 import { pageRequest } from "./pages";
 
 const shopping = `awml: "0.6"
@@ -53,14 +45,16 @@ async function pushed(owner: string, slug: string, as: Who, workflow: string, vi
   expect(res.status, await res.clone().text()).toBe(201);
 }
 
-// The links a workflow's page gives its drawing, in a view, as someone.
-async function linksOn(owner: string, slug: string, view: "security" | "platform", as?: { cookie: string }) {
+// A workflow's page in a view, as someone: what it draws, and the links it gives the drawing.
+async function pageOf(owner: string, slug: string, view: "security" | "platform", as?: { cookie: string }) {
   pageRequest.headers = new Headers();
   if (as) pageRequest.headers.set("cookie", as.cookie);
   const props = await loadVersion(owner, slug, "latest", view);
   expect(props.mermaid).not.toBe("");
-  return props.links;
+  return props;
 }
+
+const linksOn = async (...args: Parameters<typeof pageOf>) => (await pageOf(...args)).links;
 
 // Ana owns acme; Bea owns beta, with Mo as a member of both. Nell belongs to nothing.
 async function world() {
@@ -81,14 +75,27 @@ describe("a part with a ref, marked in the drawing", () => {
     const linked: PartLink[] = [
       { part: "list", title: "Linked to acme/shopping#list", to: [{ label: "acme/shopping", href: "/acme/shopping#list" }] },
     ];
-    expect(await linksOn("acme", "dinners", "security")).toEqual(linked);
-    expect(await linksOn("acme", "dinners", "platform")).toEqual(linked);
+    for (const view of ["security", "platform"] as const) {
+      const page = await pageOf("acme", "dinners", view);
+      // The drawing has the part as a node, for the mark to find.
+      expect(page.mermaid).toMatch(/^\s+list[[(]/m);
+      expect(page.links).toEqual(linked);
+    }
     expect(destination(linked[0])).toBe("/acme/shopping#list");
   });
 
-  it("names a workflow not pushed yet to someone who may see its owner, without linking to it", () => {
-    expect(partLinks([{ part: "list", state: "missing", owner: "acme", slug: "lists", id: "list" }], [])).toEqual([
-      { part: "list", title: "Linked to acme/lists#list, not pushed yet", to: [] },
+  it("names a workflow not pushed yet to an owner or member of its owner, and to anyone else nothing", async () => {
+    const { ana, bea, mo } = await world();
+    const missing = [{ part: "list", title: "Linked to acme/lists#list, not pushed yet", to: [] }];
+    // Ana owns acme.
+    await pushed("acme", "plans", { token: ana.token }, referring("acme/lists#list"), "private");
+    expect(await linksOn("acme", "plans", "security", ana)).toEqual(missing);
+    // Mo is a member of acme, and of beta, whose workflow Bea, a member of beta alone, sees too.
+    await pushed("beta", "plans", { token: bea.token }, referring("acme/lists#list"), "private");
+    expect(await linksOn("beta", "plans", "security", mo)).toEqual(missing);
+    expect(await linksOn("beta", "plans", "platform", mo)).toEqual(missing);
+    expect(await linksOn("beta", "plans", "security", bea)).toEqual([
+      { part: "list", title: "Linked to a workflow you can't see", to: [] },
     ]);
   });
 });
@@ -113,8 +120,10 @@ describe("a part other workflows refer to", () => {
     expect(link.title).toBe("Used by acme/dinners, acme/lunches and acme/parties");
     expect(link.to.map((t) => t.href)).toEqual(["/acme/dinners", "/acme/lunches", "/acme/parties"]);
     expect(destination(link)).toBe("menu");
-    const menu = renderToStaticMarkup(<PartMenu link={link} at={{ x: 10, y: 20 }} onClose={() => {}} />);
+    const menu = renderToStaticMarkup(<PartMenu link={link} node={{ x: 10, y: 20, width: 120, height: 40 }} onClose={() => {}} />);
     expect(menu).toContain('role="menu"');
+    // It is placed once it is drawn and its size is known, not where a guess of its size put it.
+    expect(menu).not.toMatch(/style="[^"]*(left|top)/);
     expect(menu).toContain('aria-label="Used by acme/dinners, acme/lunches and acme/parties"');
     expect([...menu.matchAll(/<a [^>]*role="menuitem"[^>]*href="([^"]*)"[^>]*>([^<]*)</g)].map((m) => [m[1], m[2]])).toEqual([
       ["/acme/dinners", "acme/dinners"],
@@ -160,6 +169,37 @@ describe("parts linked across tenants", () => {
     expect((await linksOn("acme", "shopping", "security", bea))[0].title).toBe("Used by acme/dinners and beta/plans");
   });
 
+  it("names nothing and links nowhere for someone signed out or a stranger, on a public workflow whose ref they can't see", async () => {
+    const { ana, bea, nell } = await world();
+    await pushed("acme", "secret", { token: ana.token }, shopping, "private");
+    // A push refuses a public workflow that refers to a private one, so this one is written
+    // straight to the database: whatever is stored, the drawing names nothing they can't see.
+    await storeVersion("beta", "plans", bea, { workflow: referring("acme/secret#list") }, { visibility: "public" });
+    const hidden = [{ part: "list", title: "Linked to a workflow you can't see", to: [] }];
+    for (const who of [undefined, nell])
+      for (const view of ["security", "platform"] as const) {
+        const page = await pageOf("beta", "plans", view, who);
+        expect(page.links).toEqual(hidden);
+        expect(JSON.stringify(page.links)).not.toContain("acme");
+        expect(page.mermaid).toMatch(/^\s+list[[(]/m);
+      }
+    expect(destination(hidden[0])).toBeNull();
+  });
+
+  it("leads a part with a ref the viewer can't see only to the referrer they can", async () => {
+    const { ana, bea } = await world();
+    await pushed("acme", "secret", { token: ana.token }, shopping, "private");
+    await pushed("beta", "plans", { token: bea.token }, referring("acme/secret#list"), "private");
+    await pushed("beta", "lunches", { token: bea.token }, referring("beta/plans#list", "Lunches"), "private");
+    const [link] = await linksOn("beta", "plans", "security", bea);
+    expect(link).toEqual({
+      part: "list",
+      title: "Linked to a workflow you can't see\nUsed by beta/lunches",
+      to: [{ label: "beta/lunches", href: "/beta/lunches" }],
+    });
+    expect(destination(link)).toBe("/beta/lunches");
+  });
+
   it("marks nothing on a workflow with no refs either way", async () => {
     const { ana } = await world();
     await pushed("acme", "shopping", { token: ana.token }, shopping);
@@ -168,12 +208,14 @@ describe("parts linked across tenants", () => {
 });
 
 // Just enough of an SVG document for marking a drawn node: Mermaid draws a
-// part as <g class="node" id="{drawing}-flowchart-{part}-{n}">.
+// part as <g class="node" id="{drawing}-flowchart-{part}-{n}">, its label in
+// a <span class="nodeLabel">.
 class FakeElement {
   attributes = new Map<string, string>();
   children: FakeElement[] = [];
   classes = new Set<string>();
   textContent = "";
+  innerText = "";
   classList = {
     add: (c: string) => this.classes.add(c),
     remove: (c: string) => this.classes.delete(c),
@@ -205,12 +247,16 @@ class FakeElement {
   getBBox() {
     return { x: -50, y: -20, width: 100, height: 40 };
   }
+  querySelector(selector: string) {
+    return selector === ".nodeLabel" ? (this.querySelectorAll(".nodeLabel")[0] ?? null) : null;
+  }
   querySelectorAll(selector: string) {
     const all: FakeElement[] = [];
     const walk = (e: FakeElement) => e.children.forEach((c) => (all.push(c), walk(c)));
     walk(this);
     if (selector === "g.node") return all.filter((e) => e.tagName === "g" && e.classes.has("node"));
     if (selector === ".part-target") return all.filter((e) => e.classes.has("part-target"));
+    if (selector === ".nodeLabel") return all.filter((e) => e.classes.has("nodeLabel"));
     throw new Error(`no fake for ${selector}`);
   }
 }
@@ -231,6 +277,11 @@ function drawing() {
   ]) {
     const g = new FakeElement("g", doc, id);
     g.classList.add(cls);
+    const label = new FakeElement("span", doc);
+    label.classList.add("nodeLabel");
+    // A label line by line, as the browser reads it.
+    label.innerText = id.includes("list") ? "📋\nShopping   list" : "Plan the week's dinners";
+    g.appendChild(label);
     root.appendChild(g);
   }
   return root as unknown as HTMLElement;
@@ -255,13 +306,18 @@ describe("finding and marking a part in the drawing", () => {
     expect(node.getAttribute("data-part-link")).toBe("list");
     expect(node.getAttribute("tabindex")).toBe("0");
     expect(node.getAttribute("role")).toBe("link");
-    expect(node.getAttribute("aria-label")).toBe("Linked to acme/shopping#list");
+    // Its own name first, then where it leads.
+    expect(node.getAttribute("aria-label")).toBe("📋 Shopping list. Linked to acme/shopping#list");
     expect(node.classes.has("part-linked")).toBe(true);
     expect(node.children[0].tagName).toBe("title");
     expect(node.children[0].textContent).toBe("Linked to acme/shopping#list");
     const mark = node.children.at(-1)!;
     expect(mark.classes.has("part-link-mark")).toBe(true);
-    expect(mark.getAttribute("transform")).toBe("translate(50, -20)");
+    // In the node's top-right corner, its circle (radius 9, half of a 2px stroke) inside the
+    // node's box, so a node at the drawing's edge doesn't lose it.
+    expect(mark.getAttribute("transform")).toBe("translate(40, -10)");
+    expect(mark.children[0].tagName).toBe("circle");
+    expect(mark.children[0].getAttribute("r")).toBe("9");
   });
 
   it("marks a node with several places to go as a button that opens a menu", () => {
@@ -276,6 +332,8 @@ describe("finding and marking a part in the drawing", () => {
     });
     expect(node.getAttribute("role")).toBe("button");
     expect(node.getAttribute("aria-haspopup")).toBe("menu");
+    expect(node.getAttribute("aria-expanded")).toBe("false");
+    expect(node.getAttribute("aria-label")).toBe("📋 Shopping list. Used by a/b and c/d");
   });
 
   it("marks a node it may not follow, with no link and no focus", () => {
@@ -284,6 +342,7 @@ describe("finding and marking a part in the drawing", () => {
     expect(node.getAttribute("tabindex")).toBeNull();
     expect(node.getAttribute("role")).toBeNull();
     expect(node.getAttribute("data-part-link")).toBeNull();
+    expect(node.getAttribute("aria-label")).toBeNull();
     expect(node.classes.has("part-linked")).toBe(true);
     expect(node.classes.has("part-link-off")).toBe(true);
     expect(node.children[0].textContent).toBe("Linked to a workflow you can't see");

@@ -1,8 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
+import type { PartLink } from "@/server/part-links";
 import { Mermaid } from "./Mermaid";
-import { destination, findPart, markPart, outlinePart, PartMenu, type PartLink } from "./part-links";
+import { destination, findPart, markPart, outlinePart, PartMenu } from "./PartLinks";
+import { follow, followsOnKey, lifted, moved, newTab, pressed, secondPointer, type Follow, type Press } from "./press";
 import {
   actualSize,
   fit,
@@ -11,8 +23,10 @@ import {
   naturalSize,
   pan,
   pinch,
+  reveal,
   STEP,
   zoomAt,
+  type Box,
   type Direction,
   type Point,
   type Size,
@@ -24,10 +38,12 @@ export const FRAME_LABEL = "Workflow drawing. Drag to move, pinch or Ctrl+scroll
 // A second tap this soon after the first, and this near it, is a double-tap.
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_PX = 30;
-// A pointer that moves further than this before it lifts dragged, not tapped.
-const TAP_SLOP_PX = 8;
 
 const KEYS: Record<string, Direction> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+
+// A marked part of the drawing, and where it leads.
+type Marked = { node: Element; link: PartLink };
+const NOT_ASKED = { newTab: false, menuOpen: false };
 
 // Whether a press landed on one of the controls' buttons. The gaps between them
 // belong to the frame, so a finger there still drags or pinches.
@@ -40,7 +56,8 @@ const sizeOf = (el: HTMLElement | null): Size => ({ width: el?.clientWidth ?? 0,
 // keyboard, or the controls in its corner. Until Mermaid has drawn it, the frame
 // keeps its size with no controls, and holds the text only without scripts.
 // Each part in `links` is marked once drawn, and a click, a tap or Enter on one
-// follows it, or opens a menu of where it leads; the part the address's
+// follows it, or opens a menu of where it leads, as a link would (see
+// press.ts); a part Tab reaches is moved into view. The part the address's
 // fragment names is outlined.
 export function PanZoom({ text, links = [] }: { text: string; links?: PartLink[] }) {
   const frame = useRef<HTMLDivElement>(null);
@@ -49,7 +66,8 @@ export function PanZoom({ text, links = [] }: { text: string; links?: PartLink[]
   // Whether the reader is still at Fit, so a resize fits again.
   const fitted = useRef(true);
   const pointers = useRef(new Map<number, Point>());
-  const press = useRef<{ start: Point; dragged: boolean; type: string; linked: Element | null }>(undefined);
+  // The press under way, and the marked part it began on.
+  const press = useRef<{ p: Press; marked?: Marked }>(undefined);
   const lastTap = useRef<{ at: number; p: Point }>(undefined);
   const lastType = useRef("");
   const [shown, setShown] = useState<View>(view.current);
@@ -57,8 +75,9 @@ export function PanZoom({ text, links = [] }: { text: string; links?: PartLink[]
   const [grabbing, setGrabbing] = useState(false);
   const drawnIn = useRef<HTMLDivElement>(undefined);
   const linksNow = useRef(links);
-  // The menu a part with several places to go opens, and the part it opened from.
-  const [menu, setMenu] = useState<{ link: PartLink; at: Point; from: Element }>();
+  // The menu a part with several places to go opens, the part it opened from,
+  // and that part's box in the frame.
+  const [menu, setMenu] = useState<{ link: PartLink; from: Element; node: Box }>();
   useEffect(() => {
     linksNow.current = links;
   });
@@ -83,6 +102,17 @@ export function PanZoom({ text, links = [] }: { text: string; links?: PartLink[]
   const pointIn = (e: { clientX: number; clientY: number }): Point => {
     const box = frame.current!.getBoundingClientRect();
     return { x: e.clientX - box.left, y: e.clientY - box.top };
+  };
+  const boxIn = (el: Element): Box => {
+    const box = frame.current!.getBoundingClientRect();
+    const at = el.getBoundingClientRect();
+    return { x: at.left - box.left, y: at.top - box.top, width: at.width, height: at.height };
+  };
+  // The marked part an event is on, when it leads anywhere, and its link.
+  const markedAt = (target: EventTarget | null): Marked | undefined => {
+    const node = (target as Element | null)?.closest?.("[data-part-link]");
+    const link = node && linksNow.current.find((l) => l.part === node.getAttribute("data-part-link"));
+    return node && link ? { node, link } : undefined;
   };
   const onControls = (e: { target: EventTarget }) => onControl(e.target);
 
@@ -149,29 +179,28 @@ export function PanZoom({ text, links = [] }: { text: string; links?: PartLink[]
     return () => document.removeEventListener("pointerdown", onPress);
   }, [menu]);
 
-  // Follows a marked part: to its one workflow, or a menu of several under it.
-  function follow(node: Element) {
-    const link = linksNow.current.find((l) => l.part === node.getAttribute("data-part-link"));
-    const to = link && destination(link);
-    if (!link || !to) return;
-    if (to !== "menu") {
-      window.location.assign(to);
-      return;
-    }
-    // Under the node, or above it when the frame has no room below, about as
-    // tall as its lines and links.
-    const box = frame.current!.getBoundingClientRect();
-    const at = node.getBoundingClientRect();
-    const tall = 16 + link.title.split("\n").length * 24 + link.to.length * 36;
-    const below = at.bottom - box.top + 6;
-    setMenu({
-      link,
-      at: {
-        x: Math.max(8, Math.min(at.left - box.left, box.width - 228)),
-        y: below + tall <= box.height ? below : Math.max(8, at.top - box.top - tall - 6),
-      },
-      from: node,
-    });
+  // A part's menu says whether it is open.
+  useEffect(() => {
+    if (!menu) return;
+    const from = menu.from;
+    from.setAttribute("aria-expanded", "true");
+    return () => from.setAttribute("aria-expanded", "false");
+  }, [menu]);
+
+  // How a marked part is asked to be followed, by a click or a key: in a new
+  // tab or not, and whether its menu is open already.
+  const asked = (marked: Marked, e: { button?: number; ctrlKey: boolean; metaKey: boolean }) => ({
+    newTab: newTab(e),
+    menuOpen: menu?.from === marked.node,
+  });
+
+  // Follows a marked part: to its one workflow, here or in a new tab, or
+  // opens or closes the menu of several by it.
+  function act({ node, link }: Marked, f: Follow) {
+    if (f === "close") closeMenu();
+    else if (f === "menu") setMenu({ link, from: node, node: boxIn(node) });
+    else if (f?.newTab) window.open(f.to, "_blank", "noopener");
+    else if (f) window.location.assign(f.to);
   }
 
   function closeMenu() {
@@ -185,14 +214,11 @@ export function PanZoom({ text, links = [] }: { text: string; links?: PartLink[]
     e.currentTarget.setPointerCapture(e.pointerId);
     const p = pointIn(e);
     pointers.current.set(e.pointerId, p);
-    if (pointers.current.size === 1)
-      press.current = {
-        start: p,
-        dragged: false,
-        type: e.pointerType,
-        linked: (e.target as Element | null)?.closest?.("[data-part-link]") ?? null,
-      };
-    else if (press.current) press.current.dragged = true;
+    if (pointers.current.size === 1) {
+      const marked = markedAt(e.target);
+      const to = marked ? destination(marked.link) : null;
+      press.current = { p: pressed(p, e.pointerType, to, marked ? asked(marked, e) : NOT_ASKED), marked };
+    } else if (press.current) press.current.p = secondPointer(press.current.p);
     setGrabbing(true);
   }
 
@@ -207,8 +233,7 @@ export function PanZoom({ text, links = [] }: { text: string; links?: PartLink[]
       return;
     }
     pointers.current.set(e.pointerId, p);
-    if (press.current && Math.hypot(p.x - press.current.start.x, p.y - press.current.start.y) > TAP_SLOP_PX)
-      press.current.dragged = true;
+    if (press.current) press.current.p = moved(press.current.p, p);
     show(pan(view.current, p.x - was.x, p.y - was.y));
   }
 
@@ -216,15 +241,17 @@ export function PanZoom({ text, links = [] }: { text: string; links?: PartLink[]
     if (!pointers.current.delete(e.pointerId)) return;
     if (pointers.current.size > 0) return;
     setGrabbing(false);
-    const pressed = press.current;
+    const ended = press.current;
     press.current = undefined;
+    const cancelled = e.type !== "pointerup";
     // A press on a marked part that didn't drag follows it.
-    if (e.type === "pointerup" && pressed?.linked && !pressed.dragged) {
-      follow(pressed.linked);
+    const followed = lifted(ended?.p, cancelled);
+    if (ended?.marked && followed) {
+      act(ended.marked, followed);
       return;
     }
     // Touch has no dblclick to rely on, so a double-tap is found here.
-    if (e.type !== "pointerup" || pressed?.type !== "touch" || pressed.dragged) return;
+    if (cancelled || ended?.p.type !== "touch" || ended.p.dragged) return;
     const p = pointIn(e);
     const last = lastTap.current;
     if (last && e.timeStamp - last.at < DOUBLE_TAP_MS && Math.hypot(p.x - last.p.x, p.y - last.p.y) < DOUBLE_TAP_PX) {
@@ -239,11 +266,39 @@ export function PanZoom({ text, links = [] }: { text: string; links?: PartLink[]
     zoom(STEP, pointIn(e));
   }
 
+  // The middle button opens a marked part's workflow in a new tab, as on a
+  // link, and doesn't start the browser scrolling.
+  function onAuxClick(e: MouseEvent<HTMLDivElement>) {
+    const marked = drawn && e.button === 1 ? markedAt(e.target) : undefined;
+    if (!marked) return;
+    e.preventDefault();
+    act(marked, follow(destination(marked.link), asked(marked, e)));
+  }
+  function onMouseDown(e: MouseEvent<HTMLDivElement>) {
+    if (e.button === 1 && markedAt(e.target)) e.preventDefault();
+  }
+
+  // A marked part Tab reaches is moved into view, as little as it takes. A
+  // click or a tap that focuses one leaves the drawing where it is, so the
+  // part doesn't jump from under the pointer, and its menu, which a tap
+  // focuses the part after opening, doesn't close.
+  function onFocus(e: FocusEvent<HTMLDivElement>) {
+    const marked = drawn ? markedAt(e.target) : undefined;
+    if (!marked?.node.matches(":focus-visible")) return;
+    const next = reveal(view.current, sizeOf(frame.current), boxIn(marked.node));
+    if (next.x !== view.current.x || next.y !== view.current.y) show(next);
+  }
+
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    if (!drawn || e.ctrlKey || e.metaKey || e.altKey) return;
-    const linked = e.key === "Enter" ? (e.target as Element).closest?.("[data-part-link]") : null;
-    if (linked) follow(linked);
-    else if (KEYS[e.key]) step(KEYS[e.key]);
+    if (!drawn) return;
+    const marked = markedAt(e.target);
+    if (marked && followsOnKey(e.key, marked.node.getAttribute("role"))) {
+      act(marked, follow(destination(marked.link), asked(marked, e)));
+      e.preventDefault();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (KEYS[e.key]) step(KEYS[e.key]);
     else if (e.key === "+" || e.key === "=") zoom(STEP);
     else if (e.key === "-") zoom(1 / STEP);
     else if (e.key === "0") actual();
@@ -264,6 +319,9 @@ export function PanZoom({ text, links = [] }: { text: string; links?: PartLink[]
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={onDoubleClick}
+      onAuxClick={onAuxClick}
+      onMouseDown={onMouseDown}
+      onFocus={onFocus}
       onKeyDown={onKeyDown}
     >
       <div
@@ -273,7 +331,7 @@ export function PanZoom({ text, links = [] }: { text: string; links?: PartLink[]
         <Mermaid text={text} onDrawn={onDrawn} />
       </div>
       {drawn && <PanZoomControls onMove={step} onZoom={zoom} onFit={toFit} onActual={actual} />}
-      {menu && <PartMenu link={menu.link} at={menu.at} onClose={closeMenu} />}
+      {menu && <PartMenu link={menu.link} node={menu.node} onClose={closeMenu} />}
     </div>
   );
 }

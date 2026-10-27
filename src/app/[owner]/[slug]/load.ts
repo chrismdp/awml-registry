@@ -1,12 +1,12 @@
 import { notFound, permanentRedirect } from "next/navigation";
 import { mistakesIn, type CheckedFile, type CheckRow } from "@/components/Checks";
-import { partLinks } from "@/components/part-links";
 import type { VersionViewProps } from "@/components/VersionView";
 import { engine, type ListedCheck } from "@/engine";
 import { asRead } from "@/server/as-read";
 import { refPath, refsAsSeen } from "@/server/refs";
 import { awmlOf, implementationsOf } from "@/server/awml-file";
 import { followOldName, isPageView, pageContext, underOwner, workflowPath, type PageView } from "@/server/page";
+import { partLinks } from "@/server/part-links";
 import { organisationsOf } from "@/server/organisations";
 import { forksOf, readVersion, referrersOf, VIEWS, type FileName, type View } from "@/server/registry";
 

@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Summary } from "@/engine";
 import { mcpUrl } from "@/server/http";
 import type { PageView } from "@/server/page";
+import type { PartLink } from "@/server/part-links";
 import type { FileName, Origin, Referrer, View } from "@/server/registry";
 import type { ShownRef } from "@/server/refs";
 import { fork } from "@/app/[owner]/[slug]/actions";
@@ -13,7 +14,6 @@ import { CopyButton } from "./CopyButton";
 import { ForkForm } from "./ForkForm";
 import { Versions, type ListedVersion } from "./VersionList";
 import { PanZoom } from "./PanZoom";
-import type { PartLink } from "./part-links";
 import { count } from "./words";
 
 export type VersionViewProps = {

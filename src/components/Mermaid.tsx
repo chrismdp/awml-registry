@@ -10,6 +10,11 @@ import { useEffect, useId, useLayoutEffect, useRef } from "react";
 // ELK by default, whose square-cornered lines kink and detour; 11 lays them out
 // with dagre. securityLevel "strict" is Mermaid 11's default, written out so it
 // stays strict whatever Mermaid's default becomes.
+//
+// The marks on parts linked to other workflows (PartLinks.tsx) find each
+// part's node by the id Mermaid 11.17.2 gives it, `{drawing}-flowchart-{id}-{n}`
+// on a `g.node`, and read its label from its `.nodeLabel`. An upgrade must
+// check that the marks still land on their parts.
 export const DRAWN_LIKE_AWML = {
   mermaid: "11.17.2",
   config: { startOnLoad: false, theme: "default", securityLevel: "strict" },
