@@ -18,7 +18,7 @@ import { mcpUrl, ownUrl } from "./http";
 import { fitWorkflow, type Fit } from "./fit";
 import { organisationsOf } from "./organisations";
 import { pushPlatformVersion, readPlatformVersion, searchPlatforms } from "./platforms";
-import { checkWorkflow, explore, ownerPage, pushVersion, readVersion } from "./registry";
+import { checkWorkflow, explore, forkWorkflow, ownerPage, pushVersion, readVersion } from "./registry";
 import { userIdForSecret } from "./tokens";
 import { renamedTo, savedNotice, setUsername } from "./usernames";
 import { viewerFor, type Viewer } from "./viewer";
@@ -173,7 +173,8 @@ function server(person: Person) {
       instructions:
         "The AWML registry stores and draws AWML 0.4 and 0.5 workflows, each one file holding its design and any " +
         "implementations, and the platforms they can run on. Use check to find mistakes in a workflow's file, " +
-        "publish to save a new version of owner/slug, get to read one, list for an " +
+        "publish to save a new version of owner/slug, fork_workflow to copy a public one into an owner of yours, " +
+        "get to read one, list for an " +
         "owner's workflows and search for public ones. Use search_platforms and get_platform to find platforms and " +
         "read their descriptions and install recipes, add_platform to save one, and fit_workflow to find where a " +
         "workflow can run. Use set_username to change the signed-in person's own username. Every call acts as the " +
@@ -229,6 +230,41 @@ function server(person: Person) {
         owner: pushed.owner,
         slug: pushed.slug,
         number: pushed.number,
+        url,
+      });
+    },
+  );
+
+  s.registerTool(
+    "fork_workflow",
+    {
+      title: "Fork a workflow",
+      description:
+        "Copy one version of a public workflow, owner/slug, into your own account or an organisation you belong to, as version 1 of a new workflow there. The file is copied unchanged, and the fork's page says where it came from. Only public workflows can be forked. Gives the fork's page and version number.",
+      inputSchema: z.object({
+        owner,
+        slug,
+        version: z.number().int().positive().optional().describe("The version to copy. Default: the latest."),
+        to_owner: owner.describe("Where the fork goes: your own username or an organisation you belong to"),
+        to_slug: slug.optional().describe("The fork's slug. Default: the original's"),
+        visibility: z.enum(["public", "private"]).optional().describe("Default public. Private on your own account is seen by you alone."),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ owner, slug, version, to_owner, to_slug, visibility }) => {
+      const db = await getDb();
+      const forked = await forkWorkflow(db, person, await current(db, owner), slug, {
+        owner: await current(db, to_owner),
+        slug: to_slug,
+        version,
+        visibility,
+      });
+      if (!forked.ok) return refused(forked.errors);
+      const url = page(forked.owner, forked.slug);
+      return answer(`Forked ${owner}/${slug} to ${forked.owner}/${forked.slug}: ${url}`, {
+        owner: forked.owner,
+        slug: forked.slug,
+        number: forked.number,
         url,
       });
     },

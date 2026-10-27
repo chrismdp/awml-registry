@@ -184,7 +184,7 @@ describe("the versions in a workflow's header", () => {
     });
     expect(res.status).toBe(201);
     const head = headOf((await renderPage(WorkflowPage, { owner: ana.username, slug: "dinners" })).html);
-    expect(text(head)).toMatch(/Public · Version 1 of 1$/);
+    expect(text(head)).toMatch(/Public · Version 1 of 1 Fork$/);
     expect(head).not.toMatch(/<details|<button|<dialog|class="versions"/);
   });
 });

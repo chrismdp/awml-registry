@@ -4,6 +4,7 @@ import * as auth from "@/app/api/auth/[...all]/route";
 import * as workflowApi from "@/app/api/v1/[owner]/[slug]/route";
 import * as versionsApi from "@/app/api/v1/[owner]/[slug]/versions/route";
 import * as versionApi from "@/app/api/v1/[owner]/[slug]/v/[n]/route";
+import * as forkApi from "@/app/api/v1/[owner]/[slug]/fork/route";
 import * as yamlFile from "@/app/[owner]/[slug]/v/[n]/[file]/route";
 import * as platformApi from "@/app/api/v1/platforms/[owner]/[slug]/route";
 import * as platformVersionsApi from "@/app/api/v1/platforms/[owner]/[slug]/versions/route";
@@ -39,6 +40,7 @@ const routes: [RegExp, Module][] = [
   [/^\/platforms\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/v\/(?<n>[^/]+)\/(?<file>[^/]+)$/, oldPlatformFile as Module],
   [/^\/(?<owner>[^/]+)\/platforms\/(?<slug>[^/]+)\/v\/(?<n>[^/]+)\/(?<file>[^/]+)$/, platformFile as Module],
   [/^\/api\/v1\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/versions$/, versionsApi as Module],
+  [/^\/api\/v1\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/fork$/, forkApi as Module],
   [/^\/api\/v1\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/v\/(?<n>[^/]+)$/, versionApi as Module],
   [/^\/api\/v1\/(?<owner>[^/]+)\/(?<slug>[^/]+)$/, workflowApi as Module],
   [/^\/api\/orgs$/, orgs as Module],

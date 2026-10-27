@@ -2,10 +2,12 @@ import Link from "next/link";
 import type { Summary } from "@/engine";
 import { mcpUrl } from "@/server/http";
 import type { PageView } from "@/server/page";
-import type { FileName, View } from "@/server/registry";
+import type { FileName, Origin, View } from "@/server/registry";
+import { fork } from "@/app/[owner]/[slug]/actions";
 import { names, stepCount } from "@/server/summary";
 import { Checks, mistakesIn, Tick, type CheckedFile } from "./Checks";
 import { CopyButton } from "./CopyButton";
+import { ForkForm } from "./ForkForm";
 import { Versions, type ListedVersion } from "./VersionList";
 import { PanZoom } from "./PanZoom";
 import { count } from "./words";
@@ -16,6 +18,15 @@ export type VersionViewProps = {
   title: string;
   visibility: "public" | "private";
   number: number;
+  // Whether this workflow is a fork, and of which version, when the viewer
+  // may see the original.
+  forked: boolean;
+  forkedFrom: Origin | null;
+  // The forks of this workflow the viewer may see: how many, and the newest.
+  forks: { total: number; forks: (Origin & { title: string; visibility: "public" | "private" })[] };
+  // How the viewer may fork it: into one of their owners, or after signing
+  // in. Null for a private workflow, which cannot be forked.
+  fork: { owners: string[] } | { signIn: string } | null;
   // The page's address without a view: /owner/slug for the latest version,
   // /owner/slug/v/n for one version. Each view is at this address/view.
   address: string;
@@ -93,7 +104,36 @@ export function VersionView(p: VersionViewProps) {
                 href={(n) => `${n === latest ? base : `${base}/v/${n}`}${p.tab}`}
               />
             </div>
+            {p.fork &&
+              ("owners" in p.fork ? (
+                <ForkForm
+                  action={fork}
+                  from={`${p.owner}/${p.slug}`}
+                  version={p.number}
+                  slug={p.slug}
+                  owners={p.fork.owners}
+                />
+              ) : (
+                <a className="button outline fork-link" href={p.fork.signIn}>
+                  Fork
+                </a>
+              ))}
           </div>
+          {p.forked && (
+            <p className="forked-from">
+              {p.forkedFrom ? (
+                <>
+                  Forked from{" "}
+                  <Link href={`/${p.forkedFrom.owner}/${p.forkedFrom.slug}/v/${p.forkedFrom.number}`}>
+                    {`${p.forkedFrom.owner}/${p.forkedFrom.slug}`}
+                  </Link>
+                  {`, version ${p.forkedFrom.number}`}
+                </>
+              ) : (
+                "Forked from another workflow"
+              )}
+            </p>
+          )}
         </div>
       </section>
 
@@ -217,6 +257,28 @@ export function VersionView(p: VersionViewProps) {
                 ))}
               </dl>
             </section>
+
+            {p.forks.total > 0 && (
+              <section className="side">
+                <h2>
+                  Forks <span className="tab-count">{p.forks.total}</span>
+                </h2>
+                <ul className="forks">
+                  {p.forks.forks.map((f) => (
+                    <li key={`${f.owner}/${f.slug}`}>
+                      <Link href={`/${f.owner}/${f.slug}`}>{`${f.owner}/${f.slug}`}</Link>
+                      <span className="note">
+                        {` · from version ${f.number}`}
+                        {f.visibility === "private" ? " · private" : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {p.forks.total > p.forks.forks.length && (
+                  <p className="after">The newest {p.forks.forks.length} are shown.</p>
+                )}
+              </section>
+            )}
           </aside>
         </div>
       )}

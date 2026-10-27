@@ -4,7 +4,8 @@ import type { VersionViewProps } from "@/components/VersionView";
 import { engine } from "@/engine";
 import { implementationsOf } from "@/server/awml-file";
 import { followOldName, isPageView, pageContext, underOwner, workflowPath, type PageView } from "@/server/page";
-import { readVersion, VIEWS, type FileName, type View } from "@/server/registry";
+import { organisationsOf } from "@/server/organisations";
+import { forksOf, readVersion, VIEWS, type FileName, type View } from "@/server/registry";
 
 // One version for its page, `n` or "latest", with the view asked for: a view
 // drawn, every file as text for "yaml", or what checking them found for
@@ -80,12 +81,24 @@ export async function loadVersion(
   const source: FileName | undefined = workflow ? "workflow" : views.find((view) => view === shown);
   const nowhere = Boolean(workflow) && shown === "platform" && !placed;
   const drawable = source && !nowhere && mistakesIn(checks.filter((c) => c.name === source)) === 0;
+  // A public workflow can be forked into the viewer's own account or one of
+  // their organisations; someone signed out is asked to sign in first.
+  const fork =
+    v.visibility !== "public"
+      ? null
+      : viewer
+        ? { owners: [viewer.username, ...(await organisationsOf(db, viewer.id)).map((o) => o.slug)] }
+        : { signIn: `/login?${new URLSearchParams({ next: address })}` };
   return {
     owner: v.owner,
     slug: v.slug,
     title: v.title,
     visibility: v.visibility,
     number: v.number,
+    forked: v.forked,
+    forkedFrom: v.forkedFrom,
+    forks: (await forksOf(db, viewer, v.owner, v.slug)) ?? { total: 0, forks: [] },
+    fork,
     address,
     // The page's own address draws the security view whenever a version has
     // one, so the security view's links leave it off, as the same page.
