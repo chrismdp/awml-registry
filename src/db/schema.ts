@@ -391,6 +391,69 @@ export const platformVersion = sqliteTable(
   (t) => [uniqueIndex("platform_version_platform_number_idx").on(t.platformId, t.number)],
 );
 
+// A system: several workflows given to the engine together. Owned like a
+// workflow, and versioned like one.
+export const system = sqliteTable(
+  "system",
+  {
+    id: id(),
+    ownerUserId: text("owner_user_id").references(() => user.id),
+    ownerOrganisationId: text("owner_organisation_id").references(() => organisation.id),
+    slug: text("slug").notNull(),
+    title: text("title").notNull(),
+    visibility: text("visibility", { enum: ["public", "private"] }).notNull(),
+    createdAt: createdAt(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
+  },
+  (t) => [
+    uniqueIndex("system_user_slug_idx").on(t.ownerUserId, t.slug),
+    uniqueIndex("system_org_slug_idx").on(t.ownerOrganisationId, t.slug),
+    index("system_visibility_updated_idx").on(t.visibility, t.updatedAt),
+    check("system_one_owner", sql`(${t.ownerUserId} IS NULL) <> (${t.ownerOrganisationId} IS NULL)`),
+  ],
+);
+
+// One version of a system: its title, its description as Markdown, and its
+// members (system_member).
+export const systemVersion = sqliteTable(
+  "system_version",
+  {
+    id: id(),
+    systemId: text("system_id")
+      .notNull()
+      .references(() => system.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    pushedBy: text("pushed_by").notNull().references(() => user.id),
+    pushedAt: integer("pushed_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+  },
+  (t) => [uniqueIndex("system_version_system_number_idx").on(t.systemId, t.number)],
+);
+
+// A workflow in a system's version, in the order it was pushed. It follows
+// the workflow's latest version, so it records no version. The workflow is
+// held by its id, so a rename of its owner is followed, and not as a foreign
+// key, so a deleted one is still known to have been there; its owner and slug
+// as pushed say what it was.
+export const systemMember = sqliteTable(
+  "system_member",
+  {
+    id: id(),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => systemVersion.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    workflowId: text("workflow_id").notNull(),
+    owner: text("owner").notNull(),
+    slug: text("slug").notNull(),
+  },
+  (t) => [
+    index("system_member_version_idx").on(t.versionId),
+    index("system_member_workflow_idx").on(t.workflowId),
+  ],
+);
+
 export const token = sqliteTable(
   "token",
   {

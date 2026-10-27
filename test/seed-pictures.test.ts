@@ -6,8 +6,10 @@ import { describe, expect, it } from "vitest";
 import { getDb } from "@/db/client";
 import { findOwner } from "@/server/owners";
 import { listMembers } from "@/server/organisations";
+import SystemPage from "@/app/[owner]/systems/[slug]/page";
 import { seed } from "../scripts/seed-pictures";
 import { BASE, request, sentEmails } from "./helpers";
+import { renderPage } from "./pages";
 import { route } from "./router";
 
 async function signInLink(email: string) {
@@ -89,6 +91,20 @@ describe("seeding a registry for the build's pictures", () => {
       { owner: "acme", slug: "pantry", title: "The family's pantry", visibility: "public", parts: ["favourites"] },
       { owner: "acme", slug: "shopping", title: "The family's shopping", visibility: "public", parts: ["favourites"] },
     ]);
+  });
+
+  it("pushes acme/systems/kitchen, public, holding ana's private dinners, which a visitor sees only counted", async () => {
+    const { cookie } = await seeded();
+    const toVisitor = await renderPage(SystemPage, { owner: "acme", slug: "kitchen" });
+    expect(toVisitor.status).toBe(200);
+    expect(toVisitor.html).toContain("<h1>The family&#x27;s kitchen</h1>");
+    expect(toVisitor.html).toContain('href="/acme/dinners"');
+    expect(toVisitor.html).toContain('href="/acme/shopping"');
+    expect(toVisitor.html).toContain("1 private workflow");
+    expect(toVisitor.html).toContain("subgraph");
+    const toAna = await renderPage(SystemPage, { owner: "acme", slug: "kitchen" }, { as: { cookie } });
+    expect(toAna.html).toContain('href="/ana/dinners"');
+    expect(toAna.html).not.toContain("private workflow");
   });
 
   it("pushes acme's platforms, the worker at two versions with its recipe and one kept private", async () => {

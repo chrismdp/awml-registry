@@ -10,7 +10,7 @@ export const RESERVED_SLUGS = new Set([
 ]);
 
 // Paths under an owner that no workflow may take.
-export const RESERVED_WORKFLOW_SLUGS = new Set(["inventory", "settings", "platforms"]);
+export const RESERVED_WORKFLOW_SLUGS = new Set(["inventory", "settings", "platforms", "systems"]);
 
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 
@@ -35,6 +35,12 @@ export function workflowSlugProblem(slug: string): string | null {
 export function platformSlugProblem(slug: string): string | null {
   if (!isSlug(slug))
     return "A platform's slug is 1 to 40 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.";
+  return null;
+}
+
+export function systemSlugProblem(slug: string): string | null {
+  if (!isSlug(slug))
+    return "A system's slug is 1 to 40 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.";
   return null;
 }
 

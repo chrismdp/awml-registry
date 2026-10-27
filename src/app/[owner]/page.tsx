@@ -11,7 +11,7 @@ export default async function OwnerPage({ params }: { params: Promise<{ owner: s
     await followOldName(db, slug);
     notFound();
   }
-  const { owner, member, workflows } = page;
+  const { owner, member, workflows, systems } = page;
   const isOrg = owner.type === "organisation";
   return (
     <section className="plain-page">
@@ -44,6 +44,21 @@ export default async function OwnerPage({ params }: { params: Promise<{ owner: s
             </li>
           ))}
         </ul>
+      )}
+      {systems.length > 0 && (
+        <>
+          <h2>Systems</h2>
+          <ul className="list">
+            {systems.map((s) => (
+              <li key={s.slug}>
+                <Link href={`/${owner.slug}/systems/${s.slug}`}>{s.title}</Link>{" "}
+                <small>
+                  systems/{s.slug} · {s.visibility} · updated {dateTime(s.updatedAt)}
+                </small>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </section>
   );

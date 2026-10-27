@@ -8,7 +8,7 @@
 // ones and those of the viewer's own organisations in its query.
 
 // The checked ways in, by file: src/server/registry.ts, src/server/platforms.ts,
-// src/server/fit.ts and src/server/organisations.ts.
+// src/server/systems.ts, src/server/fit.ts and src/server/organisations.ts.
 export const ENTRY_POINTS = [
   "readWorkflow",
   "readVersion",
@@ -21,6 +21,8 @@ export const ENTRY_POINTS = [
   "pushPlatformVersion",
   "ownerPlatforms",
   "visiblePlatforms",
+  "readSystemVersion",
+  "pushSystemVersion",
   "fitWorkflow",
   "organisationToManage",
   "addMember",

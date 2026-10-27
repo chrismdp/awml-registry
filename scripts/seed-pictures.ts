@@ -20,7 +20,9 @@
 // - ana/family-dinners, public, a fork of acme/dinners at version 1;
 // - acme/platforms/worker, public, at two versions: without an install recipe, then with one;
 // - acme/platforms/codex-laptop, public;
-// - acme/platforms/cowork-mac-mini, private.
+// - acme/platforms/cowork-mac-mini, private;
+// - acme/systems/kitchen, public, holding acme/dinners, acme/shopping and ana's private
+//   ana/dinners, so a visitor sees "1 private workflow" where ana sees all three.
 //
 // A change that needs more data to show adds it here. The pictures of main use main's copy of
 // this file, and the pictures of the change use the change's copy.
@@ -53,6 +55,12 @@ const recipe = `# Install on a code worker
 2. Put the Anthropic key in the worker's secret store as ANTHROPIC_API_KEY.
 3. Schedule each trigger with the worker's cron.
 4. Check the worker's log after the first run.
+`;
+
+const kitchen = `Everything that keeps the family's kitchen going: **dinners** planned each week, and the
+**shopping** topped up from the same list.
+
+Ana keeps her own copy of the dinners private.
 `;
 
 export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ cookie: string }> {
@@ -119,6 +127,19 @@ export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ c
   ];
   for (const [path, json] of pushes) await call("POST", path, { json }, ana);
   await call("POST", "/api/v1/acme/dinners/fork", { json: { owner: "ana", slug: "family-dinners", version: 1 } }, ana);
+  await call(
+    "POST",
+    "/api/v1/acme/systems/kitchen/versions",
+    {
+      json: {
+        title: "The family's kitchen",
+        description: kitchen,
+        members: ["acme/dinners", "acme/shopping", "ana/dinners"],
+        visibility: "public",
+      },
+    },
+    ana,
+  );
 
   return { cookie: ana };
 }

@@ -96,7 +96,7 @@ A username follows the same rules as an organisation's: lowercase letters, digit
 
 Your registry is also an MCP server, at `/mcp` on its address. Below, `<registry>` is that address: the `BETTER_AUTH_URL` of your own registry, or `https://awml.io` for the official one. Every address the sign-in gives out comes from `BETTER_AUTH_URL` too.
 
-Connect your AI to it and it can check, read and publish workflows as you, with the tools `check`, `publish`, `get`, `list` and `search`. It can find and add platforms with `search_platforms`, `get_platform` and `add_platform`, find where a workflow can run with `fit_workflow`, and change your username with `set_username`. Then it can follow a platform's recipe to install the workflow there. `docs/SPEC.md` says what each tool does. It runs on your account, and the registry sends nothing to a model.
+Connect your AI to it and it can check, read and publish workflows as you, with the tools `check`, `publish`, `get`, `list` and `search`. It can find and add platforms with `search_platforms`, `get_platform` and `add_platform`, find where a workflow can run with `fit_workflow`, save a system of several workflows seen together with `publish_system`, and change your username with `set_username`. Then it can follow a platform's recipe to install the workflow there. `docs/SPEC.md` says what each tool does. It runs on your account, and the registry sends nothing to a model.
 
 Every request to `/mcp` needs you signed in, so your AI asks you to sign in when you connect it. Public workflows stay readable without an account on the website, through the API and with `awml pull`.
 

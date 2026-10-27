@@ -8,8 +8,8 @@ import type { Viewer } from "./viewer";
 
 export type Visibility = "public" | "private";
 
-// What is pushed: a workflow or a platform, named in the refusals.
-export type Kind = "workflow" | "platform";
+// What is pushed: a workflow, a platform or a system, named in the refusals.
+export type Kind = "workflow" | "platform" | "system";
 
 export const SIGN_IN_TO_PUSH = "Sign in, or send a token as Authorization: Bearer <token>.";
 
@@ -28,8 +28,8 @@ export async function mayPushTo(
 
 // The first push sets an item's visibility, public unless it asks otherwise,
 // and a later push cannot change it. An organisation keeps private items of
-// both kinds, a user only private workflows, up to the edition's limit (see
-// pushVersion). The edition may stop an organisation pushing, or keeping
+// every kind, a user private workflows, up to the edition's limit (see
+// pushVersion), and private systems, with no limit. The edition may stop an organisation pushing, or keeping
 // private items.
 export async function pushedVisibility(
   owner: Owner,

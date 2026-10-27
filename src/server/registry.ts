@@ -12,6 +12,7 @@ import { awmlOf, isOlderAwml, readYaml, WORKFLOW_IS_TOO_OLD } from "./awml-file"
 import { namedAtPush, refPath, rewriteRefs, type Rewrite } from "./refs";
 import { refuse, type Result } from "./result";
 import { workflowSlugProblem } from "./slugs";
+import { ownerSystems, systemsOf } from "./systems";
 import type { Viewer } from "./viewer";
 
 export const VIEWS = ["security", "platform"] as const;
@@ -410,7 +411,15 @@ export async function readWorkflow(db: Db, viewer: Viewer, ownerSlug: string, sl
     ...(await originOf(db, viewer, w.forkedFrom)),
     versions: await versionList(db, w.id),
     referredBy: await referrers(db, viewer, owner, w),
+    systems: await systemsOf(db, viewer, w.id),
   };
+}
+
+// The systems a workflow is in that the viewer may see (see systemsOf). Null
+// for a workflow the viewer may not read.
+export async function systemsWith(db: Db, viewer: Viewer, ownerSlug: string, slug: string) {
+  const found = await readable(db, viewer, ownerSlug, slug);
+  return found ? systemsOf(db, viewer, found.workflow.id) : null;
 }
 
 export async function readVersion(
@@ -512,7 +521,8 @@ export async function explore(db: Db, query = "", limit = 50) {
     .limit(limit);
 }
 
-// An owner's workflows: the public ones to everyone, the private ones to members too.
+// An owner's workflows and systems: the public ones to everyone, the private
+// ones to members too.
 export async function ownerPage(db: Db, viewer: Viewer, ownerSlug: string) {
   const owner = await findOwner(db, ownerSlug);
   if (!owner) return null;
@@ -522,7 +532,7 @@ export async function ownerPage(db: Db, viewer: Viewer, ownerSlug: string) {
     .from(workflow)
     .where(and(ownerColumn(owner), member ? undefined : eq(workflow.visibility, "public")))
     .orderBy(desc(workflow.updatedAt));
-  return { owner, member, workflows };
+  return { owner, member, workflows, systems: await ownerSystems(db, owner, member) };
 }
 
 // Every workflow of an organisation with its latest summary, and the totals across them.

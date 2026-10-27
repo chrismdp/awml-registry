@@ -12,6 +12,7 @@ import * as platformVersionApi from "@/app/api/v1/platforms/[owner]/[slug]/v/[n]
 import * as pullPlatformApi from "@/app/api/v1/[owner]/platforms/[slug]/route";
 import * as pullPlatformVersionApi from "@/app/api/v1/[owner]/platforms/[slug]/v/[n]/route";
 import * as platformFile from "@/app/[owner]/platforms/[slug]/v/[n]/[file]/route";
+import * as systemVersionsApi from "@/app/api/v1/[owner]/systems/[slug]/versions/route";
 import * as oldPlatformFile from "@/app/platforms/[owner]/[slug]/v/[n]/[file]/route";
 import * as fitApi from "@/app/api/v1/fit/route";
 import * as meApi from "@/app/api/v1/me/route";
@@ -37,6 +38,7 @@ const routes: [RegExp, Module][] = [
   [/^\/api\/v1\/platforms\/(?<owner>[^/]+)\/(?<slug>[^/]+)$/, platformApi as Module],
   [/^\/api\/v1\/(?<owner>[^/]+)\/platforms\/(?<slug>[^/]+)\/v\/(?<n>[^/]+)$/, pullPlatformVersionApi as Module],
   [/^\/api\/v1\/(?<owner>[^/]+)\/platforms\/(?<slug>[^/]+)$/, pullPlatformApi as Module],
+  [/^\/api\/v1\/(?<owner>[^/]+)\/systems\/(?<slug>[^/]+)\/versions$/, systemVersionsApi as Module],
   [/^\/platforms\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/v\/(?<n>[^/]+)\/(?<file>[^/]+)$/, oldPlatformFile as Module],
   [/^\/(?<owner>[^/]+)\/platforms\/(?<slug>[^/]+)\/v\/(?<n>[^/]+)\/(?<file>[^/]+)$/, platformFile as Module],
   [/^\/api\/v1\/(?<owner>[^/]+)\/(?<slug>[^/]+)\/versions$/, versionsApi as Module],

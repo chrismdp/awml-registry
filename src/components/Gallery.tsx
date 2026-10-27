@@ -4,7 +4,10 @@ import { Mermaid } from "./Mermaid";
 
 type Card = { owner: string; slug: string; title: string; summary: Summary; mermaid: string };
 
-export function Gallery({ cards, q }: { cards: Card[]; q: string }) {
+// A public system, listed in its own section after the workflows.
+type ListedSystem = { owner: string; slug: string; title: string };
+
+export function Gallery({ cards, systems, q }: { cards: Card[]; systems: ListedSystem[]; q: string }) {
   return (
     <>
       <section className="gallery-head">
@@ -44,6 +47,22 @@ export function Gallery({ cards, q }: { cards: Card[]; q: string }) {
               </div>
             </Link>
           ))}
+        </section>
+      )}
+      {systems.length > 0 && (
+        <section className="gallery-systems">
+          <h2>Systems</h2>
+          <p>Several workflows drawn, checked and fitted together.</p>
+          <ul className="list">
+            {systems.map((s) => (
+              <li key={`${s.owner}/${s.slug}`}>
+                <Link href={`/${s.owner}/systems/${s.slug}`}>{s.title}</Link>{" "}
+                <small>
+                  {s.owner} / systems / {s.slug}
+                </small>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
     </>

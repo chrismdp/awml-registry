@@ -79,6 +79,7 @@ describe("the MCP server at /mcp", () => {
       "get_platform",
       "list",
       "publish",
+      "publish_system",
       "search",
       "search_platforms",
       "set_username",
