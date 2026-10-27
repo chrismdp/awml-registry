@@ -4,12 +4,19 @@ is wanted now.
 
 The issue, with only the comments of the repository's own people, is in BUILD_DIR/issue.md. Read
 it, then read AGENTS.md and follow it, and read docs/SPEC.md before changing anything it describes.
-The dependencies are already installed, so the Next.js guides AGENTS.md points to are in
-node_modules/next/dist/docs/. If issue.md ends with a section saying the last try failed, your job
-is to make a change that passes where that try failed, not to start over without a reason.
+Read REVIEW.md too: once the checks pass, two fresh reviews hold the change to it. The dependencies
+are already installed, so the Next.js guides AGENTS.md points to are in node_modules/next/dist/docs/.
+If issue.md ends with a section saying the last try failed, your job is to make a change that
+passes where that try failed, not to start over without a reason. If it lists what the reviews
+found, fix each Important finding, and any other you agree with.
 
 - If the issue leaves a choice open, build what the maintainer decided in their comments. If they
   haven't said which option they chose, change nothing, and say so in the message.
+- If you're not sure, ask: it is always fine to escalate. Where the issue leaves open a choice that
+  changes what a reader sees, such as dropping or rewording something a page shows, or changing
+  how a drawing reads, don't choose. Change nothing, and write the message as the question for the
+  maintainer: the choice, the options, and which you'd recommend. It is posted on the issue, and
+  the build waits for their answer there.
 - Test first: write a failing vitest test for each behaviour before the code that passes it.
 - Keep docs/SPEC.md true. A change to what the registry does updates the spec in the same change,
   with the date it was decided, as the spec's own entries do.
@@ -21,17 +28,10 @@ is to make a change that passes where that try failed, not to start over without
 - This repo has no billing code. Anything to do with payment belongs in the hosted service, not
   here; say so in the message instead of building it.
 - Run `npm run typecheck`, `npm run lint` and `npm test` until they all pass.
-- Don't commit, push or open anything. Leave the change in the working tree. A later job applies
-  it, runs the checks again and opens the pull request.
+- Don't commit, push or open anything. Leave the change in the working tree. Later jobs apply it,
+  run the checks again, review it and open the pull request.
 - Something new that the issue doesn't ask for goes in the message as a suggested issue, not in
   the change.
-
-If the change needs the maintainer's eyes, write BUILD_DIR/review.md and say why. It needs their
-eyes if you made a decision the issue and its comments didn't settle, chose between options,
-changed behaviour beyond what the issue asks, or aren't sure. Otherwise don't write that file.
-Your note can send a change to review, but it can never skip a review required by the build rules.
-Write it in GitHub Markdown for the reviewer, with each decision as its own bullet and what you'd
-like them to look at, and don't wrap lines by hand. It goes into the pull request as you wrote it.
 
 If the change alters what any page shows, write BUILD_DIR/pictures.json, naming each page it
 alters, at most 20. A later job pictures each one on main and with your change, at desktop width
@@ -43,17 +43,23 @@ people, organisation, workflows and platforms there are, and so which paths to n
 shows when someone uses the page, such as a drawing being zoomed or a menu opening, also give
 "moves", at most 10, each one of `{"scroll": "<selector>"}`, `{"click": "<selector>"}`,
 `{"press": "<key>", "on": "<selector>"}`, `{"drag": "<selector>", "by": [x, y]}` or
-`{"wait": <milliseconds, up to 5000>}`; that page is then recorded as a GIF of those moves. If your
-change needs data the seed doesn't make to show, add it to scripts/seed-pictures.ts and its test.
-If the change alters no page, as a change to the server alone, the tests or the workflows doesn't,
-don't write the file.
+`{"wait": <milliseconds, up to 5000>}`; that page is then recorded as a GIF of those moves. A
+reviewer should see the change, not only read the test that asks for it, so if your change alters
+how something is shown and no page the seed makes shows it, make one show it: add the workflow,
+platform or system it needs to scripts/seed-pictures.ts and its test, and name its page. Add to the
+seed rather than change what it already makes, which every page's pictures show; change that only
+by asking, as above. If the change alters no page, as a change to the server alone, the tests or
+the workflows doesn't, don't write the file.
 
 Write BUILD_DIR/message.md: a first line under 70 characters saying what changed, a blank line,
 then plainly what changed and why, as a commit message in this repository would. Don't add
-"Closes"; the next job adds it.
+"Closes"; a later job adds it.
 
 Finally, write BUILD_DIR/pull-request.md, the pull request's description, in GitHub Markdown with
 no hard wrapping: each paragraph and each bullet on one line. Open with a short paragraph saying
 what the change does and why. Then `## What changed`, as bullets. Then `## Decisions`, as bullets,
-only if you made decisions the issue and its comments didn't settle. Leave out a title, review
-reasons, pictures, checks and "Closes": the next job adds them.
+only if you made a decision the issue and its comments didn't settle, chose between options,
+changed behaviour beyond what the issue asks, or aren't sure, saying for each what you'd like the
+reviewer to look at. Leave out a title, review reasons, pictures, checks and "Closes": a later job
+adds them. You don't decide whether the change needs review: the build rule does, after the
+reviews.

@@ -1,12 +1,12 @@
 // The build rule: whether a change the build workflow drafted is straightforward enough to merge by
-// itself, or needs the maintainer's review. It reads the change staged in a repository and the
-// settings in .github/build-rules.yml, and prints "review" or "straightforward", then one reason a
-// line. The build workflow runs main's copy of it, with main's settings, before the change is
-// applied, so a change can't alter how it's judged.
+// itself, or needs the maintainer's review. It reads the change staged in a repository, the
+// settings in .github/build-rules.yml, the build's reviews' findings and the classifier's verdict,
+// and prints "review" or "straightforward", then one reason a line. land.yml runs main's copy of
+// it, with main's settings, once CI has passed, so a change can't alter how it's judged.
 //
 // It needs nothing but Node and git, so the job that runs it installs nothing:
 //   node --experimental-strip-types scripts/build-rule.ts --repo . --rules .github/build-rules.yml \
-//     --review review.md
+//     --findings findings.json --classification classification.json
 // This is the registry's copy of AWML's internal/buildrule, with the registry's own test files.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -15,6 +15,9 @@ import { parseArgs } from "node:util";
 
 export type Config = { reviewPaths: string[]; maxChangedLines: number };
 export type Verdict = { review: boolean; reasons: string[] };
+// The reviews' record and the classifier's verdict, as files the build's review job wrote. Either
+// may be left out: the classifier doesn't run when the reviews leave an Important finding open.
+export type Records = { findings?: string; classification?: string };
 
 const testFile = /\.test\.(ts|tsx|mjs)$/;
 // A removed line that declared a test or a group of them, including one that was only changed to
@@ -73,17 +76,17 @@ export function readConfig(text: string): Config {
   return config;
 }
 
-export function evaluate(repo: string, config: Config, reviewPath = ""): Verdict {
+export function evaluate(repo: string, config: Config, records: Records = {}): Verdict {
   const reasons: string[] = [];
 
-  if (reviewPath !== "") {
-    const note = readNote(reviewPath);
-    // The pull request quotes a note in full, so the reason only points to it.
-    if (note !== undefined) {
-      reasons.push(
-        note.trim() === "" ? "Claude asked for the maintainer's review." : "Claude asked for a review: see Claude's note.",
-      );
-    }
+  if (records.findings !== undefined) {
+    const open = openFindings(records.findings);
+    if (open === 1) reasons.push("The reviews left 1 finding open.");
+    else if (open > 1) reasons.push(`The reviews left ${open} findings open.`);
+  }
+
+  if (records.classification !== undefined && classifierAsked(records.classification)) {
+    reasons.push("The classifier asked for a review.");
   }
 
   const paths = nulFields(git(repo, "diff", "--cached", "--name-only", "--no-renames", "-z", "--"));
@@ -116,12 +119,33 @@ export function evaluate(repo: string, config: Config, reviewPath = ""): Verdict
   return { review: true, reasons };
 }
 
-function readNote(path: string): string | undefined {
+// Counts the findings about the change itself. A pre-existing one is about code the change didn't
+// write, so it's shown but leaves the change straightforward.
+function openFindings(path: string): number {
+  const findings = readRecord(path, "the reviews' findings");
+  if (!Array.isArray(findings)) throw new Error("the reviews' findings aren't a list");
+  let open = 0;
+  for (const finding of findings) {
+    const severity = (finding as { severity?: unknown } | null)?.severity;
+    if (severity === "Important" || severity === "Nit") open++;
+    else if (severity !== "Pre-existing") throw new Error(`a finding has an unknown severity ${JSON.stringify(severity)}`);
+  }
+  return open;
+}
+
+// Whether the classifier asked for a review. It can only add a review, so its answer of no changes
+// nothing.
+function classifierAsked(path: string): boolean {
+  const verdict = readRecord(path, "the classifier's verdict") as { needs_review?: unknown } | null;
+  if (typeof verdict?.needs_review !== "boolean") throw new Error("the classifier's verdict has no needs_review");
+  return verdict.needs_review;
+}
+
+function readRecord(path: string, what: string): unknown {
   try {
-    return readFileSync(path, "utf8");
+    return JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw new Error(`read Claude's review note: ${(error as Error).message}`);
+    throw new Error(`read ${what}: ${(error as Error).message}`);
   }
 }
 
@@ -158,10 +182,14 @@ function main() {
     options: {
       repo: { type: "string", default: "." },
       rules: { type: "string", default: ".github/build-rules.yml" },
-      review: { type: "string", default: "" },
+      findings: { type: "string" },
+      classification: { type: "string" },
     },
   });
-  const verdict = evaluate(values.repo, loadConfig(values.rules), values.review);
+  const verdict = evaluate(values.repo, loadConfig(values.rules), {
+    findings: values.findings,
+    classification: values.classification,
+  });
   console.log(verdict.review ? "review" : "straightforward");
   for (const reason of verdict.reasons) console.log(reason);
 }
