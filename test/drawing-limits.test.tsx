@@ -9,7 +9,7 @@ import * as graph from "@/components/flow/graph";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
 import { textWidth, wrap } from "@/components/flow/text";
 import { engine } from "@/engine";
-import { LIMITS, layOut, layOutWhole } from "@/server/drawing";
+import { LIMITS, layOut, layOutWhole, nesting } from "@/server/drawing";
 import { expected, laidOut } from "./drawn";
 import { example } from "./helpers";
 
@@ -51,6 +51,49 @@ describe("a drawing too big to lay out", () => {
     expect(await layOut(chain(10, LIMITS.characters / 10 + 1, "e"))).toEqual({ undrawn: "too big" });
     // ELK never saw them.
     expect(layout).not.toHaveBeenCalled();
+  });
+
+  it("is laid out with scopes nested 8 deep, and not 9", async () => {
+    // Scopes nested one inside the next, with two steps in the innermost.
+    const nested = (depth: number, name: string) =>
+      [
+        "flowchart TB",
+        ...Array.from({ length: depth }, (_, d) => `  subgraph ${name}${d}["Level ${d + 1}"]`),
+        `    ${name}a("<small>⚙️ 🛠️ do</small><br>Do it")`,
+        `    ${name}b("<small>⚙️ 🛠️ do</small><br>Then this")`,
+        ...Array.from({ length: depth }, () => "  end"),
+        `  ${name}a --> ${name}b`,
+        `  class ${name}a,${name}b code`,
+      ].join("\n");
+    expect(LIMITS.depth).toBe(8);
+    expect(nesting(graph.parseMermaid(nested(8, "i")))).toBe(8);
+    const layout = vi.spyOn(ELK.prototype, "layout");
+    const eight = laidOut(await layOut(nested(8, "i")));
+    expect(eight.full.scopes.map((s) => s.depth)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    layout.mockClear();
+    expect(await layOut(nested(9, "j"))).toEqual({ undrawn: "too big" });
+    expect(layout).not.toHaveBeenCalled();
+  });
+
+  it("counts each note as a part, and each part it is on as a line", async () => {
+    // A note tied to each of `on` parts of a chain of `n` steps.
+    const noted = (n: number, notes: number, on: number, name: string) =>
+      [
+        chain(n, 8, name),
+        ...Array.from({ length: notes }, (_, k) => `  ${name}n${k}@{ shape: notch-rect, label: "Note ${k}" }`),
+        ...Array.from({ length: on }, (_, i) => `  ${name}${i} -.- ${name}n0`),
+        ...Array.from({ length: notes }, (_, k) => `  class ${name}n${k} gap`),
+      ].join("\n");
+    // The chain's steps, its trigger and its scope, and a note: the limit of parts.
+    const steps = LIMITS.parts - 3;
+    expect("undrawn" in (await layOut(noted(steps, 1, 1, "k")))).toBe(false);
+    expect(await layOut(noted(steps, 2, 1, "l"))).toEqual({ undrawn: "too big" });
+    // A chain of sixty steps has sixty lines, and a note on each step is sixty more: the
+    // limit of lines. One more step is one line, and too many.
+    expect(LIMITS.lines).toBe(120);
+    expect("undrawn" in (await layOut(noted(60, 1, 60, "m")))).toBe(false);
+    expect(await layOut(noted(61, 1, 60, "o"))).toEqual({ undrawn: "too big" });
+    expect("undrawn" in (await layOut(noted(61, 1, 0, "p")))).toBe(false);
   });
 
   it("is kept as too big, so its text isn't read again", async () => {

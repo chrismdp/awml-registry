@@ -186,23 +186,45 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
 // The height of the strip above a drawing for the notes of the whole drawing.
 const NOTES_STRIP = 36;
 
-// The most a drawing may hold for the server to lay it out: ELK takes longer
-// the more it lays out, most of all for lines that cross many layers, and
-// holds the Worker while it does, so a drawing beyond these isn't laid out at
-// all. Measured in workerd on 2026-10-27, for graphs whose every line is as
-// long as it can be: 96 lines took 230 ms, 120 took 350 ms, 146 took 520 ms
-// and 196 took 880 ms; Flow only adds tens of milliseconds. So at these
-// limits a page's two layouts take well under a second. The largest workflow
-// in test/fixtures, dinners.yaml, holds 22 parts and scopes and 19 lines. The
-// limits also bound what the kept layouts hold.
-export const LIMITS = { parts: 80, lines: 120, characters: 20_000 };
+// The most a drawing may hold for the server to lay it out. ELK holds the
+// Worker while it works, and takes longer the more it lays out: most of all
+// for lines that cross many layers, and for scopes nested deep. A drawing
+// beyond these isn't laid out at all. Measured in workerd on 2026-10-27, one
+// layout of 120 lines, each as long as it can be, took 350 ms with no nesting
+// and up to 410 ms with scopes nested 8 deep; the review measured 560 ms at 8
+// deep, 1.3 s at 16 and 6.5 s at 50. A page lays out the whole drawing and
+// Flow only one after the other, and they are the same size when Flow only
+// leaves nothing out, so at these limits a page's first view takes about a
+// second at worst; its layouts are kept after that. The largest workflow on
+// awml.io holds 53 parts and 73 lines, nested 2 deep. A note isn't laid out,
+// but each counts as a part, and each part or scope it is on as a line. The
+// limits also bound what the kept layouts hold. `depth` is how deep scopes
+// nest: 1 when none is inside another.
+export const LIMITS = { parts: 80, lines: 120, characters: 20_000, depth: 8 };
 
-// Whether a graph is beyond LIMITS: its parts and scopes, its lines, and the
-// characters of every label in it.
+// Whether a graph is beyond LIMITS: its parts, scopes and notes, its lines
+// and the notes' ties, the characters of every label in it, and how deep its
+// scopes nest.
 export function tooBig(g: Graph) {
-  const characters = [...g.parts, ...g.scopes, ...g.notes].reduce((n, x) => n + ("label" in x ? x.label : x.text).length, 0) +
+  const notes = new Set(g.notes.map((n) => n.id)).size;
+  const ties = g.notes.filter((n) => n.on).length;
+  const characters =
+    [...g.parts, ...g.scopes, ...g.notes].reduce((n, x) => n + ("label" in x ? x.label : x.text).length, 0) +
     g.lines.reduce((n, l) => n + (l.label?.length ?? 0), 0);
-  return g.parts.length + g.scopes.length > LIMITS.parts || g.lines.length > LIMITS.lines || characters > LIMITS.characters;
+  return (
+    g.parts.length + g.scopes.length + notes > LIMITS.parts ||
+    g.lines.length + ties > LIMITS.lines ||
+    characters > LIMITS.characters ||
+    nesting(g) > LIMITS.depth
+  );
+}
+
+// How deep a graph's scopes nest: 1 when none is inside another, and 0 when
+// it has none.
+export function nesting(g: Graph) {
+  let deepest = -1;
+  for (const d of depths(g).values()) deepest = Math.max(deepest, d);
+  return deepest + 1;
 }
 
 // On a system's map, each part joined to workflows' boxes, such as a trigger

@@ -226,6 +226,24 @@ describe("labels that break lines", () => {
     expect(many.lines).toHaveLength(1);
   });
 
+  it("reads many notes, each tied to parts, and a style for every line, in time growing with the text", () => {
+    // 20,000 comments, each tied to two parts, and every line given a style: looking up each
+    // note's lines, or each styled line, among all of them took time growing with the square.
+    const n = 20_000;
+    const rows = ["flowchart TB", '  a("A")', '  b("B")', "  a --> b"];
+    for (let i = 0; i < n; i++) rows.push(`  c${i}@{ shape: notch-rect, label: "Note ${i}" }`, `  a -.- c${i}`, `  c${i} -.- b`);
+    rows.push("  class a,b code", `  linkStyle ${Array.from({ length: 2 * n + 1 }, (_, i) => i).join(",")} stroke-dasharray:3,marker-end:none`);
+    const start = performance.now();
+    const many = parseMermaid(rows.join("\n"));
+    expect(performance.now() - start).toBeLessThan(1_000);
+    expect(many.notes).toHaveLength(2 * n);
+    expect(many.notes.slice(0, 2)).toEqual([
+      { id: "c0", on: "a", text: "Note 0" },
+      { id: "c0", on: "b", text: "Note 0" },
+    ]);
+    expect(many.lines).toEqual([{ id: "line-0", from: "a", to: "b", style: "solid", arrowStart: false, arrowEnd: false }]);
+  });
+
   it("leaves out a line one of whose ends isn't drawn: from a note, or to nothing the text names", () => {
     expect(line(broken, "c2", "step")).toBeUndefined();
     expect(line(broken, "tick", "ghost")).toBeUndefined();

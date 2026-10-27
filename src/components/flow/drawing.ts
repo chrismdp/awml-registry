@@ -171,14 +171,22 @@ export function containers(g: Graph) {
   return holding;
 }
 
-// How deep each scope is: 0 for one in no other.
+// How deep each scope is: 0 for one in no other. Each scope's depth is
+// worked out once, from its parent's, so a deep nesting takes no longer than
+// it has scopes.
 export function depths(g: Graph) {
   const parent = new Map(g.scopes.map((s) => [s.id, s.scope]));
   const depth = new Map<string, number>();
   for (const s of g.scopes) {
-    let d = 0;
-    for (let p = parent.get(s.id); p; p = parent.get(p)) d++;
-    depth.set(s.id, d);
+    // Up to the first scope whose depth is known, or past the top, then down.
+    const up: string[] = [];
+    let at: string | undefined = s.id;
+    while (at !== undefined && !depth.has(at) && up.length <= g.scopes.length) {
+      up.push(at);
+      at = parent.get(at);
+    }
+    let d = at === undefined ? -1 : (depth.get(at) ?? -1);
+    for (const id of up.reverse()) depth.set(id, ++d);
   }
   return depth;
 }

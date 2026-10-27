@@ -121,21 +121,24 @@ export function parseMermaid(text: string): Graph {
   const body = text.replace(/^---\n[\s\S]*?\n---\n/, "");
   const nodes = new Map<string, { id: string; raw: string; shape?: string; scope?: string }>();
   const scopes: Scope[] = [];
+  const scopeById = new Map<string, Scope>();
   const kinds = new Map<string, string>();
-  const lines: (Line & { index: number })[] = [];
+  // Each line at its index, as linkStyle names it.
+  const lines: Line[] = [];
   const stack: string[] = [];
-  let index = 0;
   for (const raw of rows(body)) {
     const row = raw.trim();
     if (!row || row.startsWith("%%") || /^(flowchart|graph|direction|classDef)\b/.test(row)) continue;
     let m: RegExpExecArray | null;
     if ((m = /^subgraph\s+(\w+)\s*\["([^]*)"\]$/.exec(row))) {
-      scopes.push({ id: m[1], label: plain(m[2]), dashed: false, ...(stack.length ? { scope: stack.at(-1) } : {}) });
+      const scope: Scope = { id: m[1], label: plain(m[2]), dashed: false, ...(stack.length ? { scope: stack.at(-1) } : {}) };
+      scopes.push(scope);
+      scopeById.set(scope.id, scope);
       stack.push(m[1]);
     } else if (row === "end") stack.pop();
     else if ((m = /^class\s+([\w,]+)\s+(\w+)$/.exec(row))) for (const id of m[1].split(",")) kinds.set(id, m[2]);
     else if ((m = /^style\s+(\w+)\s+([^]*)$/.exec(row))) {
-      const scope = scopes.find((s) => s.id === m![1]);
+      const scope = scopeById.get(m[1]);
       if (!scope) continue;
       scope.dashed = m[2].includes("stroke-dasharray");
       const fill = colour(m[2], "fill");
@@ -145,15 +148,14 @@ export function parseMermaid(text: string): Graph {
       const noEnd = m[2].includes("marker-end:none");
       const broken = colour(m[2], "stroke") === BROKEN;
       for (const i of m[1].split(",").map(Number)) {
-        const l = lines.find((l) => l.index === i);
+        const l = lines[i];
         if (l && noEnd) l.arrowEnd = false;
         if (l && broken) l.broken = true;
       }
     } else if ((m = LINE.exec(row))) {
       const [, from, start, stroke, end, label, to] = m;
       lines.push({
-        id: `line-${index}`,
-        index: index++,
+        id: `line-${lines.length}`,
         from,
         to,
         style: stroke.startsWith("=") ? "thick" : stroke.includes(".") ? "dotted" : "solid",
@@ -168,12 +170,21 @@ export function parseMermaid(text: string): Graph {
   }
 
   const isNote = (id: string) => kinds.get(id) === "gap" || nodes.get(id)?.shape === "notch-rect";
+  // Each line by its ends, so finding a note's lines takes no longer than
+  // there are lines.
+  const byEnd = new Map<string, Line[]>();
+  for (const l of lines)
+    for (const end of l.from === l.to ? [l.from] : [l.from, l.to]) {
+      const at = byEnd.get(end);
+      if (at) at.push(l);
+      else byEnd.set(end, [l]);
+    }
   const notes: Note[] = [];
   for (const n of nodes.values()) {
     if (!isNote(n.id)) continue;
     // A note is joined to each part it is tied to by a dotted line with no arrows.
     const text = plain(n.raw);
-    const tied = lines.filter((l) => (l.to === n.id || l.from === n.id) && !l.arrowStart && !l.arrowEnd);
+    const tied = (byEnd.get(n.id) ?? []).filter((l) => !l.arrowStart && !l.arrowEnd);
     for (const l of tied) notes.push({ id: n.id, on: l.to === n.id ? l.from : l.to, text });
     if (!tied.length) notes.push({ id: n.id, ...(n.scope ? { on: n.scope } : {}), text });
   }
@@ -184,7 +195,7 @@ export function parseMermaid(text: string): Graph {
   return {
     parts,
     scopes,
-    lines: lines.filter((l) => known.has(l.from) && known.has(l.to)).map(({ index: _, ...l }) => l),
+    lines: lines.filter((l) => known.has(l.from) && known.has(l.to)),
     notes: notes.filter((n) => !n.on || known.has(n.on)),
   };
 }
