@@ -146,6 +146,34 @@ describe("a part other workflows refer to", () => {
   });
 });
 
+describe("an outside action that starts another workflow (AWML 0.7)", () => {
+  const kinds = new Map([
+    ["start", "outside"],
+    ["low", "trigger"],
+  ]);
+
+  it("says it starts the workflow its ref names, or one the viewer can't see, or one not pushed yet", () => {
+    expect(partLinks([{ part: "start", state: "found", owner: "acme", slug: "order", id: "low" }], [], kinds)).toEqual([
+      { part: "start", title: "Starts acme/order#low", to: [{ label: "acme/order", href: "/acme/order#low" }] },
+    ]);
+    const hidden = partLinks([{ part: "start", state: "hidden" }], [], kinds);
+    expect(hidden).toEqual([{ part: "start", title: "Starts a workflow you can't see", to: [] }]);
+    expect(destination(hidden[0])).toBeNull();
+    expect(partLinks([{ part: "start", state: "missing", owner: "acme", slug: "order", id: "low" }], [], kinds)).toEqual([
+      { part: "start", title: "Starts acme/order#low, not pushed yet", to: [] },
+    ]);
+  });
+
+  it("says a trigger is started by a referrer only when the referrer's part is an outside action", () => {
+    const starter = { owner: "acme", slug: "stock", title: "Stock", visibility: "public" as const, parts: ["low"], starts: ["low"] };
+    // A stored 0.6 workflow that shared the trigger by ref, from a trigger of its own, starts nothing.
+    const sharer = { owner: "acme", slug: "old", title: "Old", visibility: "public" as const, parts: ["low"], starts: [] };
+    expect(partLinks([], [starter], kinds)[0].title).toBe("Started by acme/stock");
+    expect(partLinks([], [sharer], kinds)[0].title).toBe("Used by acme/old");
+    expect(partLinks([], [starter, sharer], kinds)[0].title).toBe("Started by acme/stock\nUsed by acme/old");
+  });
+});
+
 describe("parts linked across tenants", () => {
   it("names nothing and links nowhere for a ref to a private workflow the viewer may not see", async () => {
     const { ana, bea, mo } = await world();

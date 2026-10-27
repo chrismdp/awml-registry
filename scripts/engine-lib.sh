@@ -4,6 +4,12 @@
 # local clone, for a machine that can't reach GitHub.
 AWML_SOURCE="${AWML_SOURCE:-https://github.com/chrismdp/awml.git}"
 
+# pin ARGS...: scripts/engine-pin.mjs, which reads and writes the pin,
+# vendor/awml/version.json, and fetches the pinned Go.
+pin() {
+  node "$root/scripts/engine-pin.mjs" "$@"
+}
+
 # awml_fetch TAG DIR: AWML's source at TAG, fetched into DIR, a new folder.
 # Prints the commit TAG names.
 awml_fetch() {
@@ -12,16 +18,6 @@ awml_fetch() {
   git -C "$dir" fetch -q --depth 1 "$AWML_SOURCE" "refs/tags/$tag:refs/tags/$tag"
   git -C "$dir" -c advice.detachedHead=false checkout -q "refs/tags/$tag"
   git -C "$dir" rev-parse HEAD
-}
-
-# pin_field FIELD: the tag or the commit vendor/awml/version.json pins.
-pin_field() {
-  node -e 'process.stdout.write(String(require(process.argv[1])[process.argv[2]] ?? ""))' "$root/vendor/awml/version.json" "$1"
-}
-
-# sha256_of FILE: its SHA-256, in hex.
-sha256_of() {
-  node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex"))' "$1"
 }
 
 # wrapper_of DIR: AWML's JavaScript wrapper of its WebAssembly, from the source

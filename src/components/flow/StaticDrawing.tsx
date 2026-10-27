@@ -1,6 +1,6 @@
 import "./flow.css";
 import type { PartLink } from "@/server/part-links";
-import { destination } from "../links";
+import { destination, hrefOf } from "../links";
 import type { Drawing, Note } from "./drawing";
 import { Arrowheads, LabelGraphic, LineGraphic, NoteIcon, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import { MAX_ZOOM } from "../viewport";
@@ -45,7 +45,7 @@ export function StaticDrawing({
     >
       {defs && <Arrowheads id={id} />}
       {scopes.map((s) => {
-        const href = hrefs[s.id];
+        const href = hrefOf(hrefs, s.id);
         const graphic = <ScopeGraphic scope={s} href={href} />;
         return (
           <g key={s.id} transform={`translate(${s.x}, ${s.y})`} data-scope={s.id} data-in={s.scope}>

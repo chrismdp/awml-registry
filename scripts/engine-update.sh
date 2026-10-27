@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
-# Moves the registry to another AWML release (issue #73): pins its tag and
-# commit in vendor/awml/version.json, takes its JavaScript wrapper of the
-# WebAssembly as vendor/awml/awml.js, builds the engine from that commit with
-# scripts/engine-build.sh, and rewrites the test fixtures that hold what the
-# native `awml` prints, so the tests compare the registry with the CLI. The
-# WebAssembly itself is never kept in git: every machine builds it from the pin.
+# Moves the registry to another AWML release (issue #73). It pins, in
+# vendor/awml/version.json, the release's tag and commit, the Go release its
+# go.mod names with the SHA-256 go.dev lists for each machine's archive, and,
+# once it has built them, the SHA-256 of awml.js and of the two files the build
+# writes. It takes the release's JavaScript wrapper of the WebAssembly as
+# vendor/awml/awml.js, builds the engine with scripts/engine-build.sh, and
+# rewrites the test fixtures that hold what the native `awml` prints, so the
+# tests compare the registry with the CLI. A person reviews the new pin in the
+# pull request; every other run checks against it. The WebAssembly itself is
+# never kept in git: every machine builds it from the pin.
 # Usage: npm run engine:update -- <tag>, such as v0.7.1
 # AWML_SOURCE names another place to fetch AWML from, such as a local clone.
 set -euo pipefail
 
 tag="${1:?usage: npm run engine:update -- <tag>, such as v0.7.1}"
+if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "usage: npm run engine:update -- <tag>, such as v0.7.1" >&2
+  exit 1
+fi
 root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/vendor/awml"
 fixtures="$root/test/fixtures"
@@ -22,12 +30,12 @@ src="$tmp/source"
 awml_fetch "$tag" "$src" > "$tmp/fetched"
 commit=$(cat "$tmp/fetched")
 mkdir -p "$out"
-printf '{ "tag": "%s", "commit": "%s" }\n' "$tag" "$commit" > "$out/version.json"
+pin pin "$tag" "$commit" "$src"
 wrapper_of "$src" > "$out/awml.js"
-AWML_SOURCE_DIR="$src" bash "$root/scripts/engine-build.sh"
+AWML_SOURCE_DIR="$src" bash "$root/scripts/engine-build.sh" --record
 
 # The native CLI, from the same source and with the same Go.
-go=$(node "$root/scripts/engine-go.mjs" "$src")
+go=$(pin go)
 (cd "$src" && GOTOOLCHAIN=local "$go" build -trimpath -ldflags="-X main.version=${tag#v}" -o "$tmp/awml" ./cmd/awml)
 
 # What the native CLI says, for the tests to compare against: a 0.7 workflow,

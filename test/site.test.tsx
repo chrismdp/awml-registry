@@ -772,7 +772,7 @@ describe("the engine", () => {
     const pinned = JSON.parse(fs.readFileSync(path.join("vendor", "awml", "version.json"), "utf8"));
     expect(engine.version).toEqual({ tag: "v0.7.1", commit: pinned.commit });
     const built = JSON.parse(fs.readFileSync(path.join("vendor", "awml", "build.json"), "utf8"));
-    expect(built).toMatchObject(pinned);
+    expect(built).toEqual({ tag: pinned.tag, commit: pinned.commit, go: pinned.go.version });
   });
 
   it("gives the verdict, summary and graph of the drawing the native awml gives", async () => {

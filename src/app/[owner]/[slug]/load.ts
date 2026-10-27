@@ -180,7 +180,7 @@ export async function loadVersion(
     referredBy: referredBy ?? [],
     // The parts the drawing marks as linked to other workflows, from what the
     // viewer may know of both, so it names nothing they can't see.
-    links: partLinks(refs.shown, referredBy ?? [], workflowRead ? partKinds(workflowRead) : {}),
+    links: partLinks(refs.shown, referredBy ?? [], workflowRead ? partKinds(workflowRead) : new Map()),
     systems: systems ?? [],
     // The drawing, laid out here from the engine's graph (src/server/drawing.ts),
     // so the page draws it with no layout of its own.

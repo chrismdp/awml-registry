@@ -10,7 +10,9 @@ import { headHeight, type Point, type Rect } from "@/components/flow/drawing";
 import { layeredNodes, lineRoute, NODE_TYPES } from "@/components/flow/FlowCanvas";
 import { roundedPath } from "@/components/flow/Graphic";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
-import { layOut } from "@/server/drawing";
+import { readGraph } from "@/components/flow/graph";
+import { hrefOf } from "@/components/links";
+import { layOut, mapLinks } from "@/server/drawing";
 import type { PartLink } from "@/server/part-links";
 import { laidOut } from "./drawn";
 import { example } from "./helpers";
@@ -192,5 +194,45 @@ describe("the notes of the whole drawing, once React Flow draws it", () => {
     expect(notes.inside).toContain('aria-label="Note on The whole drawing"');
     // It is no part of its own, for a reader to tab to apart from its button.
     expect(notes.tag).not.toContain("tabindex");
+  });
+});
+
+// Ids index the links and pages a drawing's parts and boxes lead to. An id every object inherits,
+// such as constructor or toString, must lead nowhere it wasn't given, on the server's SVG, in
+// React Flow and on a system's map.
+describe("parts and boxes whose ids every object inherits", () => {
+  // Three workflows' boxes, each started by a trigger, every id one an object inherits.
+  const ids = ["constructor", "toString", "__proto__"];
+  const triggers = ["valueOf", "hasOwnProperty", "isPrototypeOf"];
+  const graph = JSON.stringify({
+    view: "map",
+    groups: ids.map((id) => ({ id, label: `Box ${id}` })),
+    parts: triggers.map((id) => ({ id, kind: "trigger", label: `Start ${id}` })),
+    lines: ids.map((id, i) => ({ from: triggers[i], to: id, kind: "start", points: "to" })),
+    comments: [],
+    places: [],
+  });
+
+  it("are read as parts and boxes of their own", () => {
+    const g = readGraph(JSON.parse(graph));
+    expect(g.scopes.map((sc) => sc.id)).toEqual(ids);
+    expect(g.lines).toHaveLength(3);
+    expect(readGraph({ view: "security", groups: [], parts: [{ id: "a", kind: "constructor", label: "A" }], lines: [], comments: [], places: [] }).parts[0].kind).toBe("part");
+  });
+
+  it("lead nowhere they weren't given, on the server's SVG, in React Flow and on a map", async () => {
+    for (const id of [...ids, "valueOf", "hasOwnProperty"]) expect(hrefOf({}, id), id).toBeUndefined();
+    expect(hrefOf({ constructor: "/a/b" }, "constructor")).toBe("/a/b");
+    const { full } = laidOut(await layOut(graph));
+    expect(renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />)).not.toContain("<a ");
+    const html = await rendered(graph, {});
+    expect(html).not.toContain('role="link"');
+    expect(mapLinks(full, {})).toEqual([]);
+    // Given one, it leads there, and only there.
+    const given = await rendered(graph, { hrefs: { toString: "/acme/to-string" } });
+    expect(node(given, "toString").tag).toContain('role="link"');
+    expect(node(given, "constructor").tag).not.toContain('role="link"');
+    const box = { title: "To string", address: "acme/to-string", href: "/acme/to-string" };
+    expect(mapLinks(full, { toString: box }).map((l) => l.part)).toEqual(["hasOwnProperty"]);
   });
 });

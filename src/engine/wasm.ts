@@ -3,7 +3,7 @@
 // pins the AWML release and commit, which `npm run engine:build` builds (it is
 // never kept in git), and `npm run engine:update -- <tag>` moves.
 import { createAWML, type AWML, type ConvertError } from "../../vendor/awml/awml.js";
-import version from "../../vendor/awml/version.json";
+import pin from "../../vendor/awml/version.json";
 import { loadAwmlModule } from "@/engine/module";
 import { memoise } from "./memo";
 import type { Engine, Files, FitReport, ListedCheck, Named, Summary } from "./types";
@@ -49,7 +49,8 @@ function checksFor(listed: Listed, file: string, first: boolean): ListedCheck[] 
 
 // Each answer is worked out once for the same files (see ./memo.ts).
 export const wasmEngine: Engine = {
-  version,
+  // The release and commit alone: the rest of the pin is how to build it.
+  version: { tag: pin.tag, commit: pin.commit },
   async start() {
     await awml();
   },

@@ -25,7 +25,7 @@ import type { PartLink } from "@/server/part-links";
 import { labelAt, squareRoute, type Drawing, type DrawnLine, type DrawnPart, type DrawnScope, type Note, type Point, type Rect } from "./drawing";
 import { LabelGraphic, LineGraphic, NoteIcon, NOTE_R, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import type { Body, Physics } from "./physics";
-import { Press } from "../links";
+import { hrefOf, Press } from "../links";
 import { notesBy, wholeNotes } from "./StaticDrawing";
 
 // React Flow drawing what the server laid out, so a dragged part takes its
@@ -226,12 +226,12 @@ function Canvas(p: FlowCanvasProps) {
   const centre = (n: Node) => ({ x: n.position.x + (n.width ?? 0) / 2, y: n.position.y + (n.height ?? 0) / 2 });
   const onNodeClick: NodeMouseHandler<FlowNode> = (e, node) => {
     if (!press.current.followsClick() || (e.target as Element).closest("button, a")) return;
-    const follows = node.type === "part" ? shared.links.has(node.id) : Boolean(shared.hrefs[node.id]);
+    const follows = node.type === "part" ? shared.links.has(node.id) : Boolean(hrefOf(shared.hrefs, node.id));
     if (follows) p.onFollow(node.id, e);
   };
   const onAuxClick = (e: MouseEvent) => {
     const id = (e.target as Element).closest(".react-flow__node")?.getAttribute("data-id");
-    if (e.button !== 1 || !id || (!shared.links.has(id) && !shared.hrefs[id])) return;
+    if (e.button !== 1 || !id || (!shared.links.has(id) && !hrefOf(shared.hrefs, id))) return;
     e.preventDefault();
     p.onFollow(id, e);
   };
@@ -327,8 +327,9 @@ export function labelled(n: FlowNode, shared: Shared): FlowNode {
   }
   // A workflow's box on a map is a link to its page, whether or not it holds the outside actions
   // that start other workflows.
-  if (n.type === "scope" && !n.data.hull && (!n.data.scope.holds || shared.hrefs[n.id]))
-    return { ...n, ...a11y(n.data.scope.lines.join(" ") || n.data.scope.name, undefined, shared.hrefs[n.id], false), data: { ...n.data, ...shared } };
+  const href = hrefOf(shared.hrefs, n.id);
+  if (n.type === "scope" && !n.data.hull && (!n.data.scope.holds || href))
+    return { ...n, ...a11y(n.data.scope.lines.join(" ") || n.data.scope.name, undefined, href, false), data: { ...n.data, ...shared } };
   return { ...n, data: { ...n.data, ...shared } } as FlowNode;
 }
 
@@ -504,7 +505,7 @@ function ScopeNodeView({ data, width = 0, height = 0 }: NodeProps<ScopeNode>) {
   return (
     <div className="flow-node" style={{ width, height }}>
       <svg className="flow-node-svg" width={width} height={height}>
-        <ScopeGraphic scope={scope} href={data.hrefs[scope.id]} hull={data.hull} />
+        <ScopeGraphic scope={scope} href={hrefOf(data.hrefs, scope.id)} hull={data.hull} />
       </svg>
       <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
       <Handle type="source" position={Position.Bottom} isConnectable={false} className="flow-handle" />

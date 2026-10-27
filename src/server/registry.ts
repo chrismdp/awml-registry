@@ -9,7 +9,7 @@ import { measures, total } from "./summary";
 import { findOwner, isOwnerOrMember, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH } from "./push";
 import { asRead } from "./as-read";
-import { awmlOf, isOlderAwml, readYaml, WORKFLOW_IS_TOO_OLD } from "./awml-file";
+import { awmlOf, isOlderAwml, partKinds, readYaml, WORKFLOW_IS_TOO_OLD } from "./awml-file";
 import { namedAtPush, refPath, rewriteRefs, type Rewrite } from "./refs";
 import { refuse, type Result } from "./result";
 import { workflowSlugProblem } from "./slugs";
@@ -332,7 +332,17 @@ export async function referrersOf(db: Db, viewer: Viewer, ownerSlug: string, slu
   return referrers(db, viewer, found.owner, found.workflow);
 }
 
-export type Referrer = { owner: string; slug: string; title: string; visibility: "public" | "private"; parts: string[] };
+// A workflow whose latest version refers to this one, and the parts of this
+// one it names; `starts` are those of them it names from an outside action,
+// so starts this workflow from (AWML 0.7). The API's answers leave `starts` out.
+export type Referrer = {
+  owner: string;
+  slug: string;
+  title: string;
+  visibility: "public" | "private";
+  parts: string[];
+  starts?: string[];
+};
 
 async function referrers(db: Db, viewer: Viewer, owner: Owner, w: Workflow): Promise<Referrer[]> {
   const rows = await db
@@ -343,6 +353,8 @@ async function referrers(db: Db, viewer: Viewer, owner: Owner, w: Workflow): Pro
       title: workflow.title,
       visibility: workflow.visibility,
       part: workflowRef.targetPart,
+      from: workflowRef.part,
+      file: version.workflow,
     })
     .from(workflowRef)
     .innerJoin(version, and(eq(version.id, workflowRef.versionId), isLatest))
@@ -355,14 +367,23 @@ async function referrers(db: Db, viewer: Viewer, owner: Owner, w: Workflow): Pro
         seenBy(db, viewer),
       ),
     );
-  const byWorkflow = new Map<string, Referrer>();
-  for (const { id, part, ...r } of rows) {
-    const listed = byWorkflow.get(id) ?? { ...r, parts: [] };
+  // The kind of each referring part, read from its workflow's file as stored,
+  // once for each workflow: a ref a stored 0.6 file made from a trigger is no
+  // outside action, so starts nothing.
+  const kinds = new Map<string, Map<string, string>>();
+  const kindOf = (id: string, file: string | null, part: string) => {
+    if (!kinds.has(id)) kinds.set(id, file ? partKinds(file) : new Map());
+    return kinds.get(id)!.get(part);
+  };
+  const byWorkflow = new Map<string, Required<Referrer>>();
+  for (const { id, part, from, file, ...r } of rows) {
+    const listed = byWorkflow.get(id) ?? { ...r, parts: [], starts: [] };
     if (!listed.parts.includes(part)) listed.parts.push(part);
+    if (kindOf(id, file, from) === "outside" && !listed.starts.includes(part)) listed.starts.push(part);
     byWorkflow.set(id, listed);
   }
   return [...byWorkflow.values()]
-    .map((r) => ({ ...r, parts: r.parts.sort() }))
+    .map((r) => ({ ...r, parts: r.parts.sort(), starts: r.starts.sort() }))
     .sort((a, b) => `${a.owner}/${a.slug}`.localeCompare(`${b.owner}/${b.slug}`));
 }
 
@@ -423,7 +444,7 @@ export async function readWorkflow(db: Db, viewer: Viewer, ownerSlug: string, sl
     createdAt: w.createdAt,
     ...(await originOf(db, viewer, w.forkedFrom)),
     versions: await versionList(db, w.id),
-    referredBy: await referrers(db, viewer, owner, w),
+    referredBy: (await referrers(db, viewer, owner, w)).map(({ starts: _, ...r }) => r),
     systems: await systemsOf(db, viewer, w.id),
   };
 }

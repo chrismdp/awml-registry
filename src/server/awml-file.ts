@@ -39,12 +39,12 @@ export function awmlOf(text: string | null | undefined) {
 }
 
 // The kind of each part a workflow's file holds, by its id.
-export function partKinds(text: string): Record<string, string> {
+export function partKinds(text: string): Map<string, string> {
   const parts = readYaml(text)?.parts;
-  if (!Array.isArray(parts)) return {};
-  return Object.fromEntries(
+  if (!Array.isArray(parts)) return new Map();
+  return new Map(
     parts.flatMap((p: { id?: unknown; kind?: unknown } | null) =>
-      p && typeof p.id === "string" && typeof p.kind === "string" ? [[p.id, p.kind]] : [],
+      p && typeof p.id === "string" && typeof p.kind === "string" ? [[p.id, p.kind] as const] : [],
     ),
   );
 }

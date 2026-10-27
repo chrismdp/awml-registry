@@ -152,8 +152,8 @@ export function readGraph(g: EngineGraph): Graph {
   });
   const kinds = new Map(g.parts.map((p) => [p.id, p.kind]));
   const parts: Part[] = g.parts.map((p) => {
-    const part: Part = { id: p.id, kind: KINDS[p.kind] ?? "part", label: folded(p.label) };
-    const verb = p.kind === "ai" || p.kind === "code" || p.kind === "person" ? p.op : VERBS[p.kind];
+    const part: Part = { id: p.id, kind: Object.hasOwn(KINDS, p.kind) ? KINDS[p.kind] : "part", label: folded(p.label) };
+    const verb = p.kind === "ai" || p.kind === "code" || p.kind === "person" ? p.op : Object.hasOwn(VERBS, p.kind) ? VERBS[p.kind] : undefined;
     if (verb) part.verb = folded(verb);
     // An outside action's label ends with its tier, after its last colon:
     // "Fill the basket: Allow under £180".

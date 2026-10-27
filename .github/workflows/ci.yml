@@ -52,7 +52,7 @@ jobs:
             vendor/awml/awml.wasm
             vendor/awml/wasm_exec.js
             vendor/awml/build.json
-          key: awml-engine-${{ steps.engine.outputs.commit }}-${{ hashFiles('scripts/engine-build.sh', 'scripts/engine-lib.sh', 'scripts/engine-go.mjs') }}
+          key: awml-engine-${{ steps.engine.outputs.commit }}-${{ hashFiles('scripts/engine-build.sh', 'scripts/engine-lib.sh', 'scripts/engine-pin.mjs') }}
       - run: npm ci
       - run: npm run engine:build
       - run: npm run typecheck

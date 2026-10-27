@@ -8,7 +8,7 @@ RUN npm ci
 # The AWML engine, built from the commit vendor/awml/version.json pins, with the
 # Go release AWML's go.mod names (issue #73). It is its own layer, so it is
 # built again only when the pin or the build changes.
-COPY scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-go.mjs scripts/
+COPY scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs scripts/
 COPY vendor/awml vendor/awml
 RUN npm run engine:build
 COPY . .

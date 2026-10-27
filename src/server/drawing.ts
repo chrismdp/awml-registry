@@ -265,11 +265,13 @@ const listed = (names: string[]) => (names.length < 2 ? names.join("") : `${name
 // part with a ref does (#55, #61); and an outside action that starts another
 // workflow, by the line to its trigger, leads to the workflow that starts.
 // `boxes` are the boxes the viewer may open, by their id in the drawing.
-export function mapLinks(d: Drawing, boxes: Record<string, { title: string; address: string; href: string }>): PartLink[] {
+export function mapLinks(d: Drawing, given: Record<string, { title: string; address: string; href: string }>): PartLink[] {
+  // Each box by its id, so an id every object inherits, such as constructor, is no box.
+  const box = new Map(Object.entries(given));
   const ends = (id: string) => d.lines.flatMap((l) => (l.from === id ? [l.to] : l.to === id ? [l.from] : []));
   const kinds = new Map(d.parts.map((p) => [p.id, p.kind]));
   return d.parts.flatMap((p) => {
-    const joined = [...new Set(ends(p.id).filter((id) => boxes[id]))];
+    const joined = [...new Set(ends(p.id).filter((id) => box.has(id)))];
     const starts =
       p.kind === "outside"
         ? [
@@ -277,16 +279,16 @@ export function mapLinks(d: Drawing, boxes: Record<string, { title: string; addr
               d.lines
                 .filter((l) => l.from === p.id && kinds.get(l.to) === "trigger")
                 .flatMap((l) => ends(l.to))
-                .filter((id) => boxes[id] && !joined.includes(id)),
+                .filter((id) => box.has(id) && !joined.includes(id)),
             ),
           ]
         : [];
     if (!joined.length && !starts.length) return [];
     const title = [
-      ...(joined.length ? [`In ${listed(joined.map((id) => boxes[id].title))}`] : []),
-      ...(starts.length ? [`Starts ${listed(starts.map((id) => boxes[id].title))}`] : []),
+      ...(joined.length ? [`In ${listed(joined.map((id) => box.get(id)!.title))}`] : []),
+      ...(starts.length ? [`Starts ${listed(starts.map((id) => box.get(id)!.title))}`] : []),
     ].join("\n");
-    return [{ part: p.id, title, to: [...joined, ...starts].map((id) => ({ label: boxes[id].address, href: boxes[id].href })) }];
+    return [{ part: p.id, title, to: [...joined, ...starts].map((id) => ({ label: box.get(id)!.address, href: box.get(id)!.href })) }];
   });
 }
 

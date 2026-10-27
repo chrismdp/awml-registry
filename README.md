@@ -18,7 +18,7 @@ cp .env.example .env.local   # then set BETTER_AUTH_SECRET
 npm run dev
 ```
 
-`npm install` builds the AWML engine the registry checks and draws with, from AWML's source at the commit `vendor/awml/version.json` pins, into `vendor/awml/awml.wasm`. It fetches the source from GitHub, and builds it with the Go release AWML's `go.mod` names: a `go` of that release on your `PATH`, or else that release downloaded once from go.dev into `~/.cache/awml-registry`. If it can't, it says so and goes on; build it later with `npm run engine:build`, which does nothing while the build matches the pin. `AWML_SOURCE` names another place to fetch AWML from, such as a local clone.
+`npm install` builds the AWML engine the registry checks and draws with, from AWML's source at the commit `vendor/awml/version.json` pins, into `vendor/awml/awml.wasm`. It fetches the source from GitHub, and builds it with the Go release the pin names, downloaded once from go.dev into `~/.cache/awml-registry` and checked against the SHA-256 the pin gives it; a `go` you have installed isn't used, so every machine builds the same bytes, which must have the SHA-256 the pin gives them. If it can't, it says so and goes on; build it later with `npm run engine:build`, which does nothing while the build matches the pin. `AWML_SOURCE` names another place to fetch AWML from, such as a local clone.
 
 The registry will not start without a `BETTER_AUTH_SECRET` of at least 32 random characters. `openssl rand -base64 32` makes one.
 
