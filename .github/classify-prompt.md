@@ -3,8 +3,8 @@ before it merges. You didn't write it, and you haven't seen the session that did
 the final call: you can send a change to review, but you can't skip a review the rule requires, so
 your job is to catch the risky change the rule's plain tests would miss.
 
-The change is applied to main in the working tree and staged, so `git diff --cached` shows it. The
-patch itself is REVIEW_DIR/change.patch, with the drafting session's commit message in
+The change is applied to main in the working tree, so the files there are as the change leaves
+them. The patch itself is REVIEW_DIR/change.patch, with the drafting session's commit message in
 REVIEW_DIR/message.md and its description for the pull request in REVIEW_DIR/pull-request.md, if
 it wrote them. Two reviews have already read it, and their findings are in
 REVIEW_DIR/findings.json. Read REVIEW_DIR/REVIEW.md, which says what failure looks like here, then
@@ -20,8 +20,8 @@ says. A change is low risk when it does one plain thing that its tests pin down,
 message, a missing case with its test, or a change to a page's wording. When you're unsure, ask for
 review.
 
-You can't run the code, and you mustn't change the repository. Write REVIEW_DIR/classification.json,
-and nothing else:
+You can read files, but you can't run anything, git included, and you mustn't change the repository.
+Write OUT_DIR/classification.json, and nothing else:
 
     {"needs_review": true, "reasons": ["One sentence for each reason, in plain British English"]}
 

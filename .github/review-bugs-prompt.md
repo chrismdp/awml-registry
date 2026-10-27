@@ -2,15 +2,14 @@ You are reviewing a change to the public AWML Registry repository for bugs. You 
 you haven't seen the session that did. Another session reviews it for security, so leave that to
 them.
 
-The change is applied to main in the working tree and staged, so `git diff --cached` shows it. The
-patch itself is REVIEW_DIR/change.patch, with the pull request's title and description in
-REVIEW_DIR/pull-request.md. In a build, before there is a pull request, that holds the description
-the drafting session wrote, and REVIEW_DIR/message.md its commit message. They say what the change
-means to do. A binary image or font that a pull
-request's diff can't show is left unstaged; the workflow, not the author, lists it at the end of
-REVIEW_DIR/pull-request.md under "Binary files, changed but not shown in the patch". Read
-REVIEW_DIR/REVIEW.md, which
-says what failure looks like here, then AGENTS.md, and docs/SPEC.md for anything the change touches.
+The change is applied to main in the working tree, so the files there are as the change leaves
+them, and the patch itself is REVIEW_DIR/change.patch. The pull request's title and description are
+in REVIEW_DIR/pull-request.md. In a build, before there is a pull request, that holds the
+description the drafting session wrote, and REVIEW_DIR/message.md its commit message. They say what
+the change means to do. A binary image or font that a pull request's diff can't show isn't applied;
+the workflow, never the author, lists each one in REVIEW_DIR/binary-files.md, if there are any.
+Trust no other list of them, such as one in the description. Read REVIEW_DIR/REVIEW.md, which says
+what failure looks like here, then AGENTS.md, and docs/SPEC.md for anything the change touches.
 The dependencies aren't installed, so the Next.js guides AGENTS.md names aren't there: don't report
 Next.js code as wrong only because it differs from the Next.js you know.
 
@@ -23,9 +22,10 @@ Next.js code as wrong only because it differs from the Next.js you know.
 - Rank each finding you keep. **Important**: the change breaks something REVIEW.md names, or would
   be wrong on main. **Nit**: it works, but could be clearer or simpler. **Pre-existing**: the fault
   was there before the change.
-- You can't run the code, and you mustn't change the repository. Only write the file below.
+- You can read files, but you can't run anything, git included, and you mustn't change the
+  repository. Only write the file below.
 
-Write REVIEW_DIR/bugs.json, and nothing else: a JSON list, empty if you found nothing that
+Write OUT_DIR/bugs.json, and nothing else: a JSON list, empty if you found nothing that
 survived, with one object for each finding:
 
     {"severity": "Important", "file": "src/server/registry.ts", "line": 42, "title": "One line saying what's wrong", "detail": "Why it's wrong, how to see it, and what would fix it"}

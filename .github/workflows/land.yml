@@ -31,10 +31,12 @@ concurrency:
 jobs:
   # Reads, and holds no token that can write. It finds the open pull request the app opened from
   # the branch, whose head is the commit CI ran on, and the build that opened it, named in the first
-  # line of its description. Only the app and people with write access can edit that description,
-  # and the run it names must be this repository's build workflow, which pushed exactly this commit.
-  # Everything else comes from that build's own records. If CI passed, it applies Claude's patch to
-  # the commit of main the build pushed it onto and judges it with the rule as it is on main now.
+  # line of its description with the digests of the build's change, review record and own record.
+  # Only the app and people with write access can edit that description, and the run it names must
+  # be this repository's build workflow, which pushed exactly this commit. Everything else comes from
+  # that build's own records, each of which must have the digest the description names, since any
+  # job in the build's run could have replaced them. If CI passed, it judges the commit the build
+  # pushed, which CI ran on, with the rule as it is on main now.
   find:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -47,6 +49,7 @@ jobs:
       issue: ${{ steps.find.outputs.issue }}
       attempt: ${{ steps.find.outputs.attempt }}
       requested_by: ${{ steps.find.outputs.requested_by }}
+      asked: ${{ steps.find.outputs.asked }}
       pr: ${{ steps.find.outputs.pr }}
       head_sha: ${{ steps.find.outputs.head_sha }}
       verdict: ${{ steps.judge.outputs.verdict }}
@@ -84,9 +87,11 @@ jobs:
           [ "$(jq -r .head.sha <<< "$pull")" = "$HEAD_SHA" ] ||
             leave "The pull request has moved on since CI ran, so a newer CI result decides."
           pr="$(jq -r .number <<< "$pull")"
-          build_run="$(jq -r '(.body // "") | (split("\n")[0] // "") | rtrimstr("\r") |
-            (capture("^<!-- factory-build run=(?<run>[0-9]+) -->$") | .run) // empty' <<< "$pull")"
-          [ -n "$build_run" ] || leave "The description of #$pr names no build."
+          marker="$(jq -r '(.body // "") | (split("\n")[0] // "") | rtrimstr("\r") |
+            (capture("^<!-- factory-build run=(?<run>[0-9]+) change=(?<change>[0-9a-f]{64}) review=(?<review>[0-9a-f]{64}) record=(?<record>[0-9a-f]{64}) -->$")
+              | "\(.run) \(.change) \(.review) \(.record)") // empty' <<< "$pull")"
+          [ -n "$marker" ] || leave "The description of #$pr names no build with its records' digests."
+          read -r build_run change_digest review_digest record_digest <<< "$marker"
           # The run must be this repository's build, run from main for a label or a dispatch. GitHub
           # names each build run for its issue and try, from its own inputs.
           workflow="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build.yml" --jq .id)"
@@ -99,12 +104,16 @@ jobs:
           record="$RUNNER_TEMP/pull-request"
           gh run download "$build_run" --repo "$GITHUB_REPOSITORY" -n pull-request -D "$record" ||
             leave "The build that opened #$pr left no record."
+          digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c 1-64; }
+          [ "$(digest "$record")" = "$record_digest" ] ||
+            leave "The record of the build that opened #$pr isn't the one its description names."
           jq -e --argjson issue "$issue" '
               .issue == $issue and (.attempt | IN(1, 2, 3)) and
               (.requested_by | type == "string" and test("^[A-Za-z0-9._\\[\\]-]{0,64}$")) and
               (.commit | type == "string" and test("^[0-9a-f]{40}$")) and
               (.base | type == "string" and test("^[0-9a-f]{40}$")) and
               (.checked | type == "string" and test("^[0-9a-f]{40}$")) and
+              (.asked | type == "string" and test("^[0-9a-f]{64}$")) and
               (.bot | type == "string" and test("^[a-z0-9-]+\\[bot\\]$"))' "$record/build.json" > /dev/null ||
             leave "The record of the build that opened #$pr isn't one."
           [ "$(jq -r .display_title <<< "$named")" = "Build of issue $issue, try $(jq -r .attempt "$record/build.json")" ] ||
@@ -121,9 +130,13 @@ jobs:
             echo "requested_by=$(jq -r .requested_by "$record/build.json")"
             echo "base=$(jq -r .base "$record/build.json")"
             echo "checked=$(jq -r .checked "$record/build.json")"
+            echo "asked=$(jq -r .asked "$record/build.json")"
             echo "pr=$pr"
             echo "head_sha=$HEAD_SHA"
             echo "build_run=$build_run"
+            echo "change=$change_digest"
+            echo "review=$review_digest"
+            echo "record=$record_digest"
           } | tee -a "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v5
@@ -138,33 +151,56 @@ jobs:
         if: steps.find.outputs.ci == 'passed'
         with:
           node-version: 22
+          package-manager-cache: false
 
-      # The rule, its settings and the description's script come from main as it is now, and the
-      # patch is judged against the commit of main the build pushed it onto, which must be on main,
-      # in a tree of its own. This job builds and runs nothing else. The rule's copy is an .mts file
-      # so that Node reads it as a module without a package.json beside it.
+      # The rule, its settings and the description's script come from main as it is now. The change
+      # and the review record must be the ones the description names, and the rule needs the
+      # classifier's verdict. It judges the commit the build pushed, which CI ran on, not the patch:
+      # that commit is fetched into git's store, never checked out, must sit directly on the commit
+      # of main the build pushed it onto, which must be on main, and its tree is read into the index
+      # of a tree of its own at that commit of main, so the files on disk stay main's. This job builds
+      # and runs nothing else. The rule's copy is an .mts file so that Node reads it as a module
+      # without a package.json beside it.
       - name: Apply the rule
         id: judge
         if: steps.find.outputs.ci == 'passed'
         env:
           GH_TOKEN: ${{ github.token }}
           BASE: ${{ steps.find.outputs.base }}
+          HEAD_SHA: ${{ steps.find.outputs.head_sha }}
           BUILD_RUN: ${{ steps.find.outputs.build_run }}
+          CHANGE_DIGEST: ${{ steps.find.outputs.change }}
+          REVIEW_DIGEST: ${{ steps.find.outputs.review }}
         run: |
           cp scripts/build-rule.ts "$RUNNER_TEMP/build-rule.mts"
           for name in change review; do
             gh run download "$BUILD_RUN" --repo "$GITHUB_REPOSITORY" -n "$name" -D "$RUNNER_TEMP/$name"
           done
-          git merge-base --is-ancestor "$BASE" HEAD
-          git worktree add --detach "$RUNNER_TEMP/judged" "$BASE"
-          git -C "$RUNNER_TEMP/judged" apply --index "$RUNNER_TEMP/change/change.patch"
-          classification=()
-          if [ -f "$RUNNER_TEMP/review/classification.json" ]; then
-            classification=(--classification "$RUNNER_TEMP/review/classification.json")
+          digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c 1-64; }
+          if [ "$(digest "$RUNNER_TEMP/change")" != "$CHANGE_DIGEST" ]; then
+            echo "The change isn't the one the pull request's description names."
+            exit 1
           fi
+          if [ "$(digest "$RUNNER_TEMP/review")" != "$REVIEW_DIGEST" ]; then
+            echo "The review record isn't the one the pull request's description names."
+            exit 1
+          fi
+          if [ ! -f "$RUNNER_TEMP/review/classification.json" ]; then
+            echo "The build's review left no verdict from the classifier, so the rule can't be applied."
+            exit 1
+          fi
+          git merge-base --is-ancestor "$BASE" HEAD
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            fetch --no-tags origin "$HEAD_SHA"
+          if [ "$(git rev-parse "$HEAD_SHA^@")" != "$BASE" ]; then
+            echo "The pushed commit isn't one commit on top of the main the build pushed it onto."
+            exit 1
+          fi
+          git worktree add --detach "$RUNNER_TEMP/judged" "$BASE"
+          git -C "$RUNNER_TEMP/judged" read-tree "$HEAD_SHA"
           node --experimental-strip-types "$RUNNER_TEMP/build-rule.mts" --repo "$RUNNER_TEMP/judged" \
             --rules .github/build-rules.yml --findings "$RUNNER_TEMP/review/findings.json" \
-            "${classification[@]}" > "$RUNNER_TEMP/verdict.txt"
+            --classification "$RUNNER_TEMP/review/classification.json" > "$RUNNER_TEMP/verdict.txt"
           verdict="$(head -n 1 "$RUNNER_TEMP/verdict.txt")"
           case "$verdict" in
             review|straightforward) echo "verdict=$verdict" >> "$GITHUB_OUTPUT" ;;
@@ -180,6 +216,9 @@ jobs:
         env:
           ATTEMPT: ${{ steps.find.outputs.attempt }}
           BUILD_RUN: ${{ steps.find.outputs.build_run }}
+          CHANGE_DIGEST: ${{ steps.find.outputs.change }}
+          REVIEW_DIGEST: ${{ steps.find.outputs.review }}
+          RECORD_DIGEST: ${{ steps.find.outputs.record }}
           CHECKED: ${{ steps.find.outputs.checked }}
           CHANGE_DIR: ${{ runner.temp }}/change
           ISSUE: ${{ steps.find.outputs.issue }}
@@ -219,14 +258,15 @@ jobs:
   # retry.yml reads. If CI passed, the app writes the verdict into the description and sets a
   # straightforward change to merge, or the person who added the label is asked to review it, and
   # the status comment says which. If the rule couldn't be applied, it says so on the issue. It
-  # checks out nothing and runs only gh.
+  # checks out nothing and runs only gh. Each pull request lands on its own, so one build's land
+  # never cancels another's that waits.
   land:
     needs: find
     if: ${{ !cancelled() && (needs.find.outputs.ci == 'passed' || needs.find.outputs.ci == 'failed') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: build-auto-merge
+      group: build-auto-merge-${{ needs.find.outputs.pr }}
       cancel-in-progress: false
     # The Actions token starts the retry, asks for reviews and edits the status comment. The app's
     # token edits the description and sets the merge.
@@ -241,9 +281,12 @@ jobs:
       PR_NUMBER: ${{ needs.find.outputs.pr }}
       HEAD_SHA: ${{ needs.find.outputs.head_sha }}
       REQUESTED_BY: ${{ needs.find.outputs.requested_by }}
+      ASKED: ${{ needs.find.outputs.asked }}
       VERDICT: ${{ needs.find.outputs.verdict }}
       JUDGED: ${{ needs.find.result }}
     steps:
+      # The digest of the issue as labelled, from the build's record, goes with it, for the next
+      # try to check the record by.
       - name: Start retry-a-build with CI's failed log as why
         id: retry
         if: env.CI == 'failed'
@@ -255,7 +298,8 @@ jobs:
           case "$ATTEMPT" in [1-3]) ;; *) echo "The attempt must be 1, 2 or 3: $ATTEMPT"; exit 1 ;; esac
           case "$CI_RUN" in ''|*[!0-9]*) echo "CI's run must be a number: $CI_RUN"; exit 1 ;; esac
           gh workflow run retry.yml --repo "$GITHUB_REPOSITORY" --ref main \
-            -f issue="$ISSUE" -f attempt="$ATTEMPT" -f requested_by="$REQUESTED_BY" -f run="$CI_RUN"
+            -f issue="$ISSUE" -f attempt="$ATTEMPT" -f requested_by="$REQUESTED_BY" -f run="$CI_RUN" \
+            -f asked="$ASKED"
 
       - uses: actions/download-artifact@v4
         if: env.CI == 'passed' && env.JUDGED == 'success'
@@ -263,9 +307,26 @@ jobs:
           name: judged
           path: ${{ runner.temp }}/judged
 
+      # The rule judged the commit CI ran on, so nothing is done to a pull request that has moved on
+      # since, or closed: a newer CI result decides.
+      - name: Check the pull request is still at the commit CI ran on
+        id: head
+        if: env.CI == 'passed' && env.JUDGED == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$PR_NUMBER" in ''|*[!0-9]*) echo "The pull request must be a number: $PR_NUMBER"; exit 1 ;; esac
+          pull="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          if [ "$(jq -r .state <<< "$pull")" = open ] && [ "$(jq -r .head.sha <<< "$pull")" = "$HEAD_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "#$PR_NUMBER has moved on since CI ran, or closed, so a newer CI result decides."
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Make the app's token
         id: app
-        if: env.CI == 'passed' && env.JUDGED == 'success'
+        if: env.CI == 'passed' && env.JUDGED == 'success' && steps.head.outputs.current == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.FACTORY_APP_ID }}
@@ -275,7 +336,7 @@ jobs:
 
       - name: Write the verdict into the description
         id: describe
-        if: env.CI == 'passed' && env.JUDGED == 'success'
+        if: env.CI == 'passed' && env.JUDGED == 'success' && steps.head.outputs.current == 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
@@ -284,7 +345,7 @@ jobs:
 
       - name: Ask for a review
         id: reviewer
-        if: env.CI == 'passed' && env.JUDGED == 'success' && env.VERDICT == 'review'
+        if: env.CI == 'passed' && env.JUDGED == 'success' && steps.head.outputs.current == 'true' && env.VERDICT == 'review'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -301,7 +362,7 @@ jobs:
       # rule still holds it.
       - name: Set the pull request to merge
         id: merge
-        if: env.CI == 'passed' && env.JUDGED == 'success' && env.VERDICT == 'straightforward'
+        if: env.CI == 'passed' && env.JUDGED == 'success' && steps.head.outputs.current == 'true' && env.VERDICT == 'straightforward'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
@@ -310,9 +371,10 @@ jobs:
             gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash \
               --match-head-commit "$HEAD_SHA" --body-file "$RUNNER_TEMP/judged/merge.md"
 
+      # A pull request that moved on is left to its newer CI result, which edits the status itself.
       - name: Edit the status comment
         id: status
-        if: ${{ !cancelled() && env.CI == 'passed' }}
+        if: ${{ !cancelled() && env.CI == 'passed' && steps.head.outputs.current != 'false' }}
         env:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}

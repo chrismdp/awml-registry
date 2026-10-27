@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -7,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +33,7 @@ type Job = {
   strategy?: { matrix?: Record<string, unknown> };
   permissions?: Record<string, string>;
   outputs?: Record<string, string>;
+  env?: Record<string, string>;
   concurrency?: { group?: string; "cancel-in-progress"?: boolean };
   steps?: Step[];
 };
@@ -125,9 +128,74 @@ ${answers}
 esac
 `;
 
+// Stands in for claude in a rehearsal: it logs, as a line of JSON, the home it starts in and whether
+// that home is empty, whether it could change REVIEW_DIR, and what it was started with, and writes
+// nothing else.
+const claudeStub = `#!/bin/bash
+empty=no
+[ -n "$(ls -A "$HOME" 2> /dev/null)" ] || empty=yes
+changes=no
+if touch "$REVIEW_DIR/planted" 2> /dev/null || [ -w "$REVIEW_DIR/REVIEW.md" ]; then changes=yes; fi
+args="$(printf '%s\\0' "$@" | jq -Rsc 'split("\\u0000") | .[:-1]')"
+jq -nc --arg home "$HOME" --arg empty "$empty" --arg changes "$changes" --argjson args "$args" \\
+  '{home: $home, empty: $empty, changes: $changes, args: $args}' >> "$CLAUDE_LOG"
+`;
+
+type Session = { home: string; empty: string; changes: string; args: string[] };
+
+// The values a session was given for a flag that takes several, up to the next flag.
+function flagValues(args: string[], flag: string): string[] {
+  const at = args.indexOf(flag);
+  if (at < 0) return [];
+  const rest = args.slice(at + 1);
+  const end = rest.findIndex((arg) => arg.startsWith("--"));
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+// Runs a step that starts Claude, with the stub in claude's place, and gives back each session.
+function sessions(script: string, root: string, env: Record<string, string>): { run: Rehearsal; started: Session[] } {
+  const bin = join(root, "bin");
+  put(join(bin, "claude"), claudeStub);
+  chmodSync(join(bin, "claude"), 0o755);
+  const run = rehearse(script, { root, env: { CLAUDE_LOG: join(root, "claude.log"), ...env } });
+  const started = readIfThere(join(root, "claude.log"))
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Session);
+  return { run, started };
+}
+
+function sha256(data: string | Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+// The digest the workflows take of an artifact's folder: each file's sha256 by its path in the
+// folder, sorted, as sha256sum lists them, then the sha256 of that list.
+function digestOf(dir: string): string {
+  const files: string[] = [];
+  const walk = (at: string) => {
+    for (const entry of readdirSync(join(dir, at), { withFileTypes: true })) {
+      const path = at ? `${at}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(path);
+      else files.push(`./${path}`);
+    }
+  };
+  walk("");
+  files.sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+  return sha256(files.map((file) => `${sha256(readFileSync(join(dir, file)))}  ${file}\n`).join(""));
+}
+
+// The line every workflow uses to take that digest.
+const digestLine =
+  'digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c 1-64; }';
+
 const scratches: string[] = [];
 afterAll(() => {
-  for (const dir of scratches) rmSync(dir, { recursive: true, force: true });
+  for (const dir of scratches) {
+    // Some rehearsals leave folders that can't be written to, as the workflows leave them.
+    spawnSync("chmod", ["-R", "u+w", dir]);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 function scratch(): string {
@@ -387,6 +455,10 @@ describe("build.yml", () => {
       title: "Labelled title",
       body: "Labelled body",
     });
+    // The record's digest is the draft job's output, which no other job can change, and each retry
+    // is given it.
+    expect(run.outputs.asked).toBe(sha256(left(root, "asked/asked.json")));
+    expect(workflow.jobs.draft.outputs?.asked).toBe("${{ steps.bring.outputs.asked }}");
 
     const byHand = scratch();
     const dispatched = join(byHand, "event.json");
@@ -418,7 +490,9 @@ describe("build.yml", () => {
 
   // A retry drafts from the text the label approved, which it reads from the first try's record,
   // never from the issue as it reads now. The retry run that started it, and the first try's run,
-  // are each checked before their records are trusted.
+  // are each checked before their records are trusted, and the record must have the digest the
+  // first try's draft job gave, which each try passes on, since any job in the first try's run
+  // could have replaced it.
   it.runIf(canRehearse)("drafts a retry from the text the label approved", () => {
     const bring = stepWithId(jobs.draft, "bring").run ?? "";
     const runsAnswers = (first: string) => `
@@ -432,7 +506,9 @@ describe("build.yml", () => {
     {"databaseId": 300, "displayTitle": "Build of issue 120, try 1"},
     {"databaseId": 290, "displayTitle": "Build of issue 120, try 1"}]' ;;
   "run download 300 "*) mkdir -p "$download"; echo '{"issue": 120, "title": "Labelled title", "body": "Labelled body"}' > "$download/asked.json" ;;`;
-    const retrying = (first: string) => {
+    const labelled = '{"issue": 120, "title": "Labelled title", "body": "Labelled body"}\n';
+    const firstTry = `{"workflow_id": 22, "head_branch": "main", "event": "issues", "display_title": "Build of issue 120, try 1"}`;
+    const retrying = (first: string, asked = sha256(labelled)) => {
       const root = scratch();
       const event = join(root, "event.json");
       put(event, `{"inputs": {"issue": "120"}}`);
@@ -442,6 +518,7 @@ describe("build.yml", () => {
           ISSUE: "120",
           ATTEMPT: "2",
           PREVIOUS_RUN: "555",
+          ASKED: asked,
           GITHUB_EVENT_NAME: "workflow_dispatch",
           GITHUB_EVENT_PATH: event,
         },
@@ -450,9 +527,7 @@ describe("build.yml", () => {
       return { root, run };
     };
 
-    const { root, run } = retrying(
-      `{"workflow_id": 22, "head_branch": "main", "event": "issues", "display_title": "Build of issue 120, try 1"}`,
-    );
+    const { root, run } = retrying(firstTry);
     expect(run.failed, run.printed).toBe(false);
     const issue = left(root, "build/issue.md");
     for (const want of ["# #120: Labelled title", "Labelled body", "The owner says this"])
@@ -461,7 +536,18 @@ describe("build.yml", () => {
     expect(run.calls, "the first try isn't looked for before the retry run").toContain(
       "2026-10-27T12:00:00Z",
     );
-    expect(left(root, "asked/asked.json")).toContain("Labelled body");
+    expect(left(root, "asked/asked.json"), "the retry keeps the record as it was").toBe(labelled);
+    expect(run.outputs.asked).toBe(sha256(labelled));
+
+    for (const [name, asked] of [
+      ["another digest", sha256("{}")],
+      ["no digest", ""],
+      ["a digest that isn't one", "main"],
+    ]) {
+      const swapped = retrying(firstTry, asked);
+      expect(swapped.run.failed, `a retry trusts the first try's record with ${name}`).toBe(true);
+      expect(left(swapped.root, "build/issue.md"), `a retry drafts from a record with ${name}`).toBe("");
+    }
 
     for (const [name, first] of [
       ["from a branch", `{"workflow_id": 22, "head_branch": "a-branch", "event": "issues", "display_title": "Build of issue 120, try 1"}`],
@@ -511,6 +597,54 @@ describe("build.yml", () => {
     expect(left(other, "build/issue.md")).toContain("Why the last try failed was not recorded.");
   });
 
+  // The draft keeps its patch, message, description and pages in a folder of their own, refuses
+  // any that carry what looks like the login token, since the artifact is public, and gives the
+  // folder's digest as the job's output, which no other job can change. Packages' integrity hashes,
+  // as package-lock.json names them, are long enough to look like a token, so they're left out of
+  // the check.
+  it.runIf(canRehearse)("keeps the draft's change, checked for the login token, with its digest", () => {
+    const pack = stepWithId(jobs.draft, "pack").run ?? "";
+    const packing = (files: Record<string, string>) => {
+      const root = scratch();
+      for (const [file, text] of Object.entries(files)) put(join(root, "runner/build", file), text);
+      put(join(root, "runner/build/issue.md"), "# #120: The issue\n");
+      return { root, run: rehearse(pack, { root }) };
+    };
+    const integrity = `sha512-${"A".repeat(86)}==`;
+
+    const kept = packing({
+      "change.patch": `diff --git a/package-lock.json b/package-lock.json\n+      "integrity": "${integrity}"\n`,
+      "message.md": "Add a line\n",
+      "pull-request.md": "Adds a line.\n",
+      "pictures.json": '[{"path": "/acme/dinners"}]\n',
+    });
+    expect(kept.run.failed, kept.run.printed).toBe(false);
+    expect(readdirSync(join(kept.root, "runner/change")).sort()).toEqual([
+      "change.patch",
+      "message.md",
+      "pictures.json",
+      "pull-request.md",
+    ]);
+    expect(kept.run.outputs.digest).toBe(digestOf(join(kept.root, "runner/change")));
+    expect(workflow.jobs.draft.outputs?.digest).toBe("${{ steps.pack.outputs.digest }}");
+    const upload = steps(jobs.draft).find(
+      (each) => each.uses?.startsWith("actions/upload-artifact") && each.with?.name === "change",
+    );
+    expect(upload?.with?.path).toBe("${{ runner.temp }}/change");
+
+    const token = `sk-ant-oat01-${"Ab3_".repeat(20)}`;
+    for (const [file, text] of [
+      ["change.patch", `+const leak = "${token}";\n`],
+      ["message.md", `Add a line\n\n${"Zq9-".repeat(25)}\n`],
+      ["pull-request.md", `It is ${token}.\n`],
+    ]) {
+      const carried = packing({ "change.patch": "diff --git a/a b/a\n", "message.md": "Add\n", [file]: text });
+      expect(carried.run.failed, `the draft kept a ${file} that carries the token`).toBe(true);
+      expect(carried.run.printed).not.toContain("Ab3_Ab3_");
+      expect(carried.run.outputs.digest).toBeUndefined();
+    }
+  });
+
   // The drafting session no longer asks for review itself: the reviews and the build rule decide.
   // It asks on the issue rather than guess a choice a reader would see (chrismdp/awml#127), fixes
   // what the reviews found, and makes a page show a change no seeded page shows, so a reviewer sees
@@ -528,25 +662,24 @@ describe("build.yml", () => {
     ])
       expect(prompt).toContain(want);
     expect(prompt, "Claude still asks for review itself").not.toContain("review.md");
-    const upload = steps(jobs.draft).find(
-      (each) => each.uses?.startsWith("actions/upload-artifact") && each.with?.name === "change",
-    );
-    expect(String(upload?.with?.path)).toContain("pictures.json");
-    expect(String(upload?.with?.path)).not.toContain("review.md");
+    const pack = stepWithId(jobs.draft, "pack").run ?? "";
+    expect(pack).toContain("pictures.json");
+    expect(pack).not.toContain("review.md");
   });
 
   // The bug and security reviews start together, each its own claude run, in a job that only
-  // reads, once the checks pass, and the classifier runs after their findings are weighed. The
-  // prompts and REVIEW.md come from main, kept before the patch is applied.
+  // reads, once the checks pass and the pictures job has ended however it ended, and the classifier
+  // runs after their findings are weighed. The prompts and REVIEW.md come from main, kept before
+  // the patch is applied.
   it("reviews the checked change side by side, then classifies it", () => {
     const review = jobs.review;
-    expect(needs(review)).toEqual(["draft", "check"]);
-    expect(review.if).toBe("needs.check.result == 'success'");
+    expect(needs(review)).toEqual(["draft", "check", "pictures"]);
+    expect(review.if).toBe("${{ !cancelled() && needs.check.result == 'success' }}");
     const all = steps(review);
     const together = all.findIndex(
       (each) =>
-        (each.run ?? "").includes("review-bugs-prompt.md &") &&
-        (each.run ?? "").includes("review-security-prompt.md &"),
+        /review-bugs-prompt\.md .*&\n/.test(each.run ?? "") &&
+        /review-security-prompt\.md .*&\n/.test(each.run ?? ""),
     );
     const classify = all.findIndex(
       (each) => /\bclaude -p\b/.test(each.run ?? "") && (each.run ?? "").includes("classify-prompt.md"),
@@ -615,13 +748,22 @@ describe("build.yml", () => {
       git(repo, "reset", "-q", "--hard");
       put(join(root, "runner/record/result.txt"), "The reviews did not finish.\n");
       put(join(root, "runner/review/.kept"), "");
-      const run = rehearse(apply, { root, cwd: repo, env: { ATTEMPT: "1" } });
+      const drafted = digestOf(join(root, "runner/change"));
+      const run = rehearse(apply, { root, cwd: repo, env: { ATTEMPT: "1", CHANGE_DIGEST: drafted } });
       if (!path) {
         expect(run.failed, run.printed).toBe(false);
         expect(git(repo, "diff", "--cached", "--name-only")).toBe("README.md");
         expect(left(root, "review/REVIEW.md")).toBe("What failure looks like.\n");
         expect(left(root, "review/message.md")).toBe("Add a line\n");
         expect(left(root, "classify-prompt.md")).toBe("Sort by risk.\n");
+
+        // A change another job put in place of the draft's isn't reviewed.
+        git(repo, "reset", "-q", "--hard");
+        put(join(root, "runner/change/message.md"), "Add a line, and something else\n");
+        const swapped = rehearse(apply, { root, cwd: repo, env: { ATTEMPT: "1", CHANGE_DIGEST: drafted } });
+        expect(swapped.failed, "a change that isn't the draft's was reviewed").toBe(true);
+        expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+        expect(left(root, "record/result.txt")).toContain("isn't the one the draft made");
         continue;
       }
       expect(run.failed, `a patch to ${path} reached the reviews`).toBe(true);
@@ -636,14 +778,16 @@ describe("build.yml", () => {
   // which review found it. An Important finding before the third try sends the change to retry.yml;
   // otherwise the classifier runs and the pull request opens. The findings reach the issue and the
   // pull request, so any that carry what looks like the login token are refused, as review.yml
-  // refuses them.
+  // refuses them. The findings go to the classifier among its inputs, which it can't change.
   it.runIf(canRehearse)("weighs the reviews' findings", () => {
     const weigh = stepWithId(jobs.review, "weigh").run ?? "";
     const weighing = (attempt: string, bugs: string, security = "[]") => {
       const root = scratch();
-      put(join(root, "runner/review/bugs.json"), bugs);
-      put(join(root, "runner/review/security.json"), security);
+      put(join(root, "runner/sessions/bugs/out/bugs.json"), bugs);
+      put(join(root, "runner/sessions/security/out/security.json"), security);
       put(join(root, "runner/record/result.txt"), "The reviews did not finish.\n");
+      put(join(root, "runner/review/REVIEW.md"), "What failure looks like.\n");
+      chmodSync(join(root, "runner/review"), 0o555);
       return { root, run: rehearse(weigh, { root, env: { ATTEMPT: attempt } }) };
     };
     const important = `[{"severity": "Important", "file": "src/server/viewer.ts", "line": 4, "title": "A private workflow leaks", "detail": "A stranger sees its title."}]`;
@@ -669,6 +813,8 @@ describe("build.yml", () => {
     expect(left(last.root, "review/findings.json"), "the classifier can't read the findings").toContain(
       "A private workflow leaks",
     );
+    for (const path of ["review", "review/findings.json"])
+      expect(statSync(join(last.root, "runner", path)).mode & 0o222, `${path} can be changed`).toBe(0);
 
     const minor = weighing(
       "1",
@@ -709,7 +855,7 @@ describe("build.yml", () => {
     const verdict = stepWithId(jobs.review, "verdict").run ?? "";
     const reading = (classification: string) => {
       const root = scratch();
-      put(join(root, "runner/review/classification.json"), classification);
+      put(join(root, "runner/sessions/classify/out/classification.json"), classification);
       put(join(root, "runner/record/result.txt"), "The classifier did not finish.\n");
       return { root, run: rehearse(verdict, { root }) };
     };
@@ -735,8 +881,10 @@ describe("build.yml", () => {
     }
   });
 
-  // The pages are pictured once the checks pass, alongside the reviews, by a job that only reads.
-  it("pictures the pages alongside the reviews, and opens only once both are done", () => {
+  // Any job's runtime token can replace the artifacts of its run, so a job that runs the change's
+  // code must have ended before a job that makes or reads a trusted record starts. The pages are
+  // pictured once the checks pass, and the reviews start once the pictures job has ended.
+  it("lets no job that runs the change's code live alongside a trusted record", () => {
     expect(needs(jobs.pictures)).toEqual(["draft", "check"]);
     expect(jobs.pictures.if).toContain("needs.check.result == 'success'");
     expect(needs(jobs.open)).toEqual(["draft", "check", "review", "pictures"]);
@@ -746,6 +894,112 @@ describe("build.yml", () => {
       "needs.review.outputs.opens == 'true'",
     ])
       expect(jobs.open.if).toContain(want);
+    expect(jobs.open.if, "open runs even when the run was cancelled").toMatch(/^\$\{\{ !cancelled\(\) && /);
+    expect(jobs.open.if).not.toContain("always()");
+
+    const after = (name: string): Set<string> => {
+      const all = new Set<string>();
+      for (const each of needs(jobs[name])) {
+        all.add(each);
+        for (const earlier of after(each)) all.add(earlier);
+      }
+      return all;
+    };
+    const runsTheChange = Object.keys(jobs).filter((name) =>
+      steps(jobs[name]).some((each) =>
+        /\bclaude -p\b|\bnpm (ci|install|run|test)\b|\bnpx\b|picture-pages\.sh/.test(each.run ?? ""),
+      ),
+    );
+    expect(runsTheChange.sort()).toEqual(["check", "draft", "pictures", "review"]);
+    for (const trusted of ["review", "open"])
+      for (const untrusted of ["draft", "check", "pictures"])
+        expect(after(trusted).has(untrusted), `${trusted} can run alongside ${untrusted}`).toBe(true);
+  });
+
+  // The review job gives its record's digest as its output, taken once the record is written.
+  it.runIf(canRehearse)("gives the review record's digest as the job's output", () => {
+    const all = steps(jobs.review);
+    const at = all.findIndex((each) => each.id === "digest");
+    const upload = all.findIndex(
+      (each) => each.uses?.startsWith("actions/upload-artifact") && each.with?.name === "review",
+    );
+    expect(at, "the digest is taken after the record is uploaded").toBeLessThan(upload);
+    expect(at).toBeGreaterThan(all.findIndex((each) => each.id === "verdict"));
+    expect(jobs.review.outputs?.digest).toBe("${{ steps.digest.outputs.digest }}");
+    const root = scratch();
+    put(join(root, "runner/record/result.txt"), "pass\n");
+    put(join(root, "runner/record/findings.json"), "[]\n");
+    put(join(root, "runner/record/classification.json"), '{"needs_review": false, "reasons": ["Small."]}\n');
+    const run = rehearse(all[at].run ?? "", { root });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.digest).toBe(digestOf(join(root, "runner/record")));
+  });
+
+  // Every job takes an artifact's digest the same way.
+  it("takes each artifact's digest the same way everywhere", () => {
+    const takers: string[] = [];
+    for (const file of ["build.yml", "land.yml"])
+      for (const [name, job] of Object.entries(readJobs(file)))
+        for (const each of steps(job))
+          if ((each.run ?? "").includes("digest() {")) {
+            takers.push(`${file} ${name} ${each.id}`);
+            expect(each.run, `${file}'s ${name} step "${each.name}"`).toContain(digestLine);
+          }
+    expect(takers.sort()).toEqual([
+      "build.yml draft pack",
+      "build.yml open record",
+      "build.yml open verify",
+      "build.yml review apply",
+      "build.yml review digest",
+      "land.yml find find",
+      "land.yml find judge",
+    ]);
+  });
+
+  // The open job uses the change and the review record only if each is what the draft job and the
+  // review job gave as their digests, so nothing that ran the change's code could have put another
+  // in its place.
+  it.runIf(canRehearse)("opens only the change the draft made and the reviews read", () => {
+    const all = steps(jobs.open);
+    const verify = all.findIndex((each) => each.id === "verify");
+    const downloads = all
+      .map((each, index) => ({ each, index }))
+      .filter(({ each }) => each.uses?.startsWith("actions/download-artifact") && each.with?.name !== "pictures");
+    for (const { index } of downloads) expect(index).toBeLessThan(verify);
+    // The pictures come from a job that ran the change's code, so they're checked on their own.
+    for (const after of all.slice(verify + 1))
+      if (after.with?.name !== "pictures") expect(after.uses ?? "").not.toMatch(/download-artifact/);
+    expect(verify, "open reads the check's result before it checks the digests").toBeLessThan(
+      all.findIndex((each) => each.name === "Read the check result"),
+    );
+    expect(all[verify].env).toEqual({
+      CHANGE_DIGEST: "${{ needs.draft.outputs.digest }}",
+      REVIEW_DIGEST: "${{ needs.review.outputs.digest }}",
+    });
+    const verifying = (swap: (root: string) => void) => {
+      const root = scratch();
+      put(join(root, "runner/change/change.patch"), "diff --git a/a b/a\n");
+      put(join(root, "runner/change/message.md"), "Add a line\n");
+      put(join(root, "runner/review/findings.json"), "[]\n");
+      put(join(root, "runner/review/classification.json"), '{"needs_review": false, "reasons": ["Small."]}\n');
+      const env = {
+        CHANGE_DIGEST: digestOf(join(root, "runner/change")),
+        REVIEW_DIGEST: digestOf(join(root, "runner/review")),
+      };
+      swap(root);
+      return rehearse(all[verify].run ?? "", { root, env });
+    };
+    const kept = verifying(() => {});
+    expect(kept.failed, kept.printed).toBe(false);
+    for (const [name, swap] of [
+      ["another patch", (root: string) => put(join(root, "runner/change/change.patch"), "diff --git a/b b/b\n")],
+      ["an added file", (root: string) => put(join(root, "runner/change/pictures.json"), "[]\n")],
+      ["findings left out", (root: string) => put(join(root, "runner/review/findings.json"), "[]")],
+      ["no verdict", (root: string) => rmSync(join(root, "runner/review/classification.json"))],
+    ] as const) {
+      const swapped = verifying(swap);
+      expect(swapped.failed, `open used ${name}`).toBe(true);
+    }
   });
 
   // The open job pushes onto main as it is when it pushes, not the main the build started from, so
@@ -830,7 +1084,8 @@ describe("build.yml", () => {
 
   // land.yml reads what it needs from the build's record: the commit it pushes, the commit of main
   // it applied the patch to, the commit of main the checks ran on, the try, who to ask, the app's
-  // bot and the pictures.
+  // bot, the digest of the issue as labelled, which a retry needs, and the pictures. The record's own
+  // digest goes into the description, which only the app and the repository's people can edit.
   it.runIf(canRehearse)("keeps the build's record for land-a-pull-request", () => {
     const record = stepWithId(jobs.open, "record").run ?? "";
     const root = scratch();
@@ -847,17 +1102,22 @@ describe("build.yml", () => {
     put(join(root, "runner/pictures-left-out.txt"), "");
     put(join(root, "runner/change/message.md"), "Add a line\n\nWhy.\n");
     const checked = "ef".repeat(20);
-    const run = rehearse(record, {
-      root,
-      cwd: repo,
-      env: {
-        APP_SLUG: "awml-factory",
-        ISSUE: "125",
-        ATTEMPT: "2",
-        REQUESTED_BY: "the-owner",
-        GITHUB_SHA: checked,
-      },
-    });
+    const asked = "aa".repeat(32);
+    const recording = (env: Record<string, string>) =>
+      rehearse(record, {
+        root,
+        cwd: repo,
+        env: {
+          APP_SLUG: "awml-factory",
+          ISSUE: "125",
+          ATTEMPT: "2",
+          REQUESTED_BY: "the-owner",
+          GITHUB_SHA: checked,
+          ASKED_DIGEST: asked,
+          ...env,
+        },
+      });
+    const run = recording({});
     expect(run.failed, run.printed).toBe(false);
     expect(JSON.parse(left(root, "pull-request/build.json"))).toEqual({
       issue: 125,
@@ -866,10 +1126,48 @@ describe("build.yml", () => {
       commit,
       base,
       checked,
+      asked,
       bot: "awml-factory[bot]",
     });
     expect(left(root, "pull-request/pictures.txt")).toBe("/acme/dinners|visitor|desktop|a.png|b.png\n");
     expect(left(root, "pull-request/title.txt")).toBe("Add a line\n");
+    expect(run.outputs.digest).toBe(digestOf(join(root, "runner/pull-request")));
+    expect(stepWithId(jobs.open, "record").env?.ASKED_DIGEST).toBe("${{ needs.draft.outputs.asked }}");
+    expect(recording({ ASKED_DIGEST: "" }).failed, "the record kept no digest of the issue").toBe(true);
+  });
+
+  // A new try's commit hasn't been judged, so a merge an earlier try set on the branch's open pull
+  // request is turned off before the push, and again after it, in case land.yml set one for the
+  // earlier commit while this one was being pushed.
+  it.runIf(canRehearse)("turns off a merge an earlier try set, before and after it pushes", () => {
+    const push = stepWithId(jobs.open, "push").run ?? "";
+    const root = scratch();
+    const origin = join(root, "origin.git");
+    const repo = join(root, "repo");
+    git(root, "init", "-q", "--bare", origin);
+    put(join(repo, "README.md"), "A registry\n");
+    git(repo, "init", "-q");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "Build #125");
+    git(repo, "remote", "add", "origin", origin);
+    const run = rehearse(push, {
+      root,
+      cwd: repo,
+      env: { BRANCH: "build/issue-125", ORIGIN: origin, ORDER: join(root, "order") },
+      answers: `
+  "api repos/owner/repo/pulls?head=owner:build/issue-125&base=main&state=open"*) answer <<< '[{"number": 131, "auto_merge": {"merge_method": "squash"}}]' ;;
+  "pr merge 131 --repo owner/repo --disable-auto")
+    if git --git-dir="$ORIGIN" rev-parse -q --verify refs/heads/build/issue-125 > /dev/null; then
+      echo after >> "$ORDER"
+    else
+      echo before >> "$ORDER"
+    fi ;;`,
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(git(origin, "rev-parse", "refs/heads/build/issue-125")).toBe(git(repo, "rev-parse", "HEAD"));
+    expect(readIfThere(join(root, "order")), "the merge isn't turned off both before and after the push").toBe(
+      "before\nafter\n",
+    );
   });
 
   // A closed pull request is never updated. gh pr view finds a branch's closed or merged pull
@@ -969,14 +1267,19 @@ describe("build.yml", () => {
     const again = runs(readJobs("retry.yml").retry);
     for (const want of ["gh workflow run build.yml", "The build failed three times"]) expect(again).toContain(want);
     const dispatch = readWorkflow("retry.yml").on?.workflow_dispatch as { inputs?: Record<string, unknown> };
-    expect(Object.keys(dispatch?.inputs ?? {})).toEqual(["issue", "attempt", "requested_by", "run"]);
+    expect(Object.keys(dispatch?.inputs ?? {})).toEqual(["issue", "attempt", "requested_by", "run", "asked"]);
+    const build = readWorkflow("build.yml").on?.workflow_dispatch as { inputs?: Record<string, unknown> };
+    expect(Object.keys(build?.inputs ?? {})).toEqual(["issue", "attempt", "previous_run", "requested_by", "asked"]);
   });
 
   // The open job ran, so this try reached the end, unless its patch no longer applied. If it failed
-  // after that, it said so itself. Otherwise this run goes to retry.yml, which reads why from it.
+  // after that, it said so itself. Otherwise this run goes to retry.yml, which reads why from it,
+  // with the digest of the issue as labelled, which the next try checks.
   it.runIf(canRehearse)("starts retry-a-build when the try didn't open its pull request", () => {
-    const retry = stepWithId(jobs.retry, "retry").run ?? "";
-    const env = { ISSUE: "125", ATTEMPT: "2", REQUESTED_BY: "the-owner" };
+    const retry = stepWithId(jobs.retry, "retry");
+    expect(retry.env?.ASKED_DIGEST).toBe("${{ needs.draft.outputs.asked }}");
+    const asked = "aa".repeat(32);
+    const env = { ISSUE: "125", ATTEMPT: "2", REQUESTED_BY: "the-owner", ASKED_DIGEST: asked };
     const answers = `  "workflow run retry.yml "*) : ;;`;
     for (const [open, applies, starts] of [
       ["skipped", "", true],
@@ -984,11 +1287,11 @@ describe("build.yml", () => {
       ["success", "true", false],
       ["failure", "", false],
     ] as const) {
-      const run = rehearse(retry, { root: scratch(), env: { ...env, OPEN: open, APPLIES: applies }, answers });
+      const run = rehearse(retry.run ?? "", { root: scratch(), env: { ...env, OPEN: open, APPLIES: applies }, answers });
       expect(run.failed, run.printed).toBe(false);
       if (starts)
         expect(run.calls.trim()).toBe(
-          "workflow run retry.yml --repo owner/repo --ref main -f issue=125 -f attempt=2 -f requested_by=the-owner -f run=1000",
+          `workflow run retry.yml --repo owner/repo --ref main -f issue=125 -f attempt=2 -f requested_by=the-owner -f run=1000 -f asked=${asked}`,
         );
       else expect(run.calls, `open ${open}, applies ${applies}`).toBe("");
     }
@@ -1161,8 +1464,8 @@ describe("review.yml", () => {
 
   // Each review is its own claude run, started together, so neither sees the other's session. A
   // session reads only the working tree and its own folder, never /proc, where Claude Code's own
-  // environment holds the login token, and runs nothing but git's reads. A bare Read, Glob or Grep
-  // would approve a read anywhere.
+  // environment holds the login token, runs nothing, and writes only its own findings. A bare Read,
+  // Glob or Grep would approve a read anywhere.
   it("starts both reviews side by side, reading only the tree and their folder", () => {
     const sessions = steps(jobs().review).filter((each) =>
       /\bclaude -p\b/.test(each.run ?? ""),
@@ -1171,22 +1474,14 @@ describe("review.yml", () => {
     const [reviews] = sessions;
     const script = reviews.run ?? "";
     for (const want of [
-      "review-bugs-prompt.md &",
-      "review-security-prompt.md &",
-      "wait",
-      `"Read(./**)"`,
-      `"Read(/$REVIEW_DIR/**)"`,
-      `--disallowedTools "Read(//proc/**)"`,
+      /review-bugs-prompt\.md bugs\.json &\n/,
+      /review-security-prompt\.md security\.json &\n/,
+      /\bwait\b/,
     ])
-      expect(script).toContain(want);
-    for (const bare of [`"Read"`, `"Glob"`, `"Grep"`]) expect(script).not.toContain(bare);
-    expect(script.match(/"Bash\([^"]*\)"/g)).toEqual([
-      `"Bash(git diff:*)"`,
-      `"Bash(git log:*)"`,
-      `"Bash(git show:*)"`,
-      `"Bash(git status:*)"`,
-    ]);
+      expect(script).toMatch(want);
     expect(reviews.env?.REVIEW_DIR).toBe("${{ runner.temp }}/review");
+    // The keep step reads each review's findings from its session's own folder.
+    expect(stepWithId(jobs().review, "keep").run).toContain('"$RUNNER_TEMP/sessions/$review/out/$review.json"');
   });
 
   // A patch that adds or changes Claude Code's own settings, servers or instructions, anywhere in
@@ -1259,7 +1554,9 @@ describe("review.yml", () => {
   );
 
   // GitHub's diff names a binary file without its contents, so the review applies the rest and
-  // tells the reviewers which binary files changed, rather than failing and posting no checks.
+  // tells the reviewers which binary files changed, rather than failing and posting no checks. The
+  // list goes in a file of the workflow's own, apart from the pull request's description, which the
+  // author writes and could fill with a list of their own.
   it.runIf(canRehearse)("applies a patch with binary files, and lists them for the reviewers", () => {
     const bring = stepWithId(jobs().review, "bring").run ?? "";
     const answers = `
@@ -1306,9 +1603,17 @@ describe("review.yml", () => {
     expect(run.failed, run.printed).toBe(false);
     expect(git(repo, "diff", "--cached", "--name-only")).toBe("README.md");
     expect(readIfThere(join(root, "output"))).toContain("unread=3\n");
-    const told = readIfThere(join(root, "runner/review/pull-request.md"));
+    const told = readIfThere(join(root, "runner/review/binary-files.md"));
     for (const path of ["logo.png", "fonts/Registry.ttf", "vendor/awml/old.png"])
       expect(told, `the reviewers aren't told that ${path} changed`).toContain(`\n- ${path}\n`);
+    expect(readIfThere(join(root, "runner/review/pull-request.md"))).toBe("# Add a line\n\nA second line.\n");
+    for (const prompt of ["review-bugs-prompt.md", "review-security-prompt.md"]) {
+      const text = readFileSync(join(__dirname, "../.github", prompt), "utf8");
+      expect(text, `${prompt} doesn't point at the workflow's list`).toContain("REVIEW_DIR/binary-files.md");
+      expect(text, `${prompt} still points at a list in the description`).not.toContain(
+        "end of\nREVIEW_DIR/pull-request.md",
+      );
+    }
   });
 
   // The count of binary files the reviews couldn't read reaches the post job as the bring step's
@@ -1512,32 +1817,38 @@ describe("review.yml", () => {
       `{"severity": "Nit", "file": "a.ts", "line": 1, "title": "${body}", "detail": "A detail."}`,
       `{"severity": "Nit", "file": "SK-ANT-OAT01-x.ts", "line": 1, "title": "A name", "detail": "A detail."}`,
     ]) {
-      for (const [script, dir] of [
-        [keep, "review"],
-        [post, "findings"],
+      for (const [script, bugs, security] of [
+        [keep, "sessions/bugs/out/bugs.json", "sessions/security/out/security.json"],
+        [post, "findings/bugs.json", "findings/security.json"],
       ]) {
         const root = scratch();
-        put(join(root, "runner", dir, "bugs.json"), `[${finding}]`);
-        put(join(root, "runner", dir, "security.json"), "[]");
+        put(join(root, "runner", bugs), `[${finding}]`);
+        put(join(root, "runner", security), "[]");
         const run = rehearse(script, {
           root,
           env: { HEAD_SHA: "ab".repeat(20), UNREAD: "0" },
           answers: posted,
         });
-        expect(run.failed, `the ${dir} step let through ${finding}`).toBe(true);
+        expect(run.failed, `the ${bugs} step let through ${finding}`).toBe(true);
         expect(run.inputs).toEqual([]);
         expect(run.printed).not.toContain(token);
         expect(run.printed).not.toContain(body);
+        expect(left(root, "findings/bugs.json") === "" || script === post).toBe(true);
       }
     }
     const root = scratch();
     put(
-      join(root, "runner/review/bugs.json"),
+      join(root, "runner/sessions/bugs/out/bugs.json"),
       `[{"severity": "Nit", "file": "a.ts", "line": 1, "title": "A name", "detail": "A detail."}]`,
     );
-    put(join(root, "runner/review/security.json"), "[]");
+    put(join(root, "runner/sessions/security/out/security.json"), "[]");
     const clean = rehearse(keep, { root });
     expect(clean.failed, clean.printed).toBe(false);
+    // What the keep step passed is what's uploaded for the post job.
+    expect(left(root, "findings/bugs.json")).toContain("A name");
+    expect(left(root, "findings/security.json")).toBe("[]");
+    const upload = steps(review).find((each) => each.uses?.startsWith("actions/upload-artifact"));
+    expect(upload?.with).toEqual({ name: "findings", path: "${{ runner.temp }}/findings" });
   });
 });
 
@@ -1646,7 +1957,8 @@ describe("Claude steps in every workflow", () => {
 
   // The review and classify sessions read only the working tree and their own folder, never /proc,
   // where Claude Code's own environment holds the login token. A bare Read, Glob or Grep rule would
-  // approve a read anywhere, and they run nothing but git's reads.
+  // approve a read anywhere. They run nothing, not even git, whose --output writes wherever it's
+  // told, and they write nothing but their own findings.
   it("lets the reviewers and the classifier read only the tree and their own folder", () => {
     const found: string[] = [];
     for (const file of workflowFiles)
@@ -1654,23 +1966,92 @@ describe("Claude steps in every workflow", () => {
         for (const each of steps(job)) {
           const script = each.run ?? "";
           if (!/\bclaude -p\b/.test(script) || each.env?.REVIEW_DIR === undefined) continue;
-          found.push(`${file} ${name}`);
-          for (const want of [`"Read(./**)"`, `"Read(/$REVIEW_DIR/**)"`, `--disallowedTools "Read(//proc/**)"`])
-            expect(script, `${file}'s ${name} step "${each.name}"`).toContain(want);
-          for (const bare of [`"Read"`, `"Glob"`, `"Grep"`])
-            expect(script, `${file}'s ${name} step "${each.name}" allows ${bare} anywhere`).not.toContain(bare);
-          expect(script.match(/"Bash\([^"]*\)"/g)).toEqual([
-            `"Bash(git diff:*)"`,
-            `"Bash(git log:*)"`,
-            `"Bash(git show:*)"`,
-            `"Bash(git status:*)"`,
-          ]);
+          const where = `${file}'s ${name} step "${each.name}"`;
+          found.push(`${file} ${name} ${each.id}`);
+          for (const want of [
+            `"Read(./**)"`,
+            `"Read(/$REVIEW_DIR/**)"`,
+            `--disallowedTools "Read(//proc/**)" "Bash"`,
+            "--permission-mode default",
+            'chmod -R a-w "$REVIEW_DIR"',
+          ])
+            expect(script, where).toContain(want);
+          for (const bare of [`"Read"`, `"Glob"`, `"Grep"`, `"Write"`, `"Edit"`, `"Bash(`, "acceptEdits"])
+            expect(script, `${where} allows ${bare}`).not.toContain(bare);
         }
-    expect(found, "the build's reviews, its classifier and the pull request reviews").toEqual([
-      "build.yml review",
-      "build.yml review",
-      "review.yml review",
+    expect(found.sort(), "the build's reviews, its classifier and the pull request reviews").toEqual([
+      "build.yml review classify",
+      "build.yml review reviews",
+      "review.yml review undefined",
     ]);
+  });
+
+  // Each session starts in a home of its own, empty, so it loads no settings another session could
+  // have written, and has a folder of its own, where the one file it may write is. The inputs it
+  // shares with the other sessions can't be changed. So one session that text in the patch steers
+  // can't change another's findings, its settings in ~/.claude, or what the others read.
+  it.runIf(canRehearse)("starts each review session in a home and a folder of its own, with inputs it can't change", () => {
+    const steps_: [string, Step, Record<string, string>][] = [
+      ["build.yml's reviews", stepWithId(readJobs("build.yml").review, "reviews"), { bugs: "bugs.json", security: "security.json" }],
+      ["build.yml's classifier", stepWithId(readJobs("build.yml").review, "classify"), { classify: "classification.json" }],
+      [
+        "review.yml's reviews",
+        steps(readJobs("review.yml").review).find((each) => /\bclaude -p\b/.test(each.run ?? "")) ?? {},
+        { bugs: "bugs.json", security: "security.json" },
+      ],
+    ];
+    for (const [where, each, files] of steps_) {
+      const root = scratch();
+      const review = join(root, "runner/review");
+      put(join(review, "REVIEW.md"), "What failure looks like.\n");
+      put(join(review, "change.patch"), "diff --git a/a b/a\n");
+      for (const [prompt, file] of [
+        ["review-bugs-prompt.md", "bugs.json"],
+        ["review-security-prompt.md", "security.json"],
+        ["classify-prompt.md", "classification.json"],
+      ])
+        put(join(root, "runner", prompt), `Read REVIEW_DIR/change.patch. Write OUT_DIR/${file}, and nothing else.\n`);
+      const { run, started } = sessions(each.run ?? "", root, {
+        REVIEW_DIR: review,
+        CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
+        CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+      });
+      expect(run.failed, `${where}: ${run.printed}`).toBe(false);
+      expect(started.length, `${where} starts a session for each of ${Object.keys(files).join(", ")}`).toBe(
+        Object.keys(files).length,
+      );
+      const homes = started.map((session) => session.home);
+      expect(new Set(homes).size, `${where} shares a home between sessions`).toBe(homes.length);
+      const outs: string[] = [];
+      for (const session of started) {
+        const { args } = session;
+        expect(session.home, `${where} starts a session in the runner's home`).not.toBe(root);
+        expect(session.home.startsWith(join(root, "runner")), where).toBe(true);
+        expect(session.empty, `${where} starts a session in a home that isn't empty`).toBe("yes");
+        expect(session.changes, `${where} lets a session change its inputs`).toBe("no");
+        expect(flagValues(args, "--permission-mode")).toEqual(["default"]);
+        expect(flagValues(args, "--disallowedTools")).toEqual(["Read(//proc/**)", "Bash"]);
+        const allowed = flagValues(args, "--allowedTools");
+        expect(allowed.filter((rule) => rule.startsWith("Read("))).toEqual(["Read(./**)", `Read(/${review}/**)`]);
+        const writes = allowed.filter((rule) => !rule.startsWith("Read("));
+        const [, out, file] = /^Write\(\/(.+)\/([a-z]+\.json)\)$/.exec(writes[0] ?? "") ?? [];
+        expect(writes, `${where} lets a session write more than its own findings`).toEqual([
+          `Write(/${out}/${file})`,
+          `Edit(/${out}/${file})`,
+        ]);
+        expect(Object.values(files)).toContain(file);
+        for (const home of homes)
+          expect(out.startsWith(home), `${where} lets a session write in a home, where ~/.claude is`).toBe(false);
+        for (const rule of allowed) expect(rule, where).not.toContain(".claude");
+        outs.push(out);
+        const dirs = args.flatMap((arg, at) => (arg === "--add-dir" ? [args[at + 1]] : []));
+        expect(dirs).toEqual([review, out]);
+        const prompt = args[args.indexOf("-p") + 1];
+        expect(prompt).toContain(`${review}/change.patch`);
+        expect(prompt).toContain(`${out}/${file}`);
+      }
+      expect(new Set(outs).size, `${where} shares a folder between sessions`).toBe(outs.length);
+    }
   });
 });
 
@@ -1679,6 +2060,8 @@ describe("Claude steps in every workflow", () => {
 describe("pull-request-body.sh", () => {
   const script = join(__dirname, "../.github/pull-request-body.sh");
   const checked = "ef".repeat(20);
+  const digests = { CHANGE_DIGEST: "11".repeat(32), REVIEW_DIGEST: "22".repeat(32), RECORD_DIGEST: "33".repeat(32) };
+  const marker = `<!-- factory-build run=1234 change=${"11".repeat(32)} review=${"22".repeat(32)} record=${"33".repeat(32)} -->`;
 
   function describing({
     findings = "[]",
@@ -1686,12 +2069,14 @@ describe("pull-request-body.sh", () => {
     verdict,
     pictures,
     leftOut,
+    env = {},
   }: {
     findings?: string;
     classification?: string;
     verdict?: string;
     pictures?: string;
     leftOut?: string;
+    env?: Record<string, string>;
   }) {
     const root = scratch();
     put(join(root, "runner/change/message.md"), "Add a line\n\nWhy it's added.\n");
@@ -1712,16 +2097,20 @@ describe("pull-request-body.sh", () => {
         PICTURES: join(root, "runner/pictures.txt"),
         PICTURES_LEFT_OUT: join(root, "runner/pictures-left-out.txt"),
         MEDIA_URL: "https://github.com/owner/repo/raw/factory-media/issue-125/attempt-1",
+        ...digests,
         ...(verdict ? { VERDICT: join(root, "runner/verdict.txt") } : {}),
+        ...env,
       },
     });
     return { run, body: left(root, "pull-request.md") };
   }
 
-  it.runIf(canRehearse)("names the build's run first, so land.yml can find its records", () => {
+  // The first line names the build's run and the digests of the change, the review record and the
+  // build's record, so land.yml can find the records and check that no job replaced them.
+  it.runIf(canRehearse)("names the build's run and its records' digests first, so land.yml can check them", () => {
     const { run, body } = describing({});
     expect(run.failed, run.printed).toBe(false);
-    expect(body.split("\n")[0]).toBe("<!-- factory-build run=1234 -->");
+    expect(body.split("\n")[0]).toBe(marker);
     expect(body).toContain(
       "Waits for CI. Once CI passes, the build rule decides whether this merges by itself or waits for your review.",
     );
@@ -1759,6 +2148,21 @@ describe("pull-request-body.sh", () => {
     );
     expect(body.split("<!--"), "a finding can hide the rest of the description").toHaveLength(2);
     expect(body).not.toContain("\n## Approved");
+  });
+
+  // The rule's reasons name the change's paths, and the reviews' and classifier's text is theirs,
+  // so none of it can hide the rest of the description or mention anyone.
+  it.runIf(canRehearse)("keeps the reasons and findings from hiding text or mentioning anyone", () => {
+    const { run, body } = describing({
+      findings: `[{"review": "bug", "severity": "Nit", "file": "src/a.ts", "line": 7, "title": "Ask @the-owner", "detail": "Or @acme/team."}]`,
+      classification: `{"needs_review": true, "reasons": ["@the-owner should look <!-- here"]}`,
+      verdict: "review\n`docs/<!--.md` is a path that always needs review.\nAsk @the-owner.\n",
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(body.split("<!--"), "a reason can hide the rest of the description").toHaveLength(2);
+    expect(body).toContain("- `docs/&lt;!--.md` is a path that always needs review.");
+    expect(body).not.toMatch(/@(the-owner|acme)/);
+    expect(body).toContain("@\u200bthe-owner");
   });
 
   it.runIf(canRehearse)("says when a change merges by itself", () => {
@@ -1808,6 +2212,8 @@ describe("pull-request-body.sh", () => {
     ).toBe(true);
     expect(describing({ classification: `{"needs_review": "yes", "reasons": []}` }).run.failed).toBe(true);
     expect(describing({ verdict: "merge\nWhy not.\n" }).run.failed).toBe(true);
+    for (const name of ["CHANGE_DIGEST", "REVIEW_DIGEST", "RECORD_DIGEST"])
+      expect(describing({ env: { [name]: "main" } }).run.failed, `the description took ${name}=main`).toBe(true);
   });
 });
 
@@ -1833,29 +2239,27 @@ describe("land.yml", () => {
   });
 
   // CI runs on the branch's push and on its pull request, and only the push's run lands it. A
-  // newer push's CI replaces an older one's land, but the pull request's run never cancels it.
+  // newer push's CI replaces an older one's land, but the pull request's run never cancels it. Each
+  // pull request lands on its own, so a third build's land can't cancel a second's that waits.
   it("lets a newer push's CI replace the land of an older one, and nothing else", () => {
     const group = workflow().concurrency?.group ?? "";
     expect(group).toContain("github.event.workflow_run.event");
     expect(group).toContain("github.event.workflow_run.head_branch");
     expect(workflow().concurrency?.["cancel-in-progress"]).toBe(true);
-    expect(jobs().land.concurrency).toEqual({ group: "build-auto-merge", "cancel-in-progress": false });
+    expect(jobs().land.concurrency).toEqual({
+      group: "build-auto-merge-${{ needs.find.outputs.pr }}",
+      "cancel-in-progress": false,
+    });
   });
 
   const head = "ab".repeat(20);
   const base = "cd".repeat(20);
   const checked = "ef".repeat(20);
-  const pull = (overrides: Record<string, unknown> = {}) =>
-    JSON.stringify([
-      {
-        number: 140,
-        base: { ref: "main" },
-        head: { ref: "build/issue-125", sha: head, repo: { full_name: "owner/repo" } },
-        user: { login: "awml-factory[bot]", type: "Bot" },
-        body: "<!-- factory-build run=1234 -->\nWaits for CI.",
-        ...overrides,
-      },
-    ]);
+  const asked = "aa".repeat(32);
+  const changeDigest = "11".repeat(32);
+  const reviewDigest = "22".repeat(32);
+  const markerFor = (record: string) =>
+    `<!-- factory-build run=1234 change=${changeDigest} review=${reviewDigest} record=${record} -->`;
   const buildRun = (overrides: Record<string, unknown> = {}) =>
     JSON.stringify({
       workflow_id: 22,
@@ -1872,22 +2276,38 @@ describe("land.yml", () => {
       commit: head,
       base,
       checked,
+      asked,
       bot: "awml-factory[bot]",
       ...overrides,
     });
   function finding({
     env = {},
-    pulls = pull(),
+    pull = {},
     run = buildRun(),
     record = buildRecord(),
+    named,
   }: {
     env?: Record<string, string>;
-    pulls?: string;
+    pull?: Record<string, unknown>;
     run?: string;
     record?: string;
+    named?: (digest: string) => string;
   }) {
     const root = scratch();
-    put(join(root, "record.json"), record);
+    put(join(root, "record/build.json"), record);
+    put(join(root, "record/pictures.txt"), "/acme/dinners|visitor|desktop|a.png|b.png\n");
+    put(join(root, "record/title.txt"), "Add a line\n");
+    const digest = digestOf(join(root, "record"));
+    const pulls = JSON.stringify([
+      {
+        number: 140,
+        base: { ref: "main" },
+        head: { ref: "build/issue-125", sha: head, repo: { full_name: "owner/repo" } },
+        user: { login: "awml-factory[bot]", type: "Bot" },
+        body: `${(named ?? markerFor)(digest)}\nWaits for CI.`,
+        ...pull,
+      },
+    ]);
     return rehearse(stepWithId(jobs().find, "find").run ?? "", {
       root,
       env: {
@@ -1896,21 +2316,22 @@ describe("land.yml", () => {
         HEAD_REPOSITORY: "owner/repo",
         CI_EVENT: "push",
         CONCLUSION: "success",
-        RECORD: join(root, "record.json"),
+        RECORD: join(root, "record"),
         ...env,
       },
       answers: `
   "api repos/owner/repo/pulls?head=owner:build/issue-125&state=open") answer <<< '${pulls}' ;;
   "api repos/owner/repo/actions/workflows/build.yml"*) answer <<< '{"id": 22}' ;;
   "api repos/owner/repo/actions/runs/1234") answer <<< '${run}' ;;
-  "run download 1234 --repo owner/repo -n pull-request "*) mkdir -p "$download"; cp "$RECORD" "$download/build.json" ;;`,
+  "run download 1234 --repo owner/repo -n pull-request "*) mkdir -p "$download"; cp -r "$RECORD/." "$download/" ;;`,
     });
   }
 
   // It finds the open pull request the app opened from the branch, whose head is the commit CI ran
-  // on, and the build that opened it, named in the first line of its description. The run it names
-  // must be this repository's build from main of that issue and try, whose record names the app
-  // that opened the pull request and the commit CI ran on.
+  // on, and the build that opened it, named in the first line of its description with the digests
+  // of its records. The run it names must be this repository's build from main of that issue and
+  // try, and its record must be the one the description names, naming the app that opened the pull
+  // request and the commit CI ran on.
   it.runIf(canRehearse)("finds the build that opened the pull request, from its records", () => {
     const passed = finding({});
     expect(passed.failed, passed.printed).toBe(false);
@@ -1921,10 +2342,15 @@ describe("land.yml", () => {
       requested_by: "the-owner",
       base,
       checked,
+      asked,
       pr: "140",
       head_sha: head,
       build_run: "1234",
+      change: changeDigest,
+      review: reviewDigest,
+      record: passed.outputs.record,
     });
+    expect(passed.outputs.record).toMatch(/^[0-9a-f]{64}$/);
     expect(finding({ env: { CONCLUSION: "failure" } }).outputs.ci).toBe("failed");
   });
 
@@ -1935,9 +2361,12 @@ describe("land.yml", () => {
       ["a branch that isn't a build's", { env: { BRANCH: "build/issue-12a" } }],
       ["a commit that isn't one", { env: { HEAD_SHA: "main" } }],
       ["a cancelled CI", { env: { CONCLUSION: "cancelled" } }],
-      ["a pull request a person opened", { pulls: pull({ user: { login: "the-owner", type: "User" } }) }],
-      ["a pull request that has moved on", { pulls: pull({ head: { ref: "build/issue-125", sha: base, repo: { full_name: "owner/repo" } } }) }],
-      ["a description that names no build", { pulls: pull({ body: "Waits for CI.\n<!-- factory-build run=1234 -->" }) }],
+      ["a pull request a person opened", { pull: { user: { login: "the-owner", type: "User" } } }],
+      ["a pull request that has moved on", { pull: { head: { ref: "build/issue-125", sha: base, repo: { full_name: "owner/repo" } } } }],
+      ["a description that names no build", { pull: { body: "Waits for CI." } }],
+      ["a description whose build line isn't first", { named: (digest: string) => `Waits.\n${markerFor(digest)}` }],
+      ["a description that names no digests", { named: () => "<!-- factory-build run=1234 -->" }],
+      ["a record that isn't the one named", { named: () => markerFor("44".repeat(32)) }],
       ["a run of another workflow", { run: buildRun({ workflow_id: 33 }) }],
       ["a run from a branch", { run: buildRun({ head_branch: "build/issue-125" }) }],
       ["a run started by a comment", { run: buildRun({ event: "issue_comment" }) }],
@@ -1946,6 +2375,7 @@ describe("land.yml", () => {
       ["a record that names another bot", { record: buildRecord({ bot: "another-app[bot]" }) }],
       ["a record of another commit", { record: buildRecord({ commit: base }) }],
       ["a record whose checks name no commit", { record: buildRecord({ checked: "main" }) }],
+      ["a record with no digest of the issue", { record: buildRecord({ asked: "" }) }],
       ["a record of an odd reviewer", { record: buildRecord({ requested_by: "a b" }) }],
     ] as const) {
       const leaving = finding(found);
@@ -1954,69 +2384,102 @@ describe("land.yml", () => {
     }
   });
 
-  // The rule and its settings come from main as it is now, and the patch is judged against the
-  // commit of main the build pushed it onto, which must be on main, with the reviews' findings and
-  // the classifier's verdict.
-  it.runIf(canRehearse)("judges the change by main's rule, against the main it was pushed onto", () => {
-    const judge = stepWithId(jobs().find, "judge").run ?? "";
+  // The rule and its settings come from main as it is now. It judges the commit the build pushed,
+  // which CI ran on, not the patch in an artifact: the commit is fetched but never checked out, must
+  // sit directly on the commit of main the build pushed it onto, which must be on main, and its
+  // tree is read into an index beside that commit, leaving the files on disk as main's. The
+  // change and the review record must be the ones the description names, and the rule needs the
+  // classifier's verdict.
+  it.runIf(canRehearse)("judges the pushed commit by main's rule, against the main it was pushed onto", () => {
+    const judge = stepWithId(jobs().find, "judge");
+    expect(judge.env?.HEAD_SHA).toBe("${{ steps.find.outputs.head_sha }}");
     const judging = ({
       findings = "[]",
-      classification,
+      classification = `{"needs_review": false, "reasons": ["It is small."]}`,
       path = "src/app/page.tsx",
+      extra = "",
       offMain = false,
+      between = false,
+      swap,
     }: {
       findings?: string;
-      classification?: string;
+      classification?: string | null;
       path?: string;
+      extra?: string;
       offMain?: boolean;
+      between?: boolean;
+      swap?: (root: string) => void;
     }) => {
       const root = scratch();
-      const repo = join(root, "repo");
-      put(join(repo, "scripts/build-rule.ts"), readFileSync(join(__dirname, "../scripts/build-rule.ts"), "utf8"));
-      put(
-        join(repo, ".github/build-rules.yml"),
-        readFileSync(join(__dirname, "../.github/build-rules.yml"), "utf8"),
-      );
-      put(join(repo, "src/app/page.tsx"), "export default function Page() {}\n");
-      git(repo, "init", "-q");
-      git(repo, "add", "-A");
-      git(repo, "commit", "-q", "-m", "The registry's main");
-      let pushedOnto = git(repo, "rev-parse", "HEAD");
-      put(join(repo, path), "export default function Page() { return null; }\n");
-      git(repo, "add", "-A");
-      put(join(root, "change.patch"), `${git(repo, "diff", "--cached", "--binary")}\n`);
-      git(repo, "reset", "-q", "--hard");
+      const origin = join(root, "origin");
+      put(join(origin, "scripts/build-rule.ts"), readFileSync(join(__dirname, "../scripts/build-rule.ts"), "utf8"));
+      put(join(origin, ".github/build-rules.yml"), readFileSync(join(__dirname, "../.github/build-rules.yml"), "utf8"));
+      put(join(origin, "src/app/page.tsx"), "export default function Page() {}\n");
+      git(origin, "init", "-q");
+      git(origin, "add", "-A");
+      git(origin, "commit", "-q", "-m", "The registry's main");
+      let pushedOnto = git(origin, "rev-parse", "HEAD");
       if (offMain) {
-        git(repo, CLONE, "-q", "-b", "elsewhere");
-        put(join(repo, "README.md"), "Elsewhere\n");
-        git(repo, "add", "-A");
-        git(repo, "commit", "-q", "-m", "Not on main");
-        pushedOnto = git(repo, "rev-parse", "HEAD");
-        git(repo, CLONE, "-q", "main");
+        git(origin, CLONE, "-q", "-b", "elsewhere");
+        put(join(origin, "README.md"), "Elsewhere\n");
+        git(origin, "add", "-A");
+        git(origin, "commit", "-q", "-m", "Not on main");
+        pushedOnto = git(origin, "rev-parse", "HEAD");
       }
-      put(join(repo, "README.md"), "Main moves on\n");
-      git(repo, "add", "-A");
-      git(repo, "commit", "-q", "-m", "Main moves on");
-      put(join(root, "findings.json"), findings);
-      if (classification) put(join(root, "classification.json"), classification);
-      const run = rehearse(judge, {
+      git(origin, CLONE, "-q", "-b", "build/issue-125");
+      if (between) {
+        put(join(origin, "NOTES.md"), "In between\n");
+        git(origin, "add", "-A");
+        git(origin, "commit", "-q", "-m", "In between");
+      }
+      put(join(origin, path), "export default function Page() { return null; }\n");
+      if (extra) put(join(origin, ".gitattributes"), extra);
+      git(origin, "add", "-A");
+      git(origin, "commit", "-q", "-m", "Build #125");
+      const pushed = git(origin, "rev-parse", "HEAD");
+      git(origin, CLONE, "-q", "main");
+      put(join(origin, "README.md"), "Main moves on\n");
+      git(origin, "add", "-A");
+      git(origin, "commit", "-q", "-m", "Main moves on");
+      const repo = join(root, "repo");
+      git(root, "clone", "-q", "--single-branch", "--branch", "main", origin, repo);
+
+      put(join(root, "records/change/message.md"), "Add a line\n");
+      put(join(root, "records/change/pull-request.md"), "Adds a line.\n");
+      put(join(root, "records/review/findings.json"), findings);
+      if (classification !== null) put(join(root, "records/review/classification.json"), classification);
+      const env = {
+        BASE: pushedOnto,
+        HEAD_SHA: pushed,
+        BUILD_RUN: "1234",
+        CHANGE_DIGEST: digestOf(join(root, "records/change")),
+        REVIEW_DIGEST: digestOf(join(root, "records/review")),
+        RECORDS: join(root, "records"),
+      };
+      swap?.(root);
+      const run = rehearse(judge.run ?? "", {
         root,
         cwd: repo,
-        env: { BASE: pushedOnto, BUILD_RUN: "1234", RECORDS: root },
+        env,
         answers: `
-  "run download 1234 --repo owner/repo -n change "*) mkdir -p "$download"; cp "$RECORDS/change.patch" "$download/" ;;
-  "run download 1234 --repo owner/repo -n review "*) mkdir -p "$download"; cp "$RECORDS/findings.json" "$download/"; [ ! -f "$RECORDS/classification.json" ] || cp "$RECORDS/classification.json" "$download/" ;;`,
+  "run download 1234 --repo owner/repo -n change "*) mkdir -p "$download"; cp -r "$RECORDS/change/." "$download/" ;;
+  "run download 1234 --repo owner/repo -n review "*) mkdir -p "$download"; cp -r "$RECORDS/review/." "$download/" ;;`,
       });
-      return { run, verdict: left(root, "verdict.txt") };
+      return { root, repo, pushed, run, verdict: left(root, "verdict.txt") };
     };
 
-    const plain = judging({ classification: `{"needs_review": false, "reasons": ["It is small."]}` });
+    const plain = judging({});
     expect(plain.run.failed, plain.run.printed).toBe(false);
     expect(plain.run.outputs.verdict).toBe("straightforward");
+    expect(readFileSync(join(plain.root, "runner/judged/src/app/page.tsx"), "utf8"), "the pushed files were written out").toBe(
+      "export default function Page() {}\n",
+    );
+    expect(git(plain.repo, "rev-parse", "HEAD"), "main's working tree moved").toBe(git(plain.repo, "rev-parse", "main"));
+    expect(git(plain.repo, "cat-file", "-t", plain.pushed)).toBe("commit");
 
-    const asked = judging({ classification: `{"needs_review": true, "reasons": ["It is risky."]}` });
-    expect(asked.run.outputs.verdict).toBe("review");
-    expect(asked.verdict).toContain("The classifier asked for a review.");
+    const askedFor = judging({ classification: `{"needs_review": true, "reasons": ["It is risky."]}` });
+    expect(askedFor.run.outputs.verdict).toBe("review");
+    expect(askedFor.verdict).toContain("The classifier asked for a review.");
 
     const found = judging({
       findings: `[{"review": "bug", "severity": "Nit", "file": "a.ts", "line": 1, "title": "t", "detail": "d"}]`,
@@ -2024,11 +2487,26 @@ describe("land.yml", () => {
     expect(found.run.outputs.verdict).toBe("review");
     expect(found.verdict).toContain("The reviews left 1 finding open.");
 
-    const factory = judging({ path: ".github/workflows/build.yml" });
-    expect(factory.run.outputs.verdict).toBe("review");
+    expect(judging({ path: ".github/workflows/build.yml" }).run.outputs.verdict).toBe("review");
+    const attributes = judging({ extra: "* -diff\n" });
+    expect(attributes.run.outputs.verdict).toBe("review");
+    expect(attributes.verdict).toContain("`.gitattributes` sets how git reads files, so it always needs review.");
 
-    const elsewhere = judging({ offMain: true });
-    expect(elsewhere.run.failed, "a build pushed onto a commit that isn't on main was judged").toBe(true);
+    for (const [name, refused] of [
+      ["a build pushed onto a commit that isn't on main", { offMain: true }],
+      ["a pushed commit that isn't one commit on top of main", { between: true }],
+      ["a review with no verdict from the classifier", { classification: null }],
+      ["a change that isn't the one named", { swap: (root: string) => put(join(root, "records/change/message.md"), "Else\n") }],
+      ["findings that aren't the ones named", { swap: (root: string) => put(join(root, "records/review/findings.json"), "[] ") }],
+    ] as const) {
+      const judged = judging(refused);
+      expect(judged.run.failed, `${name} was judged`).toBe(true);
+      expect(judged.run.outputs.verdict, name).toBeUndefined();
+    }
+    // Without the classifier's verdict, the rule isn't applied at all.
+    const unclassified = judging({ classification: null });
+    expect(unclassified.run.printed).toContain("left no verdict from the classifier");
+    expect(unclassified.verdict).toBe("");
   });
 
   // The pictures' rows come from an artifact, so they're checked again before main's script writes
@@ -2062,15 +2540,23 @@ describe("land.yml", () => {
           PICTURES: join(root, "runner/pull-request/pictures.txt"),
           PICTURES_LEFT_OUT: join(root, "runner/pull-request/pictures-left-out.txt"),
           VERDICT: join(root, "runner/verdict.txt"),
+          CHANGE_DIGEST: changeDigest,
+          REVIEW_DIGEST: reviewDigest,
+          RECORD_DIGEST: "33".repeat(32),
         },
       });
       return { root, run };
     };
+    expect(describe.env).toMatchObject({
+      CHANGE_DIGEST: "${{ steps.find.outputs.change }}",
+      REVIEW_DIGEST: "${{ steps.find.outputs.review }}",
+      RECORD_DIGEST: "${{ steps.find.outputs.record }}",
+    });
 
     const good = describingWith("/acme/dinners|visitor|desktop|before/0.png|after/0.png\n/settings|owner|phone||after/1.gif\n");
     expect(good.run.failed, good.run.printed).toBe(false);
     const body = left(good.root, "judged-record/pull-request.md");
-    expect(body.split("\n")[0]).toBe("<!-- factory-build run=1234 -->");
+    expect(body.split("\n")[0], "the description no longer names the records' digests").toBe(markerFor("33".repeat(32)));
     expect(body).toContain("Set to merge by itself");
     expect(body).toContain("issue-125/attempt-2/after/1.gif");
     const merge = left(good.root, "judged-record/merge.md");
@@ -2091,19 +2577,49 @@ describe("land.yml", () => {
     }
   });
 
-  // If CI failed, the land job starts retry-a-build with CI's run, whose failed log retry.yml reads.
+  // If CI failed, the land job starts retry-a-build with CI's run, whose failed log retry.yml reads,
+  // and the digest of the issue as labelled, from the build's record.
   it.runIf(canRehearse)("starts retry-a-build when CI fails", () => {
     const retry = stepWithId(jobs().land, "retry");
     expect(retry.if).toBe("env.CI == 'failed'");
+    expect(jobs().land.env?.ASKED).toBe("${{ needs.find.outputs.asked }}");
     const run = rehearse(retry.run ?? "", {
       root: scratch(),
-      env: { ISSUE: "125", ATTEMPT: "2", REQUESTED_BY: "the-owner", CI_RUN: "777" },
+      env: { ISSUE: "125", ATTEMPT: "2", REQUESTED_BY: "the-owner", CI_RUN: "777", ASKED: asked },
       answers: `  "workflow run retry.yml "*) : ;;`,
     });
     expect(run.failed, run.printed).toBe(false);
     expect(run.calls.trim()).toBe(
-      "workflow run retry.yml --repo owner/repo --ref main -f issue=125 -f attempt=2 -f requested_by=the-owner -f run=777",
+      `workflow run retry.yml --repo owner/repo --ref main -f issue=125 -f attempt=2 -f requested_by=the-owner -f run=777 -f asked=${asked}`,
     );
+  });
+
+  // CI passed on the commit it ran on, so the land job checks the pull request is still open at that
+  // commit before it edits the description, asks for review or sets the merge, and if it has moved
+  // on, leaves it to the newer CI result.
+  it.runIf(canRehearse)("acts only while the pull request is still at the commit CI ran on", () => {
+    const check = stepWithId(jobs().land, "head");
+    const all = steps(jobs().land);
+    expect(all.indexOf(check)).toBeLessThan(all.findIndex((each) => each.id === "describe"));
+    for (const id of ["app", "describe", "reviewer", "merge"])
+      expect(stepWithId(jobs().land, id).if, `${id} acts on a pull request that moved on`).toContain(
+        "steps.head.outputs.current == 'true'",
+      );
+    expect(stepWithId(jobs().land, "status").if).toContain("steps.head.outputs.current != 'false'");
+    const checking = (pull: string) =>
+      rehearse(check.run ?? "", {
+        root: scratch(),
+        env: { PR_NUMBER: "140", HEAD_SHA: head },
+        answers: `  "api repos/owner/repo/pulls/140") answer <<< '${pull}' ;;`,
+      });
+    const current = checking(JSON.stringify({ state: "open", head: { sha: head } }));
+    expect(current.failed, current.printed).toBe(false);
+    expect(current.outputs.current).toBe("true");
+    for (const pull of [{ state: "open", head: { sha: base } }, { state: "closed", head: { sha: head } }]) {
+      const moved = checking(JSON.stringify(pull));
+      expect(moved.failed, moved.printed).toBe(false);
+      expect(moved.outputs.current, JSON.stringify(pull)).toBe("false");
+    }
   });
 
   // CI has already passed, so GitHub may refuse to set a merge that could happen now. Then it merges
@@ -2228,16 +2744,75 @@ describe("retry.yml", () => {
   const build = `{"workflow_id": 22, "head_branch": "main", "event": "issues", "display_title": "Build of issue 125, try 2"}`;
   const patch = { "change.patch": "diff --git a/a b/a\n" };
 
+  // The CI run must be CI's on a push to the issue's branch in this repository, as land.yml passes on.
   it.runIf(canRehearse)("brings in why CI failed on the build's pull request", () => {
-    const ci = bringing({ run: `{"workflow_id": 44, "head_branch": "build/issue-125"}` });
+    const ciRun = (overrides: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        workflow_id: 44,
+        head_branch: "build/issue-125",
+        event: "push",
+        head_repository: { full_name: "owner/repo" },
+        ...overrides,
+      });
+    const ci = bringing({ run: ciRun() });
     expect(ci.run.failed, ci.run.printed).toBe(false);
     expect(ci.run.outputs.outcome).toBe("retry");
     expect(ci.reason).toBe("CI failed on the pull request.\n");
     expect(ci.failed).toContain("The end of the failing output:");
     expect(ci.failed).toContain("FAIL test/page.test.tsx");
 
-    const elsewhere = bringing({ run: `{"workflow_id": 44, "head_branch": "build/issue-126"}` });
-    expect(elsewhere.run.failed, "CI on another issue's branch was read").toBe(true);
+    for (const [name, run] of [
+      ["CI on another issue's branch", ciRun({ head_branch: "build/issue-126" })],
+      ["CI on a pull request", ciRun({ event: "pull_request" })],
+      ["CI from a fork", ciRun({ head_repository: { full_name: "someone/repo" } })],
+    ]) {
+      const elsewhere = bringing({ run });
+      expect(elsewhere.run.failed, `${name} was read`).toBe(true);
+      expect(elsewhere.run.calls, name).not.toContain("run view");
+    }
+  });
+
+  // What a try's records say reaches the issue and the next draft, so the first line of a result,
+  // the findings and Claude's message can't hide the rest of a comment, take over the build's status
+  // comment, or mention anyone. The failing output stays as it was, inside its fence, but without
+  // the status comment's mark.
+  it.runIf(canRehearse)("keeps a try's records from hiding text, taking the status or mentioning anyone", () => {
+    const marked = "<!-- factory-status -->";
+    const checked = bringing({
+      run: build,
+      artifacts: {
+        change: patch,
+        result: {
+          "result.txt": `The tests did not pass. ${marked} @the-owner <b>now</b>\n`,
+          "output.txt": `FAIL ${marked} @the-owner\n`,
+        },
+      },
+    });
+    expect(checked.run.failed, checked.run.printed).toBe(false);
+    expect(checked.reason).toBe("The tests did not pass.  @\u200bthe-owner &lt;b>now&lt;/b>\n");
+    expect(checked.failed).not.toContain(marked);
+    expect(checked.failed).toContain("FAIL  @the-owner");
+
+    const reviewed = bringing({
+      run: build,
+      artifacts: {
+        change: patch,
+        result: { "result.txt": "pass\n" },
+        review: {
+          "result.txt": "The reviews found 1 Important finding.\n",
+          "findings.json": `[{"review": "bug", "severity": "Important", "file": "a.ts", "line": 1, "title": "Ask @acme/team ${marked}", "detail": "<!-- hidden\\nline"}]`,
+        },
+      },
+    });
+    expect(reviewed.failed).not.toContain(marked);
+    expect(reviewed.failed).not.toContain("<!--");
+    expect(reviewed.failed).toContain("@\u200bacme/team");
+
+    const asked = bringing({
+      run: build,
+      artifacts: { change: { "change.patch": "", "message.md": `Split it or cut it?\n\n- Split, @the-owner ${marked}\n` } },
+    });
+    expect(asked.message).toBe("Split it or cut it?\n\n- Split, @\u200bthe-owner \n");
   });
 
   it.runIf(canRehearse)("brings in why a build failed, from its own records", () => {
@@ -2301,6 +2876,7 @@ describe("retry.yml", () => {
       ["another workflow's run", { run: `{"workflow_id": 55, "head_branch": "main"}` }],
       ["an odd login", { run: build, env: { REQUESTED_BY: "a b" } }],
       ["an attempt past three", { run: build, env: { ATTEMPT: "4" } }],
+      ["a digest of the issue that isn't one", { run: build, env: { ASKED: "main" } }],
     ] as const) {
       const wrong = bringing(brought);
       expect(wrong.run.failed, `retry.yml read ${name}`).toBe(true);
@@ -2324,7 +2900,7 @@ describe("retry.yml", () => {
       put(join(root, "runner/failed/message.md"), "Should the dinners example be split or cut?\n");
       return rehearse(again, {
         root,
-        env: { ISSUE: "125", ATTEMPT: attempt, REQUESTED_BY: "the-owner", OUTCOME: outcome },
+        env: { ISSUE: "125", ATTEMPT: attempt, REQUESTED_BY: "the-owner", OUTCOME: outcome, ASKED: "aa".repeat(32) },
         answers,
       });
     };
@@ -2332,7 +2908,7 @@ describe("retry.yml", () => {
     const retrying = deciding("1", "retry");
     expect(retrying.failed, retrying.printed).toBe(false);
     expect(retrying.calls.trim()).toBe(
-      "workflow run build.yml --repo owner/repo --ref main -f issue=125 -f attempt=2 -f previous_run=1000 -f requested_by=the-owner",
+      `workflow run build.yml --repo owner/repo --ref main -f issue=125 -f attempt=2 -f previous_run=1000 -f requested_by=the-owner -f asked=${"aa".repeat(32)}`,
     );
 
     const stopped = deciding("3", "retry");
@@ -2413,7 +2989,9 @@ describe("the factory's security", () => {
   });
 
   // GitHub runs a pull_request_target or workflow_run workflow from main's copy, with main's
-  // secrets, so none checks out, fetches or runs the branch it's about.
+  // secrets, so none checks out or runs the branch it's about. Only land.yml's judge fetches
+  // anything: the commit CI ran on, into git's store, whose tree it reads into an index without
+  // writing a file of it.
   it("never checks out the branch in a workflow that holds main's secrets", () => {
     let privileged = 0;
     for (const file of workflowFiles) {
@@ -2429,8 +3007,17 @@ describe("the factory's security", () => {
           }
           for (const value of Object.values(each.with ?? {}))
             expect(String(value), where).not.toMatch(/pull_request\.head|workflow_run\.head/);
-          for (const from of ["git fetch", "git pull", "refs/pull/", `gh pr ${CLONE}`])
-            expect(each.run ?? "", where).not.toContain(from);
+          for (const line of (each.run ?? "").split("\n")) {
+            for (const from of ["git pull", "refs/pull/", `gh pr ${CLONE}`, "read-tree -u", "read-tree --reset", "reset --hard"])
+              expect(line, where).not.toContain(from);
+            if (new RegExp(`\\b(${CLONE}|switch|worktree add)\\b`).test(line)) expect(line, where).not.toContain("HEAD_SHA");
+          }
+          const fetches = (each.run ?? "").split("\n").filter((line) => /\bfetch\b/.test(line));
+          if (file === "land.yml" && each.id === "judge") {
+            expect(fetches).toHaveLength(1);
+            expect(fetches[0]).toMatch(/fetch --no-tags origin "\$HEAD_SHA"$/);
+            expect(each.run).toContain('read-tree "$HEAD_SHA"');
+          } else expect(fetches, `${where} fetches`).toEqual([]);
         }
     }
     expect(privileged).toBe(2);
@@ -2445,16 +3032,19 @@ describe("the factory's security", () => {
           expect(each.run ?? "", `${file}'s ${name} step "${each.name}"`).not.toContain("${{");
   });
 
-  // The change's code runs in the build's draft, check and pictures jobs, where npm saves its cache.
-  // Nothing that holds a token that can write, or that applies the rule, restores it.
-  it("restores no npm cache where it writes or judges", () => {
-    for (const [file, name] of [
-      ["build.yml", "open"],
-      ["land.yml", "find"],
-      ["land.yml", "land"],
-    ])
-      for (const each of steps(readJobs(file)[name]))
-        if (each.uses?.startsWith("actions/setup-node"))
-          expect(each.with?.cache, `${file}'s ${name} restores the npm cache`).toBeUndefined();
+  // A job that runs another branch's code from main's workflow would save npm's cache where every
+  // later run on main restores it, so none of the factory's jobs saves or restores it: setup-node
+  // is given no cache, and none from the package manager named in package.json either.
+  it("saves and restores no npm cache in the factory's jobs", () => {
+    let set = 0;
+    for (const file of ["build.yml", "land.yml", "resolve.yml", "review.yml"])
+      for (const [name, job] of Object.entries(readJobs(file)))
+        for (const each of steps(job))
+          if (each.uses?.startsWith("actions/setup-node")) {
+            set++;
+            expect(each.with?.cache, `${file}'s ${name} uses npm's cache`).toBeUndefined();
+            expect(each.with?.["package-manager-cache"], `${file}'s ${name} may use npm's cache`).toBe(false);
+          }
+    expect(set).toBeGreaterThan(0);
   });
 });

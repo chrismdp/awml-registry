@@ -29,6 +29,9 @@ on:
       run:
         description: The run whose failure it was, a build or CI on the build's branch
         required: true
+      asked:
+        description: The sha256 of the first try's record of the issue as labelled, which the next try checks
+        default: ""
 
 concurrency:
   group: retry-issue-${{ inputs.issue }}
@@ -39,6 +42,7 @@ env:
   ATTEMPT: ${{ inputs.attempt }}
   REQUESTED_BY: ${{ inputs.requested_by }}
   FAILED_RUN: ${{ inputs.run }}
+  ASKED: ${{ inputs.asked }}
 
 jobs:
   retry:
@@ -50,7 +54,10 @@ jobs:
     steps:
       # Writes why the try failed as failed/reason.txt, one line for the status comment, and
       # failed/failed.md, the reason with the failing output or the findings, which the next try's
-      # draft reads. A draft that changed nothing isn't tried again.
+      # draft reads. A draft that changed nothing isn't tried again. What the try's records say
+      # reaches the issue, so the reason, the findings and Claude's message can't hide the rest of a
+      # comment, take over the build's status comment, or mention anyone. The failing output stays
+      # as it was, inside its fence, but without the status comment's mark.
       - name: Bring in why it failed
         id: bring
         env:
@@ -63,9 +70,15 @@ jobs:
             echo "Who asked must be a GitHub login: $REQUESTED_BY"
             exit 1
           fi
+          if ! [[ "$ASKED" =~ ^([0-9a-f]{64})?$ ]]; then
+            echo "The digest of the issue as labelled must be a sha256: $ASKED"
+            exit 1
+          fi
           here="$RUNNER_TEMP/here"
           failed="$RUNNER_TEMP/failed"
           mkdir -p "$here" "$failed"
+          tidy='def tidy: gsub("<!-- factory-status -->"; "") | gsub("<"; "&lt;") | gsub("@(?=[A-Za-z0-9])"; "@\u200b");
+            def clean: gsub("[\r\n]+"; " ") | tidy | .[0:1000];'
 
           run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FAILED_RUN")"
           workflow="$(jq -r .workflow_id <<< "$run")"
@@ -75,8 +88,11 @@ jobs:
           findings=""
           outcome=retry
           if [ "$workflow" = "$ci" ]; then
-            if [ "$(jq -r .head_branch <<< "$run")" != "build/issue-$ISSUE" ]; then
-              echo "Run $FAILED_RUN is CI on another branch than build/issue-$ISSUE."
+            # Only CI on a push to this issue's branch in this repository, as land.yml passes on.
+            if ! jq -e --arg branch "build/issue-$ISSUE" --arg repository "$GITHUB_REPOSITORY" \
+                '.head_branch == $branch and .event == "push" and .head_repository.full_name == $repository' \
+                <<< "$run" > /dev/null; then
+              echo "Run $FAILED_RUN isn't CI on a push to build/issue-$ISSUE in this repository."
               exit 1
             fi
             reason="CI failed on the pull request."
@@ -104,7 +120,7 @@ jobs:
               reason="$(head -n 1 "$here/review/result.txt" 2> /dev/null)"
               [ -n "$reason" ] || reason="The reviews did not finish."
               if jq -e 'type == "array" and all(.[]; type == "object")' "$here/review/findings.json" > /dev/null 2>&1; then
-                jq -r '.[] | "- \(.severity), from the \(.review) review, in \(.file):\(.line): \(.title)\n\n  \(.detail)\n"' \
+                jq -r "$tidy"' .[] | "- \(.severity | tostring | clean), from the \(.review | tostring | clean) review, in \(.file | tostring | clean):\(.line | tostring | clean): \(.title | tostring | clean)\n\n  \(.detail | tostring | clean)\n"' \
                   "$here/review/findings.json" > "$here/findings.md"
                 findings="$here/findings.md"
               fi
@@ -119,7 +135,7 @@ jobs:
             echo "Run $FAILED_RUN is neither a build nor CI."
             exit 1
           fi
-          reason="$(printf '%s' "$reason" | head -n 1 | cut -c 1-200)"
+          reason="$(printf '%s' "$reason" | head -n 1 | jq -Rr "$tidy"' clean | .[0:200]')"
           printf '%s\n' "$reason" > "$failed/reason.txt"
           {
             echo "$reason"
@@ -136,12 +152,13 @@ jobs:
               echo "The end of the failing output:"
               echo
               echo "$fence"
-              cat "$output"
+              sed 's/<!-- factory-status -->//g' "$output"
               echo "$fence"
             fi
           } > "$failed/failed.md"
+          # Claude's message keeps its lines, since it may be a question with options for the maintainer.
           if [ "$outcome" = nothing ] && [ -s "$here/change/message.md" ]; then
-            cp "$here/change/message.md" "$failed/message.md"
+            jq -jRs "$tidy"' tidy | .[0:10000]' "$here/change/message.md" > "$failed/message.md"
           fi
           cat "$failed/failed.md"
           echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
@@ -166,7 +183,7 @@ jobs:
           if [ "$OUTCOME" = retry ] && [ "$ATTEMPT" -lt 3 ]; then
             gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main \
               -f issue="$ISSUE" -f attempt="$((ATTEMPT + 1))" -f previous_run="$GITHUB_RUN_ID" \
-              -f requested_by="$REQUESTED_BY"
+              -f requested_by="$REQUESTED_BY" -f asked="$ASKED"
             exit 0
           fi
 

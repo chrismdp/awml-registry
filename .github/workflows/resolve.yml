@@ -149,10 +149,12 @@ jobs:
           ref: ${{ matrix.pull.head_sha }}
           fetch-depth: 0
           persist-credentials: false
+      # This job runs the pull request's code from main's workflow, so it neither saves npm's cache,
+      # where every later run on main would restore it, nor restores one.
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+          package-manager-cache: false
 
       - name: Start the rebase and prepare its context
         id: rebase
@@ -354,10 +356,12 @@ jobs:
           fi
           echo "The repository checks did not all pass." > "$RUNNER_TEMP/result/result.txt"
 
+      # This job runs the pull request's code from main's workflow, so it neither saves npm's cache,
+      # where every later run on main would restore it, nor restores one.
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+          package-manager-cache: false
 
       - name: Run the checks
         run: |

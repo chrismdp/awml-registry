@@ -3,13 +3,18 @@
 # workflow's open job writes it when it opens the pull request, before CI has run, and land.yml
 # writes it again with the build rule's verdict once CI has passed. Each runs main's copy.
 #
-# It opens with a hidden line naming the build's run, so land.yml can find the build's records.
+# It opens with a hidden line naming the build's run and the digests of its change, its review
+# record and its own record, so land.yml can find the build's records and check that no job put
+# others in their place. Only the app and the repository's own people can edit the description.
 # Then why the change needs review, as bullets: the rule's reasons, the classifier's reasons and
 # the findings still open. Then Claude's description as written, the findings about code the change
-# didn't write, the pictures of the pages it alters, the checks, and the issue it closes.
+# didn't write, the pictures of the pages it alters, the checks, and the issue it closes. The
+# reasons and findings can't hide the rest or mention anyone.
 #
 # It reads, from the environment:
 # - BUILD_RUN and ISSUE, numbers, and CHECKED, the commit of main the build's checks ran on;
+# - CHANGE_DIGEST, REVIEW_DIGEST and RECORD_DIGEST, the sha256 digests of the change, the review
+#   record and the build's record, as the jobs that made them gave them;
 # - CHANGE_DIR, the draft's files: message.md and pull-request.md;
 # - REVIEW_DIR, the review job's files: findings.json, and classification.json if the classifier ran;
 # - PICTURES, a file of page|as|width|before|after rows, which the open job checked,
@@ -27,6 +32,12 @@ if ! [[ "$CHECKED" =~ ^[0-9a-f]{40}$ ]]; then
   echo "The commit the checks ran on must be a commit id: $CHECKED" >&2
   exit 1
 fi
+for digest in "$CHANGE_DIGEST" "$REVIEW_DIGEST" "$RECORD_DIGEST"; do
+  if ! [[ "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Each record's digest must be a sha256: $digest" >&2
+    exit 1
+  fi
+done
 
 findings="$REVIEW_DIR/findings.json"
 classification="$REVIEW_DIR/classification.json"
@@ -47,9 +58,12 @@ if [ -f "$classification" ]; then
   }
 fi
 
-# Text the reviews and the classifier wrote goes into one bullet each, with nothing in it that can
-# hide the rest of the description.
-clean='def clean: gsub("[\r\n]+"; " ") | gsub("<"; "&lt;") | .[0:1000];'
+# Text the reviews, the classifier and the rule wrote goes into one bullet each, with nothing in it
+# that can hide the rest of the description or mention anyone.
+clean='def clean: gsub("[\r\n]+"; " ") | gsub("<"; "&lt;") | gsub("@(?=[A-Za-z0-9])"; "@\u200b") | .[0:1000];'
+reasons() {
+  tail -n +2 "$VERDICT" | jq -Rr "$clean"' select(test("[^[:space:]]")) | clean'
+}
 bullets() {
   jq -r "$clean"' .[] | "- **\(.severity)**, from the \(.review) review, in `\(.file | gsub("`"; "") | clean)\(if .line > 0 then ":\(.line | floor)" else "" end)`: \(.title | clean) \(.detail | clean)"'
 }
@@ -67,18 +81,19 @@ asked=false
 open="$(jq -c '[.[] | select(.severity != "Pre-existing")]' "$findings")"
 earlier="$(jq -c '[.[] | select(.severity == "Pre-existing")]' "$findings")"
 
-printf '<!-- factory-build run=%s -->\n' "$BUILD_RUN"
+printf '<!-- factory-build run=%s change=%s review=%s record=%s -->\n' \
+  "$BUILD_RUN" "$CHANGE_DIGEST" "$REVIEW_DIGEST" "$RECORD_DIGEST"
 case "$verdict" in
   review)
     echo "## Needs your review because"
     echo
-    tail -n +2 "$VERDICT" | while IFS= read -r line; do
-      [ -n "$line" ] && printf -- '- %s\n' "$line"
+    reasons | while IFS= read -r line; do
+      printf -- '- %s\n' "$line"
     done
     ;;
   straightforward)
     printf 'Set to merge by itself, because the build rule found it straightforward: %s\n' \
-      "$(tail -n +2 "$VERDICT" | grep -v '^$' | paste -sd ' ')"
+      "$(reasons | paste -sd ' ')"
     ;;
   *)
     echo "Waits for CI. Once CI passes, the build rule decides whether this merges by itself or waits for your review."

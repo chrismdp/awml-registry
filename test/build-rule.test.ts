@@ -122,7 +122,7 @@ describe("judging a staged change", () => {
     expectVerdict(
       evaluate(repo, { reviewPaths: ["docs/SPEC.md"], maxChangedLines: 400 }, { classification: path }),
       true,
-      "docs/SPEC.md is a path that always needs review.",
+      "`docs/SPEC.md` is a path that always needs review.",
     );
   });
 
@@ -169,7 +169,7 @@ describe("judging a staged change", () => {
 
     const got = evaluate(repo, { reviewPaths: ["docs/SPEC.md", ".github/"], maxChangedLines: 400 });
     expect(got.review, got.reasons.join("; ")).toBe(review);
-    if (review) expect(got.reasons).toContain(`${path} is a path that always needs review.`);
+    if (review) expect(got.reasons).toContain(`\`${path}\` is a path that always needs review.`);
   });
 
   it.each(["test/thing.test.ts", "test/page.test.tsx", "eslint-rules/rule.test.mjs"])(
@@ -180,7 +180,7 @@ describe("judging a staged change", () => {
       commit(repo);
       git(repo, "rm", "-q", "--", path);
 
-      expectVerdict(evaluate(repo, plain), true, `${path} deletes a test file.`);
+      expectVerdict(evaluate(repo, plain), true, `\`${path}\` deletes a test file.`);
     },
   );
 
@@ -195,7 +195,7 @@ describe("judging a staged change", () => {
     commit(repo);
     stage(repo, "test/thing.test.ts", after);
 
-    expectVerdict(evaluate(repo, plain), true, "test/thing.test.ts removes a test.");
+    expectVerdict(evaluate(repo, plain), true, "`test/thing.test.ts` removes a test.");
   });
 
   it("lets a change add a test without review", () => {
@@ -214,5 +214,68 @@ describe("judging a staged change", () => {
     stage(repo, "large.txt", numberedLines("new", 201));
 
     expectVerdict(evaluate(repo, plain), true, "The patch changes 402 lines, more than the limit of 400.");
+  });
+
+  // A change's own .gitattributes can tell git a file is binary, which would hide its lines from the
+  // count and its removed tests from the rule. So the rule reads no attributes from the change, and
+  // a change to any .gitattributes always needs review.
+  it.each([".gitattributes", "src/.gitattributes"])("sends a change to %s to review", (path) => {
+    const repo = newRepo();
+    stage(repo, path, "*.ts text\n");
+
+    expectVerdict(evaluate(repo, plain), true, `\`${path}\` sets how git reads files, so it always needs review.`);
+  });
+
+  it("counts the lines of files the change's attributes call binary", () => {
+    const repo = newRepo();
+    stage(repo, "large.txt", numberedLines("old", 201));
+    commit(repo);
+    stage(repo, "large.txt", numberedLines("new", 201));
+    stage(repo, ".gitattributes", "* -diff\n");
+
+    const got = evaluate(repo, plain);
+    expect(got.review).toBe(true);
+    expect(got.reasons).toContain("The patch changes 403 lines, more than the limit of 400.");
+  });
+
+  it("finds a removed test that the change's attributes call binary", () => {
+    const repo = newRepo();
+    stage(repo, "test/thing.test.ts", 'it("stays", () => {});\nit("goes", () => {});\n');
+    commit(repo);
+    stage(repo, "test/thing.test.ts", 'it("stays", () => {});\n');
+    stage(repo, ".gitattributes", "*.ts binary\n");
+
+    expectVerdict(evaluate(repo, plain), true, "`test/thing.test.ts` removes a test.");
+  });
+
+  // A file git still finds binary, by a NUL byte in it, can't be counted or read, so it needs review,
+  // unless it's an image or a font.
+  it("sends a change to a binary file other than an image or a font to review", () => {
+    const repo = newRepo();
+    stage(repo, "src/server/hidden.ts", "export const a = 1;\u0000\n");
+    stage(repo, "public/logo.png", "\u0089PNG\u0000pixels");
+    stage(repo, "src/fonts/Inter.woff2", "wOF2\u0000glyphs");
+
+    const got = evaluate(repo, plain);
+    expect(got.review).toBe(true);
+    expect(got.reasons).toEqual(["`src/server/hidden.ts` is binary, so the rule can't count or read it."]);
+  });
+
+  it("lets an image or a font through without review", () => {
+    const repo = newRepo();
+    stage(repo, "public/logo.png", "\u0089PNG\u0000pixels");
+
+    expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
+  });
+
+  // A path's name reaches the pull request's description, so it's shown in a code span with nothing
+  // in it that could end the span or the line.
+  it("shows a path so its name can't break out of its reason", () => {
+    const repo = newRepo();
+    stage(repo, "docs/a`b\n## Approved <!--.md", "changed\n");
+
+    const got = evaluate(repo, { reviewPaths: ["docs/"], maxChangedLines: 400 });
+    expect(got.reasons).toEqual(["`docs/a\\u0060b\\n## Approved <!--.md` is a path that always needs review."]);
+    for (const reason of got.reasons) expect(reason).not.toContain("\n");
   });
 });

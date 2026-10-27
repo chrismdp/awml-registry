@@ -23,6 +23,9 @@ const testFile = /\.test\.(ts|tsx|mjs)$/;
 // A removed line that declared a test or a group of them, including one that was only changed to
 // skip it.
 const removedTest = /^-\s*(it|test|describe)\b[\w.]*\s*\(/m;
+const gitAttributes = /(^|\/)\.gitattributes$/;
+// The binary files the rule lets through unread, as review.yml does.
+const imageOrFont = /\.(png|jpe?g|gif|webp|ico|ttf|otf|woff2?)$/i;
 
 export function loadConfig(path: string): Config {
   return readConfig(readFileSync(path, "utf8"));
@@ -94,23 +97,34 @@ export function evaluate(repo: string, config: Config, records: Records = {}): V
     const protectedPath = config.reviewPaths.some(
       (rule) => path === rule || (rule.endsWith("/") && path.startsWith(rule)),
     );
-    if (protectedPath) reasons.push(`${path} is a path that always needs review.`);
+    if (protectedPath) reasons.push(`${shown(path)} is a path that always needs review.`);
+  }
+
+  // The rule reads no attributes from the change, but a .gitattributes would change how git reads
+  // files once it's merged, so a change to one always needs review.
+  for (const path of paths) {
+    if (gitAttributes.test(path)) reasons.push(`${shown(path)} sets how git reads files, so it always needs review.`);
   }
 
   const deleted = nulFields(
     git(repo, "diff", "--cached", "--diff-filter=D", "--name-only", "--no-renames", "-z", "--"),
   );
   for (const path of deleted) {
-    if (testFile.test(path)) reasons.push(`${path} deletes a test file.`);
+    if (testFile.test(path)) reasons.push(`${shown(path)} deletes a test file.`);
   }
 
   for (const path of paths) {
     if (!testFile.test(path) || deleted.includes(path)) continue;
     const diff = git(repo, "diff", "--cached", "--unified=0", "--no-color", "--no-ext-diff", "--", path);
-    if (removedTest.test(diff)) reasons.push(`${path} removes a test.`);
+    if (removedTest.test(diff)) reasons.push(`${shown(path)} removes a test.`);
   }
 
-  const changedLines = countChangedLines(repo);
+  // A file git finds binary by its content can't be counted or read, so it needs review, unless it's
+  // an image or a font.
+  const { changedLines, binaries } = countChangedLines(repo);
+  for (const path of binaries) {
+    if (!imageOrFont.test(path)) reasons.push(`${shown(path)} is binary, so the rule can't count or read it.`);
+  }
   if (changedLines > config.maxChangedLines) {
     reasons.push(`The patch changes ${changedLines} lines, more than the limit of ${config.maxChangedLines}.`);
   }
@@ -149,18 +163,30 @@ function readRecord(path: string, what: string): unknown {
   }
 }
 
-function countChangedLines(repo: string): number {
-  let total = 0;
+// numstat counts a binary file's lines as "-", so those files are named instead.
+function countChangedLines(repo: string): { changedLines: number; binaries: string[] } {
+  let changedLines = 0;
+  const binaries: string[] = [];
   for (const record of nulFields(git(repo, "diff", "--cached", "--numstat", "--no-renames", "-z", "--"))) {
     const fields = record.split("\t");
     if (fields.length < 3) throw new Error(`unexpected numstat record ${JSON.stringify(record)}`);
-    for (const value of fields.slice(0, 2)) {
-      if (value === "-") continue;
+    const counts = fields.slice(0, 2);
+    if (counts.includes("-")) {
+      binaries.push(fields.slice(2).join("\t"));
+      continue;
+    }
+    for (const value of counts) {
       if (!/^\d+$/.test(value)) throw new Error(`unexpected numstat count ${JSON.stringify(value)}`);
-      total += Number(value);
+      changedLines += Number(value);
     }
   }
-  return total;
+  return { changedLines, binaries };
+}
+
+// A path as a reason shows it: in a code span, with anything that could end the span or the line
+// escaped, since the reasons reach the pull request's description.
+function shown(path: string): string {
+  return `\`${JSON.stringify(path).slice(1, -1).replaceAll("`", "\\u0060")}\``;
 }
 
 function nulFields(output: string): string[] {
@@ -168,7 +194,19 @@ function nulFields(output: string): string[] {
   return trimmed === "" ? [] : trimmed.split("\0");
 }
 
+// Each git command reads its attributes from an empty tree, never from the change, whose own
+// .gitattributes could call any file binary and so hide its lines and its removed tests.
+const emptyTrees = new Map<string, string>();
 function git(repo: string, ...args: string[]): string {
+  let empty = emptyTrees.get(repo);
+  if (empty === undefined) {
+    empty = run(repo, ["hash-object", "-t", "tree", "/dev/null"]).trim();
+    emptyTrees.set(repo, empty);
+  }
+  return run(repo, [`--attr-source=${empty}`, ...args]);
+}
+
+function run(repo: string, args: string[]): string {
   try {
     return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   } catch (error) {
