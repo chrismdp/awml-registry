@@ -37,7 +37,9 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["better-sqlite3", "nodemailer"],
   // Next's own server matches the headers' paths with case only when told,
   // as OpenNext's Worker always does, so the two frame the same addresses.
-  experimental: { authInterrupts: true, caseSensitiveRoutes: true },
+  // An address no route answers gets its 404, with the site's header, from
+  // src/app/global-not-found.tsx, since the root layout reads no session.
+  experimental: { authInterrupts: true, caseSensitiveRoutes: true, globalNotFound: true },
   async headers() {
     return [
       {

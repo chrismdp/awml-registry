@@ -9,7 +9,8 @@ const DOCS = "https://github.com/chrismdp/awml#readme";
 
 // The site's header: the main links and who is signed in. The root layout
 // shows it from its chrome slot (src/app/@chrome), on every page but an
-// embed's (#75), so the root layout itself reads no session.
+// embed's (#75), so the root layout itself reads no session; an address no
+// route answers shows it from src/app/global-not-found.tsx.
 export async function SiteHeader() {
   const { db, viewer } = await pageContext();
   // Inventory goes to the viewer's first organisation, to making one, or to sign-in.

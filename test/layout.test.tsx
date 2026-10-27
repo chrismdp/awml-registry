@@ -2,6 +2,8 @@ import { isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import RootLayout from "@/app/layout";
+import GlobalNotFound from "@/app/global-not-found";
+import NotFound from "@/app/not-found";
 import Chrome from "@/app/@chrome/default";
 import WorkflowEmbedChrome from "@/app/@chrome/[owner]/[slug]/embed/page";
 import VersionEmbedChrome from "@/app/@chrome/[owner]/[slug]/v/[n]/embed/page";
@@ -55,8 +57,8 @@ describe("the site's main links", () => {
 function holds(node: ReactNode, type: unknown): boolean {
   if (Array.isArray(node)) return node.some((n) => holds(n, type));
   if (!isValidElement(node)) return false;
-  const { children, header } = node.props as { children?: ReactNode; header?: ReactNode };
-  return node.type === type || holds(children, type) || holds(header, type);
+  const { children, header, chrome } = node.props as { children?: ReactNode; header?: ReactNode; chrome?: ReactNode };
+  return node.type === type || holds(children, type) || holds(header, type) || holds(chrome, type);
 }
 
 describe("the site's header", () => {
@@ -74,8 +76,17 @@ describe("the site's header", () => {
     expect(html).not.toMatch(/site-header|site-nav|Sign in/);
   });
 
-  it("is still shown on an address no route answers, whose 404 has no chrome slot", () => {
-    expect(holds(RootLayout({ children: <p>Not found</p> }), SiteHeader)).toBe(true);
-    expect(holds(RootLayout({ children: <p>an embed</p>, chrome: null }), SiteHeader)).toBe(false);
+  it("isn't shown by the root layout given no slot, as Next renders it for a hidden 404 on every page, an embed's too", () => {
+    pageRequest.headers = sealed;
+    at.path = "/acme/dinners/embed";
+    const tree = RootLayout({ children: <p>Not found</p> });
+    expect(holds(tree, SiteHeader)).toBe(false);
+    expect(renderToStaticMarkup(tree)).not.toMatch(/site-header|site-nav|Sign in/);
+  });
+
+  it("is shown on an address no route answers, by its own 404 page", () => {
+    const tree = GlobalNotFound();
+    expect(holds(tree, SiteHeader)).toBe(true);
+    expect(holds(tree, NotFound)).toBe(true);
   });
 });
