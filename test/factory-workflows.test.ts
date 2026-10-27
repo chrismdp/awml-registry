@@ -9,6 +9,7 @@ type Step = {
   if?: string;
   uses?: string;
   run?: string;
+  env?: Record<string, string>;
   "continue-on-error"?: boolean;
 };
 
@@ -193,5 +194,54 @@ describe("every workflow step that holds the Claude token", () => {
       }
     }
     expect(holders).toBeGreaterThan(0);
+  });
+});
+
+describe("Claude steps in every workflow", () => {
+  const files = readdirSync(join(__dirname, "../.github/workflows")).filter(
+    (file) => file.endsWith(".yml"),
+  );
+
+  it("installs bubblewrap and checks it works before any step holding the Claude token", () => {
+    let checked = 0;
+    for (const file of files) {
+      for (const [name, job] of Object.entries(readJobs(file))) {
+        const all = steps(job);
+        all.forEach((each, index) => {
+          if (!each.env || !("CLAUDE_CODE_OAUTH_TOKEN" in each.env)) return;
+          checked++;
+          const before = all
+            .slice(0, index)
+            .map((prior) => prior.run ?? "")
+            .join("\n");
+          const where = `${file} ${name}`;
+          expect(before, where).toContain("apt-get install -y bubblewrap");
+          expect(before, where).toContain(
+            "sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+          );
+          expect(before, where).toContain(
+            "bwrap --dev-bind / / --unshare-pid true",
+          );
+        });
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("runs every claude -p with only user settings and only the strict MCP config", () => {
+    let checked = 0;
+    for (const file of files) {
+      for (const [name, job] of Object.entries(readJobs(file))) {
+        for (const each of steps(job)) {
+          if (!/\bclaude -p\b/.test(each.run ?? "")) continue;
+          checked++;
+          expect(each.run, `${file} ${name}`).toContain(
+            "--setting-sources user",
+          );
+          expect(each.run, `${file} ${name}`).toContain("--strict-mcp-config");
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 });
