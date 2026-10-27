@@ -149,10 +149,12 @@ jobs:
           ref: ${{ matrix.pull.head_sha }}
           fetch-depth: 0
           persist-credentials: false
+      # This job runs the pull request's code from main's workflow, so it neither saves npm's cache,
+      # where every later run on main would restore it, nor restores one.
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+          package-manager-cache: false
 
       - name: Start the rebase and prepare its context
         id: rebase
@@ -203,6 +205,9 @@ jobs:
           bwrap --dev-bind / / --unshare-pid true
           npm install -g @anthropic-ai/claude-code
 
+      # Claude works on the branch's tree, so it loads only the user's settings and no MCP servers: a
+      # settings file or a .mcp.json on the branch can't set its hooks or where it sends the login
+      # token.
       - name: Resolve the conflicts
         if: ${{ steps.rebase.outputs.conflicts == 'true' }}
         env:
@@ -351,10 +356,12 @@ jobs:
           fi
           echo "The repository checks did not all pass." > "$RUNNER_TEMP/result/result.txt"
 
+      # This job runs the pull request's code from main's workflow, so it neither saves npm's cache,
+      # where every later run on main would restore it, nor restores one.
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+          package-manager-cache: false
 
       - name: Run the checks
         run: |
@@ -577,7 +584,7 @@ jobs:
           } > "$RUNNER_TEMP/status.md"
           id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" |
             jq -r --arg link "($run_url)" '.[] | select(.user.login == "github-actions[bot]"
-              and (.body | contains("<!-- factory-resolve-status -->")) and (.body | contains($link))) | .id' |
+              and (.body | startswith("<!-- factory-resolve-status -->")) and (.body | contains($link))) | .id' |
             tail -n 1)"
           if [ -z "$id" ]; then
             echo "This run posted no status comment on #$PR_NUMBER, so there is none to edit."
