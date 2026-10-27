@@ -1,0 +1,20 @@
+awml: "0.6"
+title: Folded
+scopes:
+  - { id: home, label: "home: the family" }
+parts:
+  - id: tick
+    kind: trigger
+    label: >
+      Every
+      morning
+    in: home
+  - { id: note, kind: context, label: "A note", in: home }
+  - { id: step, kind: code, op: do, label: "Do it", in: home }
+  - { id: c1, kind: comment, label: "Tied\nto two parts" }
+  - { id: c2, kind: comment, label: "Tied to nothing" }
+lines:
+  - { from: tick, to: step, kind: start, label: "first\nsecond" }
+  - { from: step, to: note, kind: data }
+  - { from: c1, to: step, kind: tie }
+  - { from: c1, to: note, kind: tie }

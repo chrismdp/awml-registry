@@ -17,6 +17,7 @@ import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
 import GalleryPage from "@/app/gallery/page";
 import PlatformPage from "@/app/[owner]/platforms/[slug]/page";
 import PlatformYamlPage from "@/app/[owner]/platforms/[slug]/yaml/page";
+import { drawing, expectedOf } from "./drawn";
 import { example, person, request, storePlatformVersion, storeVersion, type Who } from "./helpers";
 import { call } from "./mcp-client";
 import { renderPage } from "./pages";
@@ -37,10 +38,6 @@ const worker = example("platforms/worker.yaml"); // 0.6
 const unescape = (html: string) =>
   html.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
 const text = (html: string) => unescape(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
-const drawing = (html: string) => {
-  const found = /<div class="drawing"><pre>([^]*?)<\/pre>/.exec(html);
-  return found ? unescape(found[1]) : null;
-};
 const files = (html: string) =>
   Object.fromEntries([...html.matchAll(/<pre id="([^"]+)">([^]*?)<\/pre>/g)].map(([, id, body]) => [id, unescape(body)]));
 const checkIds = (html: string) => [...html.matchAll(/<li data-check="([^"]+)"/g)].map((m) => m[1]);
@@ -133,12 +130,8 @@ describe("a stored 0.4 version, with no checks stored", () => {
 
   it("draws its design and its implementation converted to 0.6, as the native awml draws the converted file", async () => {
     const o = await stored04();
-    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html)).toBe(
-      example("older/dinners-04.mmd").trimEnd(),
-    );
-    expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" })).html)).toBe(
-      example("older/dinners-04-home.mmd").trimEnd(),
-    );
+    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html)).toEqual(await expectedOf([dinners04]));
+    expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" })).html)).toEqual(await expectedOf([dinners04], "home"));
   });
 
   it("has its checks worked out when shown, through convert, by the AWML the registry runs", async () => {
@@ -177,8 +170,7 @@ describe("a stored 0.4 version, with no checks stored", () => {
 
   it("draws its design on a gallery card", async () => {
     await stored04();
-    const html = unescape((await renderPage(GalleryPage, {})).html);
-    expect(html).toContain(example("older/dinners-04.mmd").split("\n").slice(0, 6).join("\n"));
+    expect(drawing((await renderPage(GalleryPage, {})).html)).toEqual(await expectedOf([dinners04]));
   });
 
   it("is forked as the converted 0.6 file, since a fork is a push", async () => {
@@ -203,12 +195,8 @@ describe("a stored 0.5 version, with the checks stored at push, and a stored 0.5
 
   it("draws its design and its office implementation converted to 0.6, as the native awml draws the converted file", async () => {
     const o = await stored05();
-    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "client-email" })).html)).toBe(
-      example("older/client-email-05.mmd").trimEnd(),
-    );
-    expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "client-email" })).html)).toBe(
-      example("older/client-email-05-office.mmd").trimEnd(),
-    );
+    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "client-email" })).html)).toEqual(await expectedOf([clientEmail05]));
+    expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "client-email" })).html)).toEqual(await expectedOf([clientEmail05], "office"));
   });
 
   it("keeps its checks as stored, named by the AWML that made them", async () => {

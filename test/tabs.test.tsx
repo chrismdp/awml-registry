@@ -1,9 +1,7 @@
 // Moving between a workflow page's tabs (issue #54): a tab is a client
-// navigation, so Mermaid stays loaded; a tab draws only what it shows; the
+// navigation, so React Flow stays loaded; a tab draws only what it shows; the
 // engine works out each answer once for the same files; and a diagram tab
-// never shows Mermaid's text before its drawing, unless Mermaid can't draw it.
-import fs from "node:fs";
-import path from "node:path";
+// shows its drawing at once, as the server's SVG, with nothing to replace.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { engine } from "@/engine";
 import { memoise } from "@/engine/memo";
@@ -118,11 +116,12 @@ describe("a workflow page's tabs", () => {
     expect(order.filter((o) => o === "start")).toHaveLength(1);
   });
 
-  it("hides Mermaid's text in the frame while it draws, when the browser runs scripts, unless Mermaid can't draw it", () => {
-    const css = fs.readFileSync(path.join(__dirname, "../src/app/site.css"), "utf8");
-    expect(css).toContain(
-      "@media (scripting: enabled) { .panzoom:not(.drawn) .drawing:not(.failed) pre { display: none; } }",
-    );
+  it("shows the drawing as the server's SVG at once, with no text first and nothing to load before it shows", async () => {
+    const owner = await pushed();
+    const { html } = await renderPage(WorkflowPage, { owner, slug: "dinners" });
+    const figure = /<figure[^]*?<\/figure>/.exec(html)![0];
+    expect(figure).toContain('<svg class="flow-static"');
+    expect(figure).not.toContain("<pre");
   });
 });
 

@@ -1,0 +1,143 @@
+/* The registry's drawing (issue #62): the server's SVG and React Flow drawing
+   the same pieces (flow/Graphic.tsx) in the site's own look. The kinds keep
+   AWML's colours; the steps use the site's. Sizes and text positions are set
+   in flow/drawing.ts, which the server lays out by, not here. */
+.flow-frame, .flow-static {
+  --trigger-fill: #fbe1ee; --trigger-line: #a33a74;
+  --context-fill: #e2eef9; --context-line: #3d6fa3;
+  --connection-fill: #eceef2; --connection-line: #5d6472;
+  --outside-fill: #fde4dc; --outside-line: #b5532f;
+  --surface-fill: var(--paper); --surface-line: #2a2d35;
+  --broken: #d0342c;
+}
+.flow-frame { overflow: hidden; border-radius: inherit; }
+.flow-frame:focus-visible { outline: 3px solid var(--link); outline-offset: -3px; }
+/* The server's SVG fills the room the controls leave, as viewport.ts's fit does. */
+.flow-frame .flow-static { position: absolute; inset: 72px 20px 64px 20px; width: calc(100% - 40px); height: calc(100% - 136px); margin: auto; display: block; }
+.flow-static, .flow-node-svg { font-family: Inter, var(--sans); overflow: visible; }
+.flow-canvas { position: absolute; inset: 0; }
+.flow-defs { position: absolute; }
+.flow-canvas .react-flow { background: transparent; }
+.flow-canvas .react-flow__pane { cursor: grab; }
+.flow-canvas .react-flow__pane.dragging { cursor: grabbing; }
+.flow-canvas .react-flow__node { cursor: grab; }
+.flow-canvas .react-flow__node:has(.part-linked), .flow-canvas .react-flow__node:has(.flow-scope.linked) { cursor: pointer; }
+.flow-canvas .react-flow__node:focus { outline: none; }
+.flow-canvas .react-flow__node.dragging { filter: drop-shadow(0 6px 14px rgba(22, 23, 27, 0.16)); }
+.flow-node { position: relative; }
+.flow-node-svg { display: block; }
+.flow-handle { opacity: 0; pointer-events: none; width: 1px; height: 1px; min-width: 0; min-height: 0; border: none; }
+
+/* Parts: an outline for each kind, the kind and verb small above the label. */
+.flow-shape { stroke-width: 1.5px; stroke-linejoin: round; }
+.flow-shape-line { fill: none; stroke-width: 1.5px; }
+.flow-label { fill: var(--ink); }
+.flow-caption { fill: var(--ink-faint); }
+.flow-kind-ai .flow-shape { fill: var(--ai-fill); stroke: var(--ai-line); }
+.flow-kind-code .flow-shape { fill: var(--code-fill); stroke: var(--code-line); }
+.flow-kind-person .flow-shape { fill: var(--person-fill); stroke: var(--person-line); }
+.flow-kind-trigger .flow-shape { fill: var(--trigger-fill); stroke: var(--trigger-line); }
+.flow-kind-context .flow-shape { fill: var(--context-fill); stroke: var(--context-line); }
+.flow-kind-context .flow-shape-line { stroke: var(--context-line); }
+.flow-kind-connection .flow-shape { fill: var(--connection-fill); stroke: var(--connection-line); }
+.flow-kind-outside .flow-shape { fill: var(--outside-fill); stroke: var(--outside-line); }
+.flow-kind-surface .flow-shape { fill: var(--surface-fill); stroke: var(--surface-line); }
+.flow-kind-surface .flow-shape-line { stroke: var(--surface-line); }
+.flow-kind-part .flow-shape { fill: var(--paper); stroke: var(--edge); }
+.flow-kind-ai .flow-caption { fill: var(--ai-line); }
+.flow-kind-code .flow-caption { fill: var(--code-line); }
+.flow-kind-person .flow-caption { fill: var(--person-line); }
+.flow-kind-trigger .flow-caption { fill: var(--trigger-line); }
+.flow-kind-context .flow-caption { fill: var(--context-line); }
+.flow-kind-outside .flow-caption { fill: var(--outside-line); }
+.flow-tier rect { fill: var(--paper); stroke: var(--outside-line); stroke-width: 1px; }
+.flow-tier text { fill: var(--outside-line); }
+/* A part linked to other workflows (#55): a chain mark in its top-right corner,
+   and an outline when focused or when the address's fragment names it. */
+.part-link-mark circle { fill: var(--ink); stroke: var(--paper); stroke-width: 2px; }
+.part-link-mark rect { fill: none; stroke: var(--paper); stroke-width: 1.6px; }
+.part-link-mark.off circle { fill: var(--ink-faint); }
+.flow-static a:focus { outline: none; }
+.flow-static a:focus-visible .flow-shape, .flow-static a:focus-visible .flow-scope-card,
+.react-flow__node:focus-visible .flow-shape, .react-flow__node:focus-visible .flow-scope-card,
+.part-target .flow-shape { stroke: var(--link); stroke-width: 3px; }
+.part-target { filter: drop-shadow(0 0 3px var(--link)); }
+
+/* Scopes: soft cards holding their parts, their name and who they are for at the top. */
+.flow-scope-card { fill: var(--paper); stroke: var(--rule); stroke-width: 1.5px; }
+.flow-scope.dashed .flow-scope-card { stroke: #b4bac4; stroke-dasharray: 6 4; }
+.flow-scope.depth-1 .flow-scope-card { fill: var(--wash); }
+.flow-scope.box .flow-scope-card { fill: var(--paper); stroke: var(--edge); }
+.flow-scope.hull .flow-scope-card { fill: rgba(255, 255, 255, 0.72); }
+.flow-scope.hull.depth-1 .flow-scope-card { fill: rgba(246, 247, 249, 0.9); }
+.flow-scope.hull { pointer-events: none; }
+.flow-scope-title { fill: var(--ink-soft); }
+.flow-scope-name, .flow-box-name { fill: var(--ink); font-weight: 700; }
+.flow-box-go { fill: var(--ink-faint); font-weight: 400; }
+.flow-scope.linked:hover .flow-scope-card { stroke: var(--ink); stroke-width: 2px; }
+
+/* Lines: the workflow's own flow solid, data dotted and paler, a standing rule
+   thick, and a line that breaks a rule red. */
+.flow-line { fill: none; }
+.flow-line.solid { stroke: #5d6472; stroke-width: 1.6px; }
+.flow-line.dotted { stroke: #9aa2af; stroke-width: 1.4px; stroke-dasharray: 4 4; }
+.flow-line.thick { stroke: #3e424b; stroke-width: 3px; stroke-dasharray: 6 4; }
+.flow-line.broken { stroke: var(--broken); stroke-width: 2.5px; }
+.flow-arrow.solid path { fill: #5d6472; }
+.flow-arrow.dotted path { fill: #9aa2af; }
+.flow-arrow.thick path { fill: #3e424b; }
+.flow-arrow.broken path { fill: var(--broken); }
+.flow-line-label rect { fill: var(--paper); stroke: var(--rule); stroke-width: 1px; }
+.flow-line-label text { fill: var(--ink-soft); }
+.flow-line-label.dotted text { fill: var(--ink-faint); }
+
+/* A part's notes (#60): an icon at its bottom right, its text on hover, and in a
+   small modal on a click or a tap. */
+.flow-note-icon circle { fill: var(--paper); stroke: var(--edge); stroke-width: 1px; }
+.flow-note-icon path { stroke: var(--ink-soft); stroke-width: 1.3px; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.flow-note-icon text { fill: var(--ink-soft); font-weight: 600; }
+.flow-note-mark { position: absolute; padding: 0; border: none; background: none; cursor: pointer; line-height: 0; border-radius: 999px; }
+.flow-note-mark svg { overflow: visible; }
+.flow-note-mark:hover .flow-note-icon circle, .flow-note-mark:focus-visible .flow-note-icon circle { fill: var(--ink); stroke: var(--ink); }
+.flow-note-mark:hover .flow-note-icon path, .flow-note-mark:focus-visible .flow-note-icon path { stroke: var(--paper); }
+.flow-note-mark:focus-visible { outline: 3px solid var(--link); outline-offset: 1px; }
+.flow-note-tip { max-width: 300px; padding: 10px 14px; border-radius: 14px; background: var(--ink); color: var(--paper); font-family: var(--sans); font-size: 13px; line-height: 1.45; box-shadow: 0 6px 20px rgba(22, 23, 27, 0.2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.flow-note-tip p { margin: 0; }
+.flow-note-tip p + p { margin-top: 6px; }
+html:has(.flow-note-dialog[open]) { overflow: hidden; }
+.flow-note-dialog { padding: 0; border: none; border-radius: 22px; width: min(480px, calc(100vw - 32px)); background: var(--paper); color: var(--ink); box-shadow: 0 0 0 1px rgba(22, 23, 27, 0.08), 0 12px 40px rgba(22, 23, 27, 0.18); }
+.flow-note-dialog::backdrop { background: rgba(22, 23, 27, 0.3); }
+.flow-note-box { padding: 20px 24px 24px; font-family: var(--sans); }
+.flow-note-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.flow-note-head h2 { font-size: 18px; font-weight: 700; }
+.flow-note-head .button { min-height: 36px; padding: 6px 16px; font-size: 14px; }
+.flow-note-on { margin: 6px 0 14px; font-size: 14px; color: var(--ink-faint); }
+.flow-note-box p:not(.flow-note-on) { margin: 0; font-size: 16px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.flow-note-box p + p { margin-top: 10px; }
+
+/* The switches and zoom: pills in the drawing's corners, as the page's tabs are.
+   They need the page's scripts, so a browser without them doesn't show them. */
+.flow-controls { position: absolute; z-index: 5; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: calc(100% - 24px); font-family: var(--sans); }
+.flow-switches { top: 12px; right: 12px; }
+.flow-zoom-controls { bottom: 12px; right: 12px; }
+@media (scripting: none) { .flow-controls { display: none; } }
+.flow-pills { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--paper); box-shadow: 0 0 0 1px rgba(22, 23, 27, 0.08), 0 1px 3px rgba(22, 23, 27, 0.06); }
+.flow-pills button, .flow-toggle {
+  min-height: 36px; padding: 6px 14px; border: none; border-radius: 999px; background: transparent; color: var(--ink-soft);
+  font: 600 14px/1 var(--sans); cursor: pointer; white-space: nowrap;
+}
+.flow-pills button[aria-checked="true"] { background: var(--ink); color: var(--paper); }
+.flow-pills button:hover:not([aria-checked="true"]):not(:disabled) { color: var(--ink); background: var(--wash); }
+.flow-pills button:disabled { cursor: default; }
+.flow-toggle { background: var(--paper); box-shadow: 0 0 0 1px rgba(22, 23, 27, 0.08), 0 1px 3px rgba(22, 23, 27, 0.06); min-height: 42px; padding: 6px 16px 6px 12px; display: inline-flex; align-items: center; gap: 8px; }
+.flow-toggle::before { content: ""; width: 28px; height: 16px; border-radius: 999px; background: var(--edge) radial-gradient(circle at 8px 8px, var(--paper) 5px, transparent 5.5px); }
+.flow-toggle[aria-pressed="true"]::before { background: var(--ink) radial-gradient(circle at 20px 8px, var(--paper) 5px, transparent 5.5px); }
+.flow-toggle[aria-pressed="true"] { color: var(--ink); }
+.flow-zoom button { min-width: 36px; padding: 6px 10px; }
+.flow-pills button:focus-visible, .flow-toggle:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .flow-controls { gap: 6px; }
+  .flow-switches { top: 10px; right: 10px; }
+  .flow-zoom-controls { bottom: 10px; right: 10px; }
+  .flow-pills button, .flow-toggle { font-size: 13px; padding: 6px 11px; }
+}

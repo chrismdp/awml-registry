@@ -1,8 +1,11 @@
 import Link from "next/link";
 import type { Summary } from "@/engine";
-import { Mermaid } from "./Mermaid";
+import type { Drawing } from "./flow/drawing";
+import { StaticDrawing } from "./flow/StaticDrawing";
 
-type Card = { owner: string; slug: string; title: string; summary: Summary; mermaid: string };
+// A workflow's card: its design drawn small, laid out by the server, or null
+// when the engine can't draw it.
+type Card = { owner: string; slug: string; title: string; summary: Summary; drawing: Drawing | null };
 
 // A public system, listed in its own section after the workflows.
 type ListedSystem = { owner: string; slug: string; title: string };
@@ -32,7 +35,7 @@ export function Gallery({ cards, systems, q }: { cards: Card[]; systems: ListedS
           {cards.map((c) => (
             <Link key={`${c.owner}/${c.slug}`} href={`/${c.owner}/${c.slug}`} className="card">
               <div className="thumb" aria-hidden="true">
-                {c.mermaid && <Mermaid text={c.mermaid} />}
+                {c.drawing && <StaticDrawing drawing={c.drawing} id={`card-${c.owner}-${c.slug}`} />}
               </div>
               <div className="body">
                 <div className="title">{c.title}</div>
