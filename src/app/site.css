@@ -178,6 +178,11 @@ pre, code { font-family: var(--mono); }
 .part-menu a { display: block; padding: 8px; border-radius: 8px; font-family: var(--mono); font-size: 13px; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
 .part-menu a:hover, .part-menu a:focus-visible { background: var(--wash); outline: none; box-shadow: inset 0 0 0 2px var(--link); }
 @media (max-width: 600px) { .figure { padding: 20px; border-radius: 22px; } .panzoom { padding: 20px; } .panzoom-pad { display: none; } .tabs { border-radius: 24px; } .tabs a { padding: 10px 14px; font-size: 14px; } }
+/* Issue #62's experiment, behind ?draw=flow, keeps the frame's size while it
+   loads; the rest of its look is in components/flow/flow.css, loaded with it. */
+.figure:has(> .flow-frame) { padding: 0; overflow: hidden; }
+.flow-frame { position: relative; height: min(72vh, 760px); }
+@media (max-width: 600px) { .flow-frame { height: min(78vh, 640px); } }
 /* The YAML and Checks views: full width, under the tabs. */
 .full { padding-bottom: 80px; }
 /* The YAML view: only the files, each scrolling inside its own box. */

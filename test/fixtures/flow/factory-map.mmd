@@ -1,0 +1,67 @@
+---
+config:
+  theme: default
+  fontFamily: Inter, sans-serif
+  flowchart:
+    useMaxWidth: false
+    subGraphTitleMargin:
+      top: 6
+      bottom: 30
+---
+flowchart TB
+  subgraph w1["An issue becomes a pull request"]
+    direction TB
+    w1_comment(["The build label is added to an issue"])
+  end
+  subgraph w2["A pull request lands once CI has run"]
+    direction TB
+  end
+  subgraph w3["A failed build tries again"]
+    direction TB
+  end
+  s1(["A failed try starts the build again"])
+  s2{{"The repository#44; through its own Actions token"}}
+  s3{{"The repository#44; through its own GitHub App"}}
+  s4[("Why the last try failed")]
+  s5[("The change#44; as a patch#44; with its pictures#44; Claude#39;s note and its description for the pull request")]
+  s6[("The reviews#39; findings#44; each Important#44; Nit or Pre#45;existing")]
+  s7[("The classifier#39;s verdict and its reasons")]
+  s8(["A try failed"])
+  s9(["The app pushes the pull request#39;s branch"])
+
+  s1 --> w1
+  w3 --> s1
+  w1 <-.-> s2
+  w2 -.-> s2
+  w3 <-.-> s2
+  w1 -.-> s3
+  w2 -.-> s3
+  s4 -.-> w1
+  w3 <-.-> s4
+  w1 <-.-> s5
+  s5 -.-> w2
+  w1 <-.-> s6
+  s6 -.-> w2
+  w1 <-.-> s7
+  s7 -.-> w2
+  w1 --> s8
+  w2 --> s8
+  s8 --> w3
+  w1 --> s9
+  s9 --> w2
+  classDef trig fill:#fbe1ee,stroke:#a33a74,color:#16171b
+  classDef ctx fill:#e2eef9,stroke:#3d6fa3,color:#16171b
+  classDef con fill:#eceef2,stroke:#5d6472,color:#16171b
+  classDef surf fill:#ffffff,stroke:#2a2d35,stroke-width:1.5px,color:#16171b
+  classDef out fill:#fde4dc,stroke:#b5532f,color:#16171b
+  classDef ai fill:#cdd3fb,stroke:#3b4bb0,color:#16171b
+  classDef code fill:#c4e3d1,stroke:#2b7a4f,color:#16171b
+  classDef person fill:#f7d79a,stroke:#9a6100,color:#16171b
+  classDef uml fill:#16171b,stroke:#16171b,color:#16171b
+  classDef gap fill:#ffffff,stroke:#8a93a3,stroke-dasharray:4 3,color:#6b7280
+  class w1_comment,s1,s8,s9 trig
+  class s4,s5,s6,s7 ctx
+  class s2,s3 con
+  style w1 fill:#f6f7f9,stroke:#5d6472,color:#16171b
+  style w2 fill:#f6f7f9,stroke:#5d6472,color:#16171b
+  style w3 fill:#f6f7f9,stroke:#5d6472,color:#16171b

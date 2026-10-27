@@ -14,6 +14,7 @@ import { ConvertedNote } from "./ConvertedNote";
 import { CopyButton } from "./CopyButton";
 import { ForkForm } from "./ForkForm";
 import { Versions, type ListedVersion } from "./VersionList";
+import { FlowDrawing } from "./FlowDrawing";
 import { PanZoom } from "./PanZoom";
 import { count } from "./words";
 
@@ -64,6 +65,8 @@ export type VersionViewProps = {
   mermaid: string;
   summary: Summary;
   versions: ListedVersion[];
+  // "flow" draws it laid out in the browser instead (issue #62's experiment).
+  draw?: "flow";
 };
 
 const TAB: Record<PageView, string> = {
@@ -190,7 +193,11 @@ export function VersionView(p: VersionViewProps) {
               {p.nowhere ? (
                 <p className="cannot-draw">This workflow doesn&apos;t say where it runs yet.</p>
               ) : p.mermaid ? (
-                <PanZoom text={p.mermaid} links={p.links} />
+                p.draw === "flow" ? (
+                  <FlowDrawing text={p.mermaid} />
+                ) : (
+                  <PanZoom text={p.mermaid} links={p.links} />
+                )
               ) : (
                 <CannotDraw file={p.checks.find((f) => f.name === p.drawnFrom)!} checks={`${p.address}/checks`} />
               )}
