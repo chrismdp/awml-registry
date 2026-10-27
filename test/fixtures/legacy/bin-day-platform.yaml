@@ -1,0 +1,14 @@
+# Bin day, by where each part runs. Sam is fictional.
+awml: "0.2"
+title: Bin day
+view: platform
+groups:
+  - { id: pi, label: "A Raspberry Pi" }
+  - { id: phone, label: "Sam's phone" }
+parts:
+  - { id: wed, kind: trigger, label: "Wednesday 18:00", in: pi }
+  - { id: remind, kind: code, op: do, label: "Post the bin reminder", in: pi }
+  - { id: chat, kind: surface, label: "House chat", in: phone }
+lines:
+  - { from: wed, to: remind, kind: start }
+  - { from: remind, to: chat, kind: data }

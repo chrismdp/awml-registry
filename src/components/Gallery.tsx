@@ -29,7 +29,7 @@ export function Gallery({ cards, q }: { cards: Card[]; q: string }) {
           {cards.map((c) => (
             <Link key={`${c.owner}/${c.slug}`} href={`/${c.owner}/${c.slug}`} className="card">
               <div className="thumb" aria-hidden="true">
-                <Mermaid text={c.mermaid} />
+                {c.mermaid && <Mermaid text={c.mermaid} />}
               </div>
               <div className="body">
                 <div className="title">{c.title}</div>

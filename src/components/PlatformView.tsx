@@ -3,6 +3,8 @@ import { Fragment } from "react";
 import MarkdownIt from "markdown-it";
 import type { PlatformTab } from "@/server/page";
 import type { OfferRow } from "@/server/platform-description";
+import { CURRENT_AWML } from "@/server/awml-file";
+import { ConvertedNote } from "./ConvertedNote";
 import { CopyButton } from "./CopyButton";
 import { Versions, type ListedVersion } from "./VersionList";
 
@@ -18,6 +20,8 @@ export type PlatformViewProps = {
   address: string;
   tab: PlatformTab;
   description: string;
+  // The AWML the description's `awml:` field gives.
+  awml: string | null;
   described: { intro: string; rows: OfferRow[] };
   recipe: string | null;
   versions: ListedVersion[];
@@ -84,6 +88,9 @@ export function PlatformView(p: PlatformViewProps) {
                   </a>
                 </div>
               </div>
+              <ConvertedNote name="description.yaml" awml={p.awml}>
+                The fit reads it converted to AWML {CURRENT_AWML}.
+              </ConvertedNote>
               <pre id="description-yaml">{p.description}</pre>
             </section>
           </div>

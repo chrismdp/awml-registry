@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import type { PlatformViewProps } from "@/components/PlatformView";
+import { awmlOf } from "@/server/awml-file";
 import { followOldName, pageContext, platformPath, underOwner, type PlatformTab } from "@/server/page";
 import { describePlatform } from "@/server/platform-description";
 import { readPlatformVersion } from "@/server/platforms";
@@ -22,6 +23,7 @@ export async function loadPlatform(owner: string, slug: string, n: string, tab: 
     address: platformPath(v.owner, v.slug, n === "latest" ? "latest" : v.number),
     tab,
     description: v.description,
+    awml: awmlOf(v.description),
     described: describePlatform(v.description),
     recipe: v.recipe,
     versions: v.versions,

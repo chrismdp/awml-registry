@@ -3,8 +3,8 @@ import path from "node:path";
 import { and, eq, max } from "drizzle-orm";
 import { parse } from "yaml";
 import { getDb } from "@/db/client";
-import { version, workflow, type CheckResult } from "@/db/schema";
-import { engine } from "@/engine";
+import { platform, platformVersion, version, workflow, type CheckList, type CheckResult } from "@/db/schema";
+import { engine, type Summary } from "@/engine";
 import { edition, type Edition } from "@/edition";
 import { getAuth } from "@/server/auth";
 import { createToken } from "@/server/tokens";
@@ -100,22 +100,26 @@ export async function orgWith(
   return org.organisation;
 }
 
-// A version stored before the registry took only AWML 0.4 files: a security
-// file, a platform file or both, written straight to the database, since a
-// push now refuses them. Makes the workflow on its first version.
-export async function storeLegacyVersion(
+// A version as an older registry stored it, written straight to the database,
+// since a push now takes only AWML 0.6: an older workflow file, or from before
+// the registry took only 0.4 files, a security file, a platform file or both.
+// Its summary and any list of checks are what the AWML of the day worked out
+// at push, so the test gives them; with none, the summary is this AWML's of
+// the file converted, and a version stored before 0.4 has no list. Makes the
+// workflow on its first version.
+export async function storeVersion(
   ownerSlug: string,
   slug: string,
   by: { id: string },
-  files: { security?: string; platform?: string },
-  visibility: "public" | "private" = "public",
+  files: { workflow?: string; security?: string; platform?: string },
+  opts: { summary?: Summary; checks?: CheckList; visibility?: "public" | "private" } = {},
 ) {
   const db = await getDb();
   const owner = await findOwner(db, ownerSlug);
   if (!owner) throw new Error(`no owner ${ownerSlug}`);
   const ownerColumn =
     owner.type === "user" ? eq(workflow.ownerUserId, owner.id) : eq(workflow.ownerOrganisationId, owner.id);
-  const sources = [files.security, files.platform].filter((f): f is string => f !== undefined);
+  const sources = [files.workflow, files.security, files.platform].filter((f): f is string => f !== undefined);
   const title = String((parse(sources[0]) as { title: string }).title);
   let [w] = await db.select().from(workflow).where(and(ownerColumn, eq(workflow.slug, slug)));
   w ??= (
@@ -126,22 +130,62 @@ export async function storeLegacyVersion(
         ownerOrganisationId: owner.type === "organisation" ? owner.id : null,
         slug,
         title,
-        visibility,
+        visibility: opts.visibility ?? "public",
       })
       .returning()
   )[0];
   const [{ latest }] = await db.select({ latest: max(version.number) }).from(version).where(eq(version.workflowId, w.id));
   const check: CheckResult = {};
-  for (const view of ["security", "platform"] as const)
-    if (files[view] !== undefined) check[view] = await engine.check(files[view]);
+  for (const name of ["workflow", "security", "platform"] as const) if (files[name] !== undefined) check[name] = [];
+  const converted = await engine.convert([files.workflow ?? files.security ?? sources[0]]);
+  if (!opts.summary && !("file" in converted)) throw new Error(`give a summary: ${converted.error}`);
   await db.insert(version).values({
     workflowId: w.id,
     number: (latest ?? 0) + 1,
     pushedBy: by.id,
+    workflow: files.workflow ?? null,
     security: files.security ?? null,
     platform: files.platform ?? null,
     check,
-    summary: await engine.summarise(files),
+    checks: opts.checks ?? null,
+    summary: opts.summary ?? (await engine.summarise({ workflow: (converted as { file: string }).file })),
   });
   await db.update(workflow).set({ title, updatedAt: new Date() }).where(eq(workflow.id, w.id));
+}
+
+// A platform version as an older registry stored it, its description marked
+// as an AWML the registry no longer takes. Makes the platform on its first
+// version.
+export async function storePlatformVersion(
+  ownerSlug: string,
+  slug: string,
+  by: { id: string },
+  description: string,
+  visibility: "public" | "private" = "public",
+) {
+  const db = await getDb();
+  const owner = await findOwner(db, ownerSlug);
+  if (!owner) throw new Error(`no owner ${ownerSlug}`);
+  const ownerColumn =
+    owner.type === "user" ? eq(platform.ownerUserId, owner.id) : eq(platform.ownerOrganisationId, owner.id);
+  const label = String((parse(description) as { platform: { label: string } }).platform.label);
+  let [p] = await db.select().from(platform).where(and(ownerColumn, eq(platform.slug, slug)));
+  p ??= (
+    await db
+      .insert(platform)
+      .values({
+        ownerUserId: owner.type === "user" ? owner.id : null,
+        ownerOrganisationId: owner.type === "organisation" ? owner.id : null,
+        slug,
+        label,
+        visibility,
+      })
+      .returning()
+  )[0];
+  const [{ latest }] = await db
+    .select({ latest: max(platformVersion.number) })
+    .from(platformVersion)
+    .where(eq(platformVersion.platformId, p.id));
+  await db.insert(platformVersion).values({ platformId: p.id, number: (latest ?? 0) + 1, pushedBy: by.id, description, recipe: null });
+  await db.update(platform).set({ label, updatedAt: new Date() }).where(eq(platform.id, p.id));
 }

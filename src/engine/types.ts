@@ -1,8 +1,8 @@
 // What the registry needs from the AWML package, which runs here as the Go
 // package compiled to WebAssembly (see ./wasm.ts).
 
-// A version's files: one AWML 0.4 or 0.5 workflow, or, for versions stored before
-// the registry took only 0.4 files, a security view, a platform view or both.
+// A version's files: one AWML workflow, or, for versions stored before the
+// registry took only 0.4 files, a security view, a platform view or both.
 export type Files = { workflow?: string; security?: string; platform?: string };
 
 // What `awml summary --json` gives for a workflow: the things an inventory
@@ -55,10 +55,18 @@ export type ListedCheck = {
   mistakes: string[];
 };
 
+// A file converted to the AWML the engine reads, and the mistakes its rules
+// find in the result; or why it could not be converted at all.
+export type Converted = { file: string; mistakes: string[] } | { error: string };
+
 export interface Engine {
   // The AWML it was built from: its release, as `git describe --tags` names
   // it, and its commit (vendor/awml/VERSION).
   version: { tag: string; commit: string };
+  // One file of an older AWML upgraded, or a 0.3 or 0.2 security view and its
+  // platform view joined, as `awml convert` does. A file of the AWML the
+  // engine reads comes back unchanged.
+  convert(sources: string[]): Promise<Converted>;
   // The messages `awml check` gives for one file; empty when it has no mistakes.
   check(yaml: string): Promise<string[]>;
   // The warnings `awml check` gives for one file, such as a do step AI
@@ -69,11 +77,11 @@ export interface Engine {
   // One workflow's summary from its files. The files must pass check.
   summarise(files: Files): Promise<Summary>;
   // Mermaid text for one file that passes check, drawn in the browser: its
-  // security view, or a 0.4 or 0.5 workflow's platform view of one implementation.
+  // security view, or a workflow's platform view of one implementation.
   draw(yaml: string, implementation?: string): Promise<string>;
-  // Where a workflow can run: its design, a 0.4 or 0.5 workflow or a legacy
-  // security view, judged against platform descriptions, each named by its
-  // own id. With an implementation, its placement is judged instead, each
-  // block against the description it names. Every file must pass check.
+  // Where a workflow can run: its design judged against platform
+  // descriptions, each named by its own id. With an implementation, its
+  // placement is judged instead, each block against the description it
+  // names. Every file must pass check.
   fit(workflow: string, descriptions: string[], implementation?: string): Promise<FitReport>;
 }

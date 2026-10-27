@@ -16,6 +16,15 @@ function awml() {
 
 export const wasmEngine: Engine = {
   version,
+  async convert(sources) {
+    const running = await awml();
+    try {
+      return { file: running.convert(sources), mistakes: [] };
+    } catch (e) {
+      const { message, converted } = e as Error & { converted?: string };
+      return converted === undefined ? { error: message } : { file: converted, mistakes: message.split("\n") };
+    }
+  },
   async check(yaml) {
     return (await awml()).check(yaml);
   },

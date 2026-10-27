@@ -10,12 +10,13 @@ import { revokeToken, listTokens } from "@/server/tokens";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
 import { fork } from "@/app/[owner]/[slug]/actions";
-import { BASE, example, orgWith, person, request, storeLegacyVersion, withEdition, type Who } from "./helpers";
+import { BASE, example, orgWith, person, request, storeVersion, withEdition, type Who } from "./helpers";
 import { call } from "./mcp-client";
 import { pageRequest, renderPage } from "./pages";
 
-const first = example("dinners-04.yaml");
+// Beta's dinners: first its design alone, then with where it runs.
 const second = example("dinners.yaml");
+const first = second.slice(0, second.indexOf("implementations:"));
 
 async function push(owner: string, slug: string, as: Who, file: string, visibility?: "public" | "private") {
   const res = await request("POST", `/api/v1/${owner}/${slug}/versions`, {
@@ -123,7 +124,7 @@ describe("forking through the API", () => {
 
   it("refuses a version stored before 0.4, which has no workflow file to copy", async () => {
     const { ana, bea } = await world();
-    await storeLegacyVersion("beta", "old", bea, { security: example("legacy/dinners-security.yaml") });
+    await storeVersion("beta", "old", bea, { security: example("legacy/dinners-security.yaml") });
     const res = await body(await forkApi("beta", "old", { token: ana.token }, { owner: "ana" }));
     expect(res.status).toBe(422);
     expect(res.body.errors[0]).toContain("Version 1 was stored before the registry took AWML 0.4 files");

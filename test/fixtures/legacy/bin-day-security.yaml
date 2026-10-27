@@ -1,0 +1,13 @@
+# Bin day, by who may see each part. Sam is fictional.
+awml: "0.2"
+title: Bin day
+view: security
+groups:
+  - { id: home, label: "home: Sam" }
+parts:
+  - { id: wed, kind: trigger, label: "Wednesday 18:00" }
+  - { id: remind, kind: code, op: do, label: "Post the bin reminder", in: home }
+  - { id: chat, kind: surface, label: "House chat", in: home }
+lines:
+  - { from: wed, to: remind, kind: start }
+  - { from: remind, to: chat, kind: data }

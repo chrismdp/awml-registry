@@ -1,6 +1,6 @@
 // The Versions list on a workflow's page and a platform's page, which the
 // header's "Version n of m" opens: each version on one line, as
-// "#8 · chrismdp · Today 4:43pm · 0.4".
+// "#8 · chrismdp · Today 4:43pm · 0.6".
 import { eq } from "drizzle-orm";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -19,7 +19,7 @@ import PlatformRecipePage from "@/app/[owner]/platforms/[slug]/recipe/page";
 import PlatformVersionPage from "@/app/[owner]/platforms/[slug]/v/[n]/page";
 import PlatformVersionYamlPage from "@/app/[owner]/platforms/[slug]/v/[n]/yaml/page";
 import { closesOn, VersionsDialog } from "@/components/VersionPicker";
-import { example, orgWith, person, request, storeLegacyVersion, type Who } from "./helpers";
+import { example, orgWith, person, request, storePlatformVersion, storeVersion, type Who } from "./helpers";
 import { renderPage } from "./pages";
 
 const text = (html: string) =>
@@ -77,11 +77,11 @@ describe("a workflow's Versions list", () => {
   it("shows each version as its number, who pushed it, when, and its AWML", async () => {
     const ana = await person("ana");
     const o = ana.username;
-    await storeLegacyVersion(o, "dinners", ana, {
+    await storeVersion(o, "dinners", ana, {
       security: example("legacy/dinners-security.yaml"),
       platform: example("legacy/dinners-platform.yaml"),
     });
-    await storeLegacyVersion(o, "dinners", ana, { security: example("legacy/client-email-security.yaml") });
+    await storeVersion(o, "dinners", ana, { security: example("legacy/client-email-security.yaml") });
     const pushed = await request("POST", `/api/v1/${o}/dinners/versions`, {
       as: { token: ana.token },
       json: { workflow: example("dinners.yaml") },
@@ -92,7 +92,7 @@ describe("a workflow's Versions list", () => {
 
     const latest = versionsOf((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html);
     // Newest first; the one shown is marked Showing, and the newest Latest.
-    expect(latest.lines[0]).toMatch(new RegExp(`^#3 · ${o} · Today \\d{1,2}:\\d{2}(am|pm) · 0\\.5 Showing Latest$`));
+    expect(latest.lines[0]).toMatch(new RegExp(`^#3 · ${o} · Today \\d{1,2}:\\d{2}(am|pm) · 0\\.6 Showing Latest$`));
     expect(latest.lines[1]).toMatch(new RegExp(`^#2 · ${o} · (Today|Yesterday|\\d+ \\w{3} \\d{4},) .* · 0\\.3$`));
     expect(latest.lines[2]).toBe(`#1 · ${o} · 18 Oct 2026, 9:12am · 0.2`);
     // The version shown is bold, not a link; the others link to their pages,
@@ -105,7 +105,7 @@ describe("a workflow's Versions list", () => {
     const old = versionsOf((await renderPage(VersionPage, { owner: o, slug: "dinners", n: "1" })).html);
     expect(old.html).toContain(`<a href="/${o}/dinners">#3</a>`);
     expect(old.html).toContain("<strong>#1</strong>");
-    expect(old.lines[0]).toMatch(/ · 0\.5 Latest$/);
+    expect(old.lines[0]).toMatch(/ · 0\.6 Latest$/);
     expect(old.lines[2]).toBe(`#1 · ${o} · 18 Oct 2026, 9:12am · 0.2 Showing`);
   });
 });
@@ -225,13 +225,16 @@ describe("the Versions dialog, once the page's script runs", () => {
 });
 
 describe("a platform's Versions list", () => {
+  // A 0.5 description stored before the registry took only 0.6, then a 0.6 one pushed.
   async function laptop() {
     const ana = await person("ana");
     const o = ana.username;
-    for (const description of [example("platforms/codex-laptop.yaml"), example("platforms/worker.yaml")]) {
-      const res = await request("POST", `/api/v1/platforms/${o}/laptop/versions`, { as: { token: ana.token }, json: { description } });
-      expect(res.status).toBe(201);
-    }
+    await storePlatformVersion(o, "laptop", ana, example("older/scripts-mac-mini-05.yaml"));
+    const res = await request("POST", `/api/v1/platforms/${o}/laptop/versions`, {
+      as: { token: ana.token },
+      json: { description: example("platforms/worker.yaml") },
+    });
+    expect(res.status).toBe(201);
     return o;
   }
 
@@ -245,8 +248,8 @@ describe("a platform's Versions list", () => {
     expect(asideOf(page)).not.toContain("Versions");
     expect(headOf(page)).toMatch(/<details class="version-pick"><summary>Version 2 of 2<svg/);
     const latest = versionsOf(page);
-    expect(latest.lines[0]).toMatch(new RegExp(`^#2 · ${o} · Today \\d{1,2}:\\d{2}(am|pm) · 0\\.4 Showing Latest$`));
-    expect(latest.lines[1]).toBe(`#1 · ${o} · 18 Oct 2026, 9:12am · 0.4`);
+    expect(latest.lines[0]).toMatch(new RegExp(`^#2 · ${o} · Today \\d{1,2}:\\d{2}(am|pm) · 0\\.6 Showing Latest$`));
+    expect(latest.lines[1]).toBe(`#1 · ${o} · 18 Oct 2026, 9:12am · 0.5`);
     expect(latest.html).toContain("<strong>#2</strong>");
     expect(latest.html).toContain(`<a href="/${o}/platforms/laptop/v/1">#1</a>`);
     expect(latest.html).toContain(`<a href="/${o}">${o}</a>`);

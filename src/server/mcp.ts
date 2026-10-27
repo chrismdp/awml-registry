@@ -97,14 +97,14 @@ const page = (owner: string, slug: string) => ownUrl(`/${owner}/${slug}`);
 const workflowFile = z
   .string()
   .optional()
-  .describe('The workflow\'s one AWML 0.4 or 0.5 file (awml: "0.4" or "0.5"), as YAML text: its design and any implementations');
+  .describe('The workflow\'s one AWML 0.6 file (awml: "0.6"), as YAML text: its design and any implementations');
 // The fields of AWML 0.3's pair, kept so a client that still sends them hears
-// how to convert. A 0.4 or 0.5 file sent alone as security is taken as the workflow.
+// how to convert. A 0.6 file sent alone as security is taken as the workflow.
 const legacyFile = (view: string) =>
   z
     .string()
     .optional()
-    .describe(`Not used: AWML 0.3's ${view} view, which the registry no longer takes. Send the 0.4 or 0.5 file as workflow.`);
+    .describe(`Not used: AWML 0.3's ${view} view, which the registry no longer takes. Send the 0.6 file as workflow.`);
 const owner = z
   .string()
   .describe(
@@ -171,7 +171,7 @@ function server(person: Person) {
     { name: "awml-registry", version: "1.0.0" },
     {
       instructions:
-        "The AWML registry stores and draws AWML 0.4 and 0.5 workflows, each one file holding its design and any " +
+        "The AWML registry stores and draws AWML 0.6 workflows, each one file holding its design and any " +
         "implementations, and the platforms they can run on. Use check to find mistakes in a workflow's file, " +
         "publish to save a new version of owner/slug, fork_workflow to copy a public one into an owner of yours, " +
         "get to read one, list for an " +
@@ -187,7 +187,7 @@ function server(person: Person) {
     {
       title: "Check a workflow",
       description:
-        "Check an AWML 0.4 or 0.5 workflow's file with the registry's AWML engine, the same check `awml check` runs. Gives the mistakes, or none. Saves nothing. The registry takes only AWML 0.4 and 0.5: convert a 0.3 pair with `awml convert security.yaml platform.yaml > workflow.yaml` first.",
+        "Check an AWML 0.6 workflow's file with the registry's AWML engine, the same check `awml check` runs. Gives the mistakes, or none. Saves nothing. The registry takes only AWML 0.6: upgrade an older file with `awml convert workflow.yaml > upgraded.yaml` first.",
       inputSchema: z.object({ workflow: workflowFile, security: legacyFile("security"), platform: legacyFile("platform") }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -207,7 +207,7 @@ function server(person: Person) {
     {
       title: "Publish a workflow",
       description:
-        "Save a new version of the workflow owner/slug from its one AWML 0.4 or 0.5 file. The file is checked first and refused if it has mistakes, and an older AWML is refused: convert a 0.3 pair with `awml convert security.yaml platform.yaml > workflow.yaml` first. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private. A private one on your own account is seen by you alone; one on an organisation's, by its members. Gives the workflow's page and the new version number.",
+        "Save a new version of the workflow owner/slug from its one AWML 0.6 file. The file is checked first and refused if it has mistakes, and an older AWML is refused: upgrade it with `awml convert workflow.yaml > upgraded.yaml` first. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private. A private one on your own account is seen by you alone; one on an organisation's, by its members. Gives the workflow's page and the new version number.",
       inputSchema: z.object({
         owner,
         slug,
@@ -422,7 +422,7 @@ function server(person: Person) {
         description: z
           .string()
           .describe(
-            'The platform description, as YAML: awml (which must be "0.4" or "0.5"), platform, off_for_up_to, steps, agents, calls, holds. In a 0.5 description, the platform id may be owner/platforms/slug, this platform\'s own address, so that blocks can name it',
+            'The platform description, as YAML: awml (which must be "0.6"), platform, off_for_up_to, steps, agents, calls, holds. The platform id may be owner/platforms/slug, this platform\'s own address, so that blocks can name it',
           ),
         recipe: z.string().optional().describe("The install recipe, as Markdown. Never a secret."),
         visibility: z
@@ -451,10 +451,10 @@ function server(person: Person) {
     {
       title: "Find where a workflow can run",
       description:
-        "Judge a workflow against platforms with the AWML engine, as `awml fit` does: for each platform, whether the workflow's design fits, every reason it doesn't, and the companies each AI step may use there. With an implementation, as `awml fit --implementation` does, judges that implementation's placement instead, each block against the platform whose description it names: by the description's id, or in a 0.5 file, by the platform's address, owner/platforms/slug. Name the workflow as owner/slug or owner/slug@version, or send its AWML 0.4 or 0.5 file as YAML. Name the platforms as owner/slug or owner/slug@version, or leave them out to fit against every platform you may see. When the workflow doesn't say all the fit needs, gives the gaps instead.",
+        "Judge a workflow against platforms with the AWML engine, as `awml fit` does: for each platform, whether the workflow's design fits, every reason it doesn't, and the companies each AI step may use there. With an implementation, as `awml fit --implementation` does, judges that implementation's placement instead, each block against the platform whose description it names: by the description's id, or by the platform's address, owner/platforms/slug. Name the workflow as owner/slug or owner/slug@version, or send its AWML 0.6 file as YAML. Name the platforms as owner/slug or owner/slug@version, or leave them out to fit against every platform you may see. When the workflow doesn't say all the fit needs, gives the gaps instead.",
       inputSchema: z.object({
         workflow: z.string().optional().describe("owner/slug or owner/slug@version"),
-        file: z.string().optional().describe("The workflow's AWML 0.4 or 0.5 file, as YAML, in place of a workflow"),
+        file: z.string().optional().describe("The workflow's AWML 0.6 file, as YAML, in place of a workflow"),
         security: legacyFile("security"),
         implementation: z.string().optional().describe("The id of one of the workflow's implementations, to judge its placement"),
         platforms: z.array(z.string()).optional().describe("Platforms as owner/slug or owner/slug@version. Default: every one you may see."),

@@ -1,5 +1,5 @@
 import { Gallery } from "@/components/Gallery";
-import { engine } from "@/engine";
+import { designDrawing } from "@/server/as-read";
 import { pageContext } from "@/server/page";
 import { explore } from "@/server/registry";
 
@@ -7,6 +7,6 @@ export default async function GalleryPage({ searchParams }: { searchParams: Prom
   const q = (await searchParams).q ?? "";
   const { db } = await pageContext();
   const rows = await explore(db, q);
-  const cards = await Promise.all(rows.map(async (r) => ({ ...r, mermaid: await engine.draw(r.drawn) })));
+  const cards = await Promise.all(rows.map(async (r) => ({ ...r, mermaid: await designDrawing(r.drawn) })));
   return <Gallery cards={cards} q={q} />;
 }
