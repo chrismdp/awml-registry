@@ -40,6 +40,9 @@ export async function loadVersion(
   asked?: PageView,
   implementation?: string,
 ): Promise<VersionViewProps> {
+  // The engine starts, the first time, while the database is read. Should it
+  // fail, the first call that needs it says so.
+  engine.start().catch(() => {});
   const { db, viewer } = await pageContext();
   const v = await readVersion(db, viewer, owner, slug, n === "latest" ? "latest" : n);
   if (!v) {
@@ -91,8 +94,16 @@ export async function loadVersion(
   // it, the Checks tab lists the checks now, of the file given with each
   // workflow its refs name that the viewer may see. The file still checks
   // alone, so whether it is drawn goes by its checks alone.
+  //
+  // What the page reads besides the version doesn't depend on itself, so it
+  // is read at once rather than one after another.
   const workflowRead = workflow ? readFile("workflow") : undefined;
-  const refs = workflowRead ? await refsAsSeen(db, viewer, v.owner, v.slug, workflowRead) : { shown: [], given: [] };
+  const [refs, forks, referredBy, organisations] = await Promise.all([
+    workflowRead ? refsAsSeen(db, viewer, v.owner, v.slug, workflowRead) : { shown: [], given: [] },
+    forksOf(db, viewer, v.owner, v.slug),
+    referrersOf(db, viewer, v.owner, v.slug),
+    v.visibility === "public" && viewer ? organisationsOf(db, viewer.id) : [],
+  ]);
   const shownChecks: CheckedFile[] = refs.given.length
     ? await Promise.all(
         checks.map(async (f) =>
@@ -114,14 +125,16 @@ export async function loadVersion(
   const placed = shown === "platform" ? (implementation ?? implementations[0]?.id) : undefined;
   const source: FileName | undefined = workflow ? "workflow" : views.find((view) => view === shown);
   const nowhere = Boolean(workflow) && shown === "platform" && !placed;
-  const drawable = source && !nowhere && mistakesIn(checks.filter((c) => c.name === source)) === 0;
+  // Only the security and platform views show a drawing, so only they draw.
+  const drawn = shown === "security" || shown === "platform";
+  const drawable = drawn && source && !nowhere && mistakesIn(checks.filter((c) => c.name === source)) === 0;
   // A public workflow can be forked into the viewer's own account or one of
   // their organisations; someone signed out is asked to sign in first.
   const fork =
     v.visibility !== "public"
       ? null
       : viewer
-        ? { owners: [viewer.username, ...(await organisationsOf(db, viewer.id)).map((o) => o.slug)] }
+        ? { owners: [viewer.username, ...organisations.map((o) => o.slug)] }
         : { signIn: `/login?${new URLSearchParams({ next: address })}` };
   return {
     owner: v.owner,
@@ -131,7 +144,7 @@ export async function loadVersion(
     number: v.number,
     forked: v.forked,
     forkedFrom: v.forkedFrom,
-    forks: (await forksOf(db, viewer, v.owner, v.slug)) ?? { total: 0, forks: [] },
+    forks: forks ?? { total: 0, forks: [] },
     fork,
     address,
     // The page's own address draws the security view whenever a version has
@@ -149,7 +162,7 @@ export async function loadVersion(
     files,
     checks: shownChecks,
     refs: refs.shown,
-    referredBy: (await referrersOf(db, viewer, v.owner, v.slug)) ?? [],
+    referredBy: referredBy ?? [],
     mermaid: drawable ? await engine.draw(readFile(source)!, drawnImplementation(source, placed, readFile(source)!)) : "",
     summary: v.summary,
     versions: v.versions,

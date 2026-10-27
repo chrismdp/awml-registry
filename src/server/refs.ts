@@ -189,20 +189,23 @@ export type ShownRef =
 // against. A private workflow named and a missing one look the same to
 // anyone who may not see into its owner.
 export async function refsAsSeen(db: Db, viewer: Viewer, ownerSlug: string, slug: string, file: string) {
-  const refs = refsOf(file);
-  const shown: ShownRef[] = [];
-  const given: Named[] = [];
-  for (const target of named(refs, ownerSlug, slug)) {
-    const found = await findNamed(db, target.owner, target.slug);
-    const insider = found.owner ? await isOwnerOrMember(db, found.owner, viewer?.id) : false;
-    let state: ShownRef["state"] = "hidden";
-    if (found.workflow && (found.workflow.visibility === "public" || insider)) {
-      state = "found";
-      const latest = await latestFile(db, found.workflow.id, refPath(target.owner, target.slug));
-      if (latest) given.push(latest);
-    } else if (!found.workflow && insider) state = "missing";
-    for (const r of target.refs)
-      shown.push(state === "hidden" ? { part: r.part, state } : { part: r.part, state, owner: r.owner, slug: r.slug, id: r.id });
-  }
-  return { shown, given };
+  // Each workflow named is looked up at once, and the answers kept in the
+  // order the refs give them.
+  const seen = await Promise.all(
+    named(refsOf(file), ownerSlug, slug).map(async (target) => {
+      const found = await findNamed(db, target.owner, target.slug);
+      const insider = found.owner ? await isOwnerOrMember(db, found.owner, viewer?.id) : false;
+      let state: ShownRef["state"] = "hidden";
+      let latest: Named | null = null;
+      if (found.workflow && (found.workflow.visibility === "public" || insider)) {
+        state = "found";
+        latest = await latestFile(db, found.workflow.id, refPath(target.owner, target.slug));
+      } else if (!found.workflow && insider) state = "missing";
+      const shown = target.refs.map(
+        (r): ShownRef => (state === "hidden" ? { part: r.part, state } : { part: r.part, state, owner: r.owner, slug: r.slug, id: r.id }),
+      );
+      return { shown, latest };
+    }),
+  );
+  return { shown: seen.flatMap((s) => s.shown), given: seen.flatMap((s) => (s.latest ? [s.latest] : [])) };
 }

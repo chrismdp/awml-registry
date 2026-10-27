@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DRAWN_LIKE_AWML, drawMermaid } from "@/components/Mermaid";
+import { DRAWN_LIKE_AWML, drawingOf, drawMermaid } from "@/components/Mermaid";
 
 // What the page's Mermaid was asked to do, in order.
 const calls = vi.hoisted(() => [] as unknown[][]);
@@ -40,5 +40,15 @@ describe("drawing a workflow like AWML's own drawings", () => {
       ["initialize", DRAWN_LIKE_AWML.config],
       ["render", "m1", text],
     ]);
+  });
+
+  it("draws each text once, and has a drawing it made before ready at once", async () => {
+    vi.stubGlobal("document", { fonts: { load: async () => [] } });
+    const text = "flowchart LR\n  tab --> again\n";
+    expect(drawingOf(text)).toBeUndefined();
+    expect(await drawMermaid("m2", text)).toBe("<svg></svg>");
+    expect(drawingOf(text)).toBe("<svg></svg>");
+    expect(await drawMermaid("m3", text)).toBe("<svg></svg>");
+    expect(calls.filter(([call]) => call === "render")).toEqual([["render", "m2", text]]);
   });
 });

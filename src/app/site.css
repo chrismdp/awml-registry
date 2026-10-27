@@ -153,6 +153,8 @@ pre, code { font-family: var(--mono); }
 /* Only while a drag or pinch is under way: a standing will-change layer can stay rasterised at an old scale, so a zoom looks blurry. */
 .panzoom.grabbing .panzoom-drawing { will-change: transform; }
 .panzoom.drawn .drawing svg { max-width: none; margin: 0; }
+/* Until Mermaid has drawn it, the frame stays its own size and empty, rather than showing the text; a browser that runs no scripts keeps the text. */
+@media (scripting: enabled) { .panzoom:not(.drawn) .drawing pre { display: none; } }
 .panzoom-controls { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
 .panzoom-pad { display: grid; grid-template-columns: repeat(3, 28px); grid-template-rows: repeat(3, 28px); gap: 2px; }
 .panzoom-pad .up { grid-area: 1 / 2; } .panzoom-pad .left { grid-area: 2 / 1; } .panzoom-pad .right { grid-area: 2 / 3; } .panzoom-pad .down { grid-area: 3 / 2; }

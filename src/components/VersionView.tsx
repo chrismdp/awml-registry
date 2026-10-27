@@ -13,6 +13,7 @@ import { CopyButton } from "./CopyButton";
 import { ForkForm } from "./ForkForm";
 import { Versions, type ListedVersion } from "./VersionList";
 import { PanZoom } from "./PanZoom";
+import { TabNavigation } from "./TabNavigation";
 import { count } from "./words";
 
 export type VersionViewProps = {
@@ -74,8 +75,10 @@ export function VersionView(p: VersionViewProps) {
   const s = p.summary;
   const { publishingLabels } = names(s);
   const tabs: PageView[] = [...p.views, "yaml", "checks"];
+  // TabNavigation makes moving between the tabs a client navigation.
   const tablist = (
     <div role="tablist" aria-label="View" className="tabs">
+      <TabNavigation />
       {tabs.map((view) => (
         <a key={view} role="tab" href={`${p.address}/${view}`} aria-selected={view === p.shown}>
           {TAB[view]}
