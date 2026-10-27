@@ -1,5 +1,5 @@
 import { Gallery } from "@/components/Gallery";
-import { designDrawing } from "@/server/as-read";
+import { designGraph } from "@/server/as-read";
 import { layOutWhole } from "@/server/drawing";
 import { pageContext } from "@/server/page";
 import { explore } from "@/server/registry";
@@ -11,8 +11,8 @@ export default async function GalleryPage({ searchParams }: { searchParams: Prom
   const rows = await explore(db, q);
   const cards = await Promise.all(
     rows.map(async (r) => {
-      const text = await designDrawing(r.drawn);
-      const drawing = text ? await layOutWhole(text) : null;
+      const graph = await designGraph(r.drawn);
+      const drawing = graph ? await layOutWhole(graph) : null;
       return { ...r, drawing: drawing && !("undrawn" in drawing) ? drawing : null };
     }),
   );

@@ -10,3 +10,7 @@ data
 # Your compose file holds the registry's secrets.
 compose*.y*ml
 docker-compose*.y*ml
+# The image builds its own AWML engine from the pin (issue #73).
+vendor/awml/awml.wasm
+vendor/awml/wasm_exec.js
+vendor/awml/build.json

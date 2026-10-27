@@ -4,7 +4,7 @@ import type { VersionViewProps } from "@/components/VersionView";
 import { engine, type ListedCheck } from "@/engine";
 import { asRead } from "@/server/as-read";
 import { refPath, refsAsSeen } from "@/server/refs";
-import { awmlOf, implementationsOf } from "@/server/awml-file";
+import { awmlOf, implementationsOf, partKinds } from "@/server/awml-file";
 import { followOldName, isPageView, pageContext, underOwner, workflowPath, type PageView } from "@/server/page";
 import { layOut } from "@/server/drawing";
 import { partLinks } from "@/server/part-links";
@@ -24,8 +24,9 @@ import { forksOf, readVersion, referrersOf, systemsWith, VIEWS, type FileName, t
 //
 // Every file is shown as text as it was pushed, and drawn and checked as the
 // engine reads it: converted, when it is in an older AWML (see
-// src/server/as-read.ts). A file that can't be converted is not drawn, and
-// its Checks say why.
+// src/server/as-read.ts). What converting it noted for its author to do by
+// hand is shown on its YAML and Checks tabs. A file that can't be converted
+// is not drawn, and its Checks say why.
 //
 // A workflow file pushed since AWML listed its checks shows the list stored
 // at push, one row per check, named by the AWML that ran them. A workflow
@@ -71,9 +72,13 @@ export async function loadVersion(
 
   if ((asked === "security" || asked === "platform") && !views.includes(asked)) notFound();
   const shown = asked ?? views[0];
-  const files = names.map((name) => ({ name, text: v.files[name]!, awml: awmlOf(v.files[name]) }));
+  const notesOf = (name: FileName) => {
+    const r = read.get(name);
+    return r && "file" in r ? r.notes : [];
+  };
+  const files = names.map((name) => ({ name, text: v.files[name]!, awml: awmlOf(v.files[name]), notes: notesOf(name) }));
   const checks: CheckedFile[] = await Promise.all(
-    files.map(async (f) => {
+    files.map(async (f): Promise<CheckedFile> => {
       const r = read.get(f.name)!;
       if ("error" in r)
         return {
@@ -82,16 +87,18 @@ export async function loadVersion(
           listed: false,
           rows: [{ name: "awml convert", mistakes: r.error, warnings: [] }],
         };
+      const notes = r.notes.length ? { notes: r.notes } : {};
       if (f.name === "workflow") {
         const stored = v.checks && (await engine.check(r.file)).length === 0 ? v.checks : null;
         const list = stored ?? { awml: engine.version, checks: await engine.checks(r.file) };
-        return { name: f.name, checkedBy: list.awml, listed: stored ? "stored" : "now", rows: rowsOf(list.checks) };
+        return { name: f.name, checkedBy: list.awml, listed: stored ? "stored" : "now", rows: rowsOf(list.checks), ...notes };
       }
       return {
         name: f.name,
         checkedBy: engine.version,
         listed: false,
         rows: [{ name: "awml check", mistakes: await engine.check(r.file), warnings: await engine.warnings(r.file) }],
+        ...notes,
       };
     }),
   );
@@ -118,7 +125,7 @@ export async function loadVersion(
           f.name !== "workflow"
             ? f
             : {
-                name: f.name,
+                ...f,
                 checkedBy: engine.version,
                 listed: "now" as const,
                 rows: rowsOf(await engine.checksWith({ file: refPath(v.owner, v.slug), source: workflowRead! }, refs.given)),
@@ -173,11 +180,11 @@ export async function loadVersion(
     referredBy: referredBy ?? [],
     // The parts the drawing marks as linked to other workflows, from what the
     // viewer may know of both, so it names nothing they can't see.
-    links: partLinks(refs.shown, referredBy ?? []),
+    links: partLinks(refs.shown, referredBy ?? [], workflowRead ? partKinds(workflowRead) : {}),
     systems: systems ?? [],
-    // The drawing, laid out here (src/server/drawing.ts), so the page draws it
-    // with no layout of its own.
-    drawing: drawable ? await layOut(await engine.draw(readFile(source)!, drawnImplementation(source, placed, readFile(source)!))) : null,
+    // The drawing, laid out here from the engine's graph (src/server/drawing.ts),
+    // so the page draws it with no layout of its own.
+    drawing: drawable ? await layOut(await engine.graph(readFile(source)!, drawnImplementation(source, placed, readFile(source)!))) : null,
     summary: v.summary,
     versions: v.versions,
   };

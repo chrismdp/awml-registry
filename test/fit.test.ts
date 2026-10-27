@@ -134,7 +134,7 @@ describe("fitting a workflow through the API", () => {
     // A version stored before the registry took only 0.4 files, with only a platform view.
     await storeVersion(username, "drawn", a, { platform: dinnersPlatform }, { summary: JSON.parse(example("legacy/dinners-platform.summary.json")) });
     const cases: [unknown, number, string[]][] = [
-      [{}, 422, ["Send a workflow as owner/slug, or its AWML 0.6 file as file."]],
+      [{}, 422, ["Send a workflow as owner/slug, or its AWML 0.7 file as file."]],
       [{ workflow: `${username}/client-email`, file: clientEmail }, 422, ["Send a workflow or the YAML of its file, not both."]],
       [{ workflow: "client-email" }, 422, ["Name the workflow as owner/slug or owner/slug@version."]],
       [{ workflow: `${username}/nothing-here` }, 404, [`Not found: ${username}/nothing-here.`]],

@@ -15,14 +15,24 @@ import type { PartLink } from "@/server/part-links";
 import { laidOut } from "./drawn";
 import { example } from "./helpers";
 
-const text = `flowchart TB\n  list[("Shopping list")]\n  plan("<small>🤖</small><br>Plan the week#39;s dinners")\n  list -.-> plan\n  n@{ shape: notch-rect, label: "Kept by Ana" }\n  class list ctx\n  class plan ai\n  class n gap`;
+const text = JSON.stringify({
+  view: "security",
+  groups: [],
+  parts: [
+    { id: "list", kind: "context", label: "Shopping list" },
+    { id: "plan", kind: "ai", label: "Plan the week's dinners", decider: "ai" },
+  ],
+  lines: [{ from: "list", to: "plan", kind: "data", points: "to" }],
+  comments: [{ id: "n", label: "Kept by Ana", gap: false, ties: [] }],
+  places: [],
+});
 
 // The nodes React Flow draws for a drawing, as it renders them.
 async function rendered(
   source: string,
   { links = [], hrefs = {}, target, menuFor }: { links?: PartLink[]; hrefs?: Record<string, string>; target?: string; menuFor?: string },
 ) {
-  const { full } = laidOut(await layOut(source, { map: Object.keys(hrefs).length > 0 }));
+  const { full } = laidOut(await layOut(source));
   const nodes = layeredNodes(full, { id: "t", links: new Map(links.map((l) => [l.part, l])), hrefs, notes: new Map(), target, menuFor, onNote: () => {} });
   return renderToStaticMarkup(<ReactFlow nodes={nodes} edges={[]} nodeTypes={NODE_TYPES} width={800} height={600} />);
 }
@@ -91,8 +101,8 @@ describe("a linked part, once React Flow draws it", () => {
 });
 
 describe("a workflow's box on a system's map, once React Flow draws it", () => {
-  it("is a focusable link to the workflow's page, named by it", async () => {
-    const html = await rendered(example("flow/factory-map.mmd"), { hrefs: { w1: "/chrismdp/issue-to-pull-request" } });
+  it("is a focusable link to the workflow's page, named by it, though it holds the outside actions that start others", async () => {
+    const html = await rendered(example("flow/factory-map.graph.json"), { hrefs: { w1: "/chrismdp/issue-to-pull-request" } });
     const w1 = node(html, "w1");
     expect(w1.tag).toContain('tabindex="0"');
     expect(w1.tag).toContain('role="link"');
@@ -104,11 +114,11 @@ describe("a workflow's box on a system's map, once React Flow draws it", () => {
 
 describe("a scope's heading (#67)", () => {
   it("is its name, with who it is for on lines of their own under it, the same in the server's SVG and in React Flow", async () => {
-    const { full } = laidOut(await layOut(example("dinners.mmd")));
+    const { full } = laidOut(await layOut(example("dinners.graph.json")));
     const carers = full.scopes.find((s) => s.id === "carers")!;
     expect(carers).toMatchObject({ name: "carers", who: ["+ June, Beth"] });
     const svg = renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />);
-    const html = await rendered(example("dinners.mmd"), {});
+    const html = await rendered(example("dinners.graph.json"), {});
     for (const drawn of [/<g [^>]*data-scope="carers"[^]*?<\/g>/.exec(svg)![0], node(html, "carers").inside]) {
       const name = /<text class="flow-scope-name" x="20" y="([\d.]+)"[^>]*>carers<\/text>/.exec(drawn);
       const who = /<text class="flow-scope-who" font-size="12"><tspan x="20" y="([\d.]+)">\+ June, Beth<\/tspan><\/text>/.exec(drawn);
@@ -129,7 +139,7 @@ describe("a line, once a part is dragged (#67)", () => {
     ((p.y === r.y || p.y === r.y + r.height) && p.x >= r.x && p.x <= r.x + r.width);
 
   it("keeps the server's route while its ends haven't moved, or have moved together, and goes square once one has", async () => {
-    const { full } = laidOut(await layOut(example("flow/issue-to-pull-request.mmd")));
+    const { full } = laidOut(await layOut(example("flow/issue-to-pull-request.graph.json")));
     const at = new Map<string, Rect>([...full.parts, ...full.scopes].map((b) => [b.id, b]));
     const line = full.lines.find((l) => l.label && l.points.length > 3)!;
     const s = at.get(line.from)!;

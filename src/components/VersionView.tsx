@@ -9,7 +9,7 @@ import type { ListedSystem } from "@/server/systems";
 import { fork } from "@/app/[owner]/[slug]/actions";
 import { names, stepCount } from "@/server/summary";
 import { CURRENT_AWML } from "@/server/awml-file";
-import { Checks, mistakesIn, Tick, type CheckedFile } from "./Checks";
+import { Checks, ConvertNotes, mistakesIn, Tick, type CheckedFile } from "./Checks";
 import { ConvertedNote } from "./ConvertedNote";
 import { CopyButton } from "./CopyButton";
 import { ForkForm } from "./ForkForm";
@@ -49,8 +49,9 @@ export type VersionViewProps = {
   implementations: { id: string; label: string; href: string; shown: boolean }[];
   // A workflow's platform view when it has no implementations.
   nowhere: boolean;
-  // Each file as it was pushed, and the AWML its `awml:` field gives.
-  files: { name: FileName; text: string; awml: string | null }[];
+  // Each file as it was pushed, the AWML its `awml:` field gives, and what
+  // converting it, when that is an older AWML, noted to do by hand.
+  files: { name: FileName; text: string; awml: string | null; notes: string[] }[];
   // What checking each file found, and the AWML that checked it.
   checks: CheckedFile[];
   // Each ref the workflow's file holds, as the viewer may know what it names.
@@ -178,6 +179,7 @@ export function VersionView(p: VersionViewProps) {
                 <ConvertedNote name={`${f.name}.yaml`} awml={f.awml}>
                   The registry draws, checks and fits it converted to AWML {CURRENT_AWML}.
                 </ConvertedNote>
+                <ConvertNotes notes={f.notes} />
                 <pre id={`${f.name}-yaml`}>{f.text}</pre>
               </section>
             ))}

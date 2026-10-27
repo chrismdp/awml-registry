@@ -1,0 +1,16 @@
+# An AWML 0.7 workflow whose every label is markup, a javascript: address or
+# broken over lines. The engine's graph gives each exactly as written here,
+# unescaped, so the registry must show each only as text.
+awml: "0.7"
+title: "Hostile <script>alert('title')</script>"
+scopes:
+  - { id: home, label: "home: <img src=x onerror=alert('scope')>" }
+parts:
+  - { id: tick, kind: trigger, label: "<script>alert('trigger')</script>", in: home }
+  - { id: step, kind: code, op: do, label: "javascript:alert('step')\n</text><script>alert('break')</script>", in: home }
+  - { id: out, kind: outside, label: "<img src=x onerror=alert('action')>: Allow <b>now</b>", in: home }
+  - { id: gap, kind: comment, label: "Missing from the design: <script>alert('gap')</script>\r\nand <a href=\"javascript:alert('link')\">this</a>" }
+lines:
+  - { from: tick, to: step, kind: start, label: "<svg onload=alert('line')> next" }
+  - { from: step, to: out, kind: start }
+  - { from: gap, to: step, kind: tie }

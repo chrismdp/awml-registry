@@ -1,7 +1,8 @@
 // The AWML Go package compiled to WebAssembly, so the registry gives the same
-// verdict, summary and drawing as the awml command line. vendor/awml/VERSION
-// names the AWML commit; `npm run engine:update` rebuilds it.
-import { createAWML, type AWML } from "../../vendor/awml/awml.js";
+// verdict, summary and drawing as the awml command line. vendor/awml/version.json
+// pins the AWML release and commit, which `npm run engine:build` builds (it is
+// never kept in git), and `npm run engine:update -- <tag>` moves.
+import { createAWML, type AWML, type ConvertError } from "../../vendor/awml/awml.js";
 import version from "../../vendor/awml/version.json";
 import { loadAwmlModule } from "@/engine/module";
 import { memoise } from "./memo";
@@ -52,13 +53,15 @@ export const wasmEngine: Engine = {
   async start() {
     await awml();
   },
+  // convert throws what it notes and the mistakes it finds, as awml convert
+  // exits 1 for them, but still gives the whole file, which is the answer.
   convert: memoise(async (sources: string[]) => {
     const running = await awml();
     try {
-      return { file: running.convert(sources), mistakes: [] };
+      return { file: running.convert(sources), notes: [], mistakes: [] };
     } catch (e) {
-      const { message, converted } = e as Error & { converted?: string };
-      return converted === undefined ? { error: message } : { file: converted, mistakes: message.split("\n") };
+      const { message, converted, notes = [], mistakes = [] } = e as ConvertError;
+      return converted === undefined ? { error: message } : { file: converted, notes, mistakes };
     }
   }),
   check: memoise(async (yaml: string) => (await awml()).check(yaml)),
@@ -69,7 +72,7 @@ export const wasmEngine: Engine = {
     const sources = [files.workflow, files.security, files.platform].filter((f): f is string => f !== undefined);
     return (await awml()).summary(sources) as Summary;
   }),
-  draw: memoise(async (yaml: string, implementation = "") => (await awml()).draw(yaml, implementation)),
+  graph: memoise(async (yaml: string, implementation = "") => (await awml()).graphJSON(yaml, implementation)),
   fit: memoise(
     async (workflow: string, descriptions: string[], implementation = "") =>
       JSON.parse((await awml()).fitJSON([workflow, ...descriptions], implementation)) as FitReport,
@@ -79,7 +82,7 @@ export const wasmEngine: Engine = {
     return files.map((f, i) => ({ file: f.file, checks: checksFor(listed, f.file, i === 0) }));
   }),
   summariseAcross: memoise(async (files: Named[]) => (await awml()).summary(files) as Summary),
-  drawMap: memoise(async (files: Named[]) => (await awml()).draw(files)),
+  graphMap: memoise(async (files: Named[]) => (await awml()).graphJSON(files)),
   fitAcross: memoise(
     async (files: Named[], descriptions: string[]) =>
       JSON.parse((await awml()).fitJSON([...files, ...descriptions])) as FitReport,

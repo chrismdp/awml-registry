@@ -58,8 +58,9 @@ async function physicsOf(d: Drawing) {
   return { sim, now: () => last!, resting };
 }
 
-const dinners = example("dinners.mmd");
-const issue = example("flow/issue-to-pull-request.mmd");
+// The family's dinners as AWML 0.4 wrote them, whose scopes nest three deep, converted.
+const dinners = example("older/dinners-04.graph.json");
+const issue = example("flow/issue-to-pull-request.graph.json");
 
 describe("Physics", () => {
   for (const [name, text] of [

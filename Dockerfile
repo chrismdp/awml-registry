@@ -1,9 +1,16 @@
 # The self-hosted registry: the Next.js app with its data in a SQLite file.
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
+# git fetches AWML's source for the engine's build (see below).
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ git ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
+# The AWML engine, built from the commit vendor/awml/version.json pins, with the
+# Go release AWML's go.mod names (issue #73). It is its own layer, so it is
+# built again only when the pin or the build changes.
+COPY scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-go.mjs scripts/
+COPY vendor/awml vendor/awml
+RUN npm run engine:build
 COPY . .
 RUN npm run build
 

@@ -15,7 +15,7 @@ import { orgWith, person, request, storeVersion, type Who } from "./helpers";
 import { pageRequest } from "./pages";
 import { laidOut } from "./drawn";
 
-const shopping = `awml: "0.6"
+const shopping = `awml: "0.7"
 title: Shopping
 parts:
   - { id: list, kind: context, label: "Shopping list" }
@@ -30,7 +30,7 @@ implementations:
 `;
 
 // A workflow that keeps its own copy of a list another workflow has, and runs at home.
-const referring = (ref: string, title = "Dinners") => `awml: "0.6"
+const referring = (ref: string, title = "Dinners") => `awml: "0.7"
 title: ${title}
 parts:
   - { id: list, kind: context, label: "Shopping list", ref: ${ref} }
@@ -213,8 +213,18 @@ describe("parts linked across tenants", () => {
 
 // A drawing of a workflow whose list is linked, laid out as the server lays it out.
 async function drawn() {
-  const text = `flowchart TB\n  list[("Shopping list")]\n  plan("<small>🤖</small><br>Plan the week#39;s dinners")\n  list -.-> plan\n  class list ctx\n  class plan ai`;
-  return laidOut(await layOut(text)).full;
+  const graph = JSON.stringify({
+    view: "security",
+    groups: [],
+    parts: [
+      { id: "list", kind: "context", label: "Shopping list" },
+      { id: "plan", kind: "ai", label: "Plan the week's dinners", decider: "ai" },
+    ],
+    lines: [{ from: "list", to: "plan", kind: "data", points: "to" }],
+    comments: [],
+    places: [],
+  });
+  return laidOut(await layOut(graph)).full;
 }
 
 // The SVG the server sends for a drawing, with the links given.

@@ -87,6 +87,7 @@
 .flow-arrow.dotted path { fill: #9aa2af; }
 .flow-arrow.thick path { fill: #3e424b; }
 .flow-arrow.broken path { fill: var(--broken); }
+.flow-arrow.cross path { fill: none; stroke: #5d6472; stroke-width: 1.6px; stroke-linecap: round; }
 .flow-line-label rect { fill: var(--paper); stroke: var(--rule); stroke-width: 1px; }
 .flow-line-label text { fill: var(--ink-soft); }
 .flow-line-label.dotted text { fill: var(--ink-faint); }
@@ -96,6 +97,10 @@
 .flow-note-icon circle { fill: var(--paper); stroke: var(--edge); stroke-width: 1px; }
 .flow-note-icon path { stroke: var(--ink-soft); stroke-width: 1.3px; stroke-linecap: round; stroke-linejoin: round; fill: none; }
 .flow-note-icon text { fill: var(--ink-soft); font-weight: 600; }
+/* A gap, something missing from the design, is a finding: its mark is a warning. */
+.flow-note-icon.gap circle { fill: var(--person-fill); stroke: var(--person-line); stroke-width: 1.5px; }
+.flow-note-icon.gap path { stroke: var(--person-line); stroke-width: 1.6px; }
+.flow-note-icon.gap text { fill: var(--person-line); }
 .flow-note-mark { position: absolute; padding: 0; border: none; background: none; cursor: pointer; line-height: 0; border-radius: 999px; }
 .flow-note-mark svg { overflow: visible; }
 .flow-note-mark:hover .flow-note-icon circle, .flow-note-mark:focus-visible .flow-note-icon circle { fill: var(--ink); stroke: var(--ink); }

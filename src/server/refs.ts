@@ -1,4 +1,4 @@
-// References between workflows, as AWML 0.6 has them: a part's `ref` names a
+// References between workflows, as AWML has them from 0.6: a part's `ref` names a
 // part of another workflow, which the referring workflow keeps its own copy
 // of, so it still checks alone. A ref is owner/slug#id for a published
 // workflow, or a path to a file alongside, such as shopping.yaml#list, which

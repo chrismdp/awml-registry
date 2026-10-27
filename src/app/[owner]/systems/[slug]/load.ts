@@ -35,7 +35,7 @@ export async function loadSystem(owner: string, slug: string, n: string, tab: Sy
       const r = name ? await asRead(m.files, name) : { error: ["It has no workflow file the registry can read."] };
       if ("error" in r) return { member: m, file: null, error: r.error };
       const named: Named = { file: refPath(m.owner, m.slug), source: r.file };
-      return { member: m, file: named, error: null, drawn: (await engine.check(r.file)).length === 0 };
+      return { member: m, file: named, error: null, notes: r.notes, drawn: (await engine.check(r.file)).length === 0 };
     }),
   );
   const given = read.flatMap((r) => (r.file ? [r.file] : []));
@@ -47,7 +47,8 @@ export async function loadSystem(owner: string, slug: string, n: string, tab: Sy
     if (r.error)
       return [{ name, checkedBy: engine.version, listed: false, rows: [{ name: "awml convert", mistakes: r.error, warnings: [] }] }];
     const found = listed.find((l) => l.file === r.file!.file)!;
-    return [{ name, checkedBy: engine.version, listed: "now", rows: rowsOf(found.checks) }];
+    const notes = r.notes?.length ? { notes: r.notes } : {};
+    return [{ name, checkedBy: engine.version, listed: "now", rows: rowsOf(found.checks), ...notes }];
   });
 
   const members: ListedMember[] = read.map((r) =>
@@ -65,22 +66,30 @@ export async function loadSystem(owner: string, slug: string, n: string, tab: Sy
 
   let panel: SystemPanel = { tab: "checks" };
   if (tab === "map") {
-    // The engine names each workflow's box w1, w2 and on, in the order the
-    // members drawn are given to it, and is given only members the viewer
-    // may see, so a box never leads to a workflow they may not see (#61).
-    const boxes = read.flatMap((r) =>
-      r.file && r.drawn && r.member.state === "found"
-        ? [{ title: r.member.title, address: `${r.member.owner}/${r.member.slug}`, href: `/${r.member.owner}/${r.member.slug}` }]
-        : [],
+    // The engine is given only the members the viewer may see, each at a
+    // path ending owner/slug.yaml, and its graph names the workflow each box
+    // is from that path, so a box leads only to a member drawn, never to a
+    // workflow the viewer may not see (#61, #69).
+    const titles = new Map<string, string>(
+      read.flatMap((r) =>
+        r.file && r.drawn && r.member.state === "found" ? [[`${r.member.owner}/${r.member.slug}`, r.member.title] as const] : [],
+      ),
     );
-    const hrefs = Object.fromEntries(boxes.map((b, i) => [`w${i + 1}`, b.href]));
     panel = {
       tab,
       ...(await attempt(async () => {
         if (!drawn.length) return {};
-        const drawing = await layOut(await engine.drawMap(drawn), { map: true });
+        const drawing = await layOut(await engine.graphMap(drawn));
         if ("undrawn" in drawing) return { drawing };
-        return { drawing, hrefs, links: mapLinks(drawing.full, Object.fromEntries(boxes.map((b, i) => [`w${i + 1}`, b]))) };
+        const boxes = Object.fromEntries(
+          drawing.full.scopes.flatMap((b) =>
+            b.workflow && titles.has(b.workflow)
+              ? [[b.id, { title: titles.get(b.workflow)!, address: b.workflow, href: `/${b.workflow}` }] as const]
+              : [],
+          ),
+        );
+        const hrefs = Object.fromEntries(Object.entries(boxes).map(([id, b]) => [id, b.href]));
+        return { drawing, hrefs, links: mapLinks(drawing.full, boxes) };
       })),
     };
   }

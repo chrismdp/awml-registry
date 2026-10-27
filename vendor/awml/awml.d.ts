@@ -31,12 +31,26 @@ export interface AWML {
   draw(source: Sources, implementation?: string): string;
   // Where untrusted text reaches, as awml draw --untrusted draws it.
   drawUntrusted(source: string): string;
+  // What draw draws, with nothing laid out, as awml graph does: one
+  // workflow's view, or the map of several given together, as JSON. It takes
+  // and throws what draw does. No text in it is escaped: every label is as
+  // the file wrote it, line breaks included, so a page must escape it.
+  graphJSON(source: Sources, implementation?: string): string;
+  graph(source: Sources, implementation?: string): unknown;
+  // What drawUntrusted draws, as awml graph --untrusted does, unescaped too.
+  graphUntrustedJSON(source: string): string;
+  graphUntrusted(source: string): unknown;
   // One file of an older version upgraded, or a 0.3 or 0.2 security view and
   // its platform view joined, into one file of the current version, as awml
-  // convert does; a current file comes back unchanged. Throws what stops it;
-  // when the current rules find mistakes in the result, the error's
-  // `converted` holds it.
+  // convert does; a current file comes back unchanged. Throws what stops it.
+  // When it notes something it couldn't carry over, or the current rules find
+  // mistakes in the result, it throws them too, and the error's `notes` and
+  // `mistakes` hold each and its `converted` the whole file, which awml
+  // convert still writes.
   convert(sources: string | string[], implementation?: string): string;
 }
+
+// What convert throws when it converted the file but has notes or mistakes.
+export type ConvertError = Error & { notes?: string[]; mistakes?: string[]; converted?: string };
 
 export function createAWML(source: WebAssembly.Module | BufferSource | Response): Promise<AWML>;

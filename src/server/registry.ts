@@ -54,7 +54,7 @@ async function readable(db: Db, viewer: Viewer, ownerSlug: string, slug: string)
   return { owner, workflow: w };
 }
 
-// The one file a push sends: an AWML 0.6 workflow, as `workflow`, or alone
+// The one file a push sends: an AWML 0.7 workflow, as `workflow`, or alone
 // as `security`, as awml push 0.4.0 sent it. Anything marked as an older
 // AWML is refused with a 400 that says how to convert it, whichever field it
 // came in.
@@ -67,9 +67,9 @@ function fileFrom(body: PushBody): Result<{ file: string }> {
     sent.push(text);
   }
   if (sent.some(isOlderAwml)) return refuse(400, WORKFLOW_IS_TOO_OLD);
-  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.6 file as workflow.");
+  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.7 file as workflow.");
   if (sent.length > 1)
-    return refuse(422, "Send one file, as workflow: an AWML 0.6 workflow holds its design and its implementations.");
+    return refuse(422, "Send one file, as workflow: an AWML 0.7 workflow holds its design and its implementations.");
   return { ok: true, file: sent[0] };
 }
 
@@ -113,8 +113,13 @@ async function roomForPrivate(db: Db, owner: Owner & { type: "user" }): Promise<
   );
 }
 
-// A version saved, and each path ref its push rewrote as owner/slug#id.
-type Pushed = Result<{ owner: string; slug: string; number: number; rewrites: Rewrite[] }>;
+// A warning AWML gave the file pushed, by the id of the check that gave it,
+// such as warn.several-workflows. A warning never refuses a push.
+export type PushWarning = { check: string; message: string };
+
+// A version saved, each path ref its push rewrote as owner/slug#id, and the
+// warnings its checks gave.
+type Pushed = Result<{ owner: string; slug: string; number: number; rewrites: Rewrite[]; warnings: PushWarning[] }>;
 
 export async function pushVersion(
   db: Db,
@@ -235,7 +240,8 @@ async function saveVersion(
   }
   await db.update(workflow).set({ title: title!, updatedAt: new Date() }).where(eq(workflow.id, w.id));
   if (owner.type === "organisation") await record(db, owner.id, viewer.id, "push", `${owner.slug}/${slug} v${number}`);
-  return { ok: true, owner: owner.slug, slug, number, rewrites };
+  const warnings = checks.checks.flatMap((c) => (c.result === "warn" ? c.mistakes.map((message) => ({ check: c.id, message })) : []));
+  return { ok: true, owner: owner.slug, slug, number, rewrites, warnings };
 }
 
 export type ForkBody = { owner?: unknown; slug?: unknown; visibility?: unknown; version?: unknown };

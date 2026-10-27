@@ -140,12 +140,16 @@ export function roundedPath(points: Point[], radius = 10) {
   return `${d} L ${last.x} ${last.y}`;
 }
 
-// The arrowheads a drawing's lines use, by `id` so two drawings on a page keep their own.
+// The arrowheads a drawing's lines use, by `id` so two drawings on a page keep their own, and
+// the cross a refused read ends in.
 const ARROWS = ["solid", "dotted", "thick", "broken"] as const;
 export const arrowOf = (id: string, line: Pick<DrawnLine, "style" | "broken">) => `${id}-arrow-${line.broken ? "broken" : line.style}`;
 export function Arrowheads({ id }: { id: string }) {
   return (
     <defs>
+      <marker id={`${id}-cross`} className="flow-arrow cross" viewBox="0 0 10 10" refX={5} refY={5} markerWidth={10} markerHeight={10} markerUnits="userSpaceOnUse">
+        <path d="M 1 1 L 9 9 M 9 1 L 1 9" />
+      </marker>
       {ARROWS.map((kind) => (
         <marker
           key={kind}
@@ -167,14 +171,15 @@ export function Arrowheads({ id }: { id: string }) {
 }
 
 // A line: solid for the workflow's own flow, dotted for data, thick for a
-// standing rule, red for one that breaks a rule.
+// standing rule, red for one that breaks a rule, and a cross at the end of a
+// read the design refuses.
 export function LineGraphic({ id, line, d }: { id: string; line: DrawnLine; d: string }) {
   const arrow = `url(#${arrowOf(id, line)})`;
   return (
     <path
       className={`flow-line ${line.style}${line.broken ? " broken" : ""}`}
       d={d}
-      markerEnd={line.arrowEnd ? arrow : undefined}
+      markerEnd={line.refused ? `url(#${id}-cross)` : line.arrowEnd ? arrow : undefined}
       markerStart={line.arrowStart ? arrow : undefined}
     />
   );
@@ -197,16 +202,24 @@ export function LabelGraphic({ label, at, style }: { label: DrawnLabel; at: Poin
   );
 }
 
-// A part's note mark (#60): a small round note icon, centred at its bottom right.
+// A part's note mark (#60): a small round note icon, centred at its bottom right. When one of
+// its notes is a gap, something missing from the design, it is a warning mark instead.
 export const NOTE_R = 12;
-export function NoteIcon({ count }: { count: number }) {
+export function NoteIcon({ count, gap = false }: { count: number; gap?: boolean }) {
   return (
-    <g className="flow-note-icon">
+    <g className={`flow-note-icon${gap ? " gap" : ""}`}>
       <circle r={NOTE_R} />
-      <g transform="translate(-7, -7)">
-        <path d="M3 1.5h5.5L11 4v8.5H3z" fill="none" />
-        <path d="M5 6.5h4M5 9h4" />
-      </g>
+      {gap ? (
+        <g>
+          <path d="M0 -6.5L6.8 5.5H-6.8z" />
+          <path d="M0 -2.2v3.6M0 3.6v0.1" />
+        </g>
+      ) : (
+        <g transform="translate(-7, -7)">
+          <path d="M3 1.5h5.5L11 4v8.5H3z" fill="none" />
+          <path d="M5 6.5h4M5 9h4" />
+        </g>
+      )}
       {count > 1 && (
         <text x={NOTE_R + 2} y={4} fontSize={11}>
           {count}

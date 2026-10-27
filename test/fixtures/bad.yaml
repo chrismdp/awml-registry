@@ -1,7 +1,8 @@
-awml: "0.6"
+awml: "0.7"
 title: Broken
 parts:
   - { id: start, kind: trigger, label: Start }
   - { id: work, kind: code, label: Work }
 lines:
   - { from: start, to: missing, kind: start }
+  - { from: start, to: work, kind: start }

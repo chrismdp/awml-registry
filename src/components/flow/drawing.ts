@@ -32,6 +32,8 @@ export type DrawnScope = Rect & {
   fill?: string;
   stroke?: string;
   scope?: string;
+  // On a system's map, the workflow a box is, as owner/slug.
+  workflow?: string;
   // Whether it holds parts or scopes; one that doesn't, such as a workflow's
   // box on a system's map, is a box of its own, its name in `lines`.
   holds: boolean;
@@ -120,7 +122,7 @@ const CAPTIONS: Record<PartKind, string> = {
 
 // A part's text, broken into lines, and the size of its box round them.
 export function partText(p: Part) {
-  const caption = [CAPTIONS[p.kind], p.verb].filter(Boolean).join(" · ");
+  const caption = [CAPTIONS[p.kind], p.verb, p.untrusted ? "untrusted" : ""].filter(Boolean).join(" · ");
   const lines = wrap(p.label, LABEL.size, TEXT_MAX);
   const [top, right, bottom, left] = PADDING[p.kind];
   const tierWidth = p.tier ? textWidth(p.tier, TIER.size) + 2 * TIER.padding : 0;

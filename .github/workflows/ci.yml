@@ -1,7 +1,7 @@
-# Type checks, lints and tests every push and pull request: npm ci, typecheck, lint and test. The
-# build and rebase workflows push and merge with the repository's GitHub App, so their pushes start
-# it as a person's would. Deploying is up to whoever runs a registry: scripts/deploy.sh deploys to
-# Cloudflare.
+# Type checks, lints and tests every push and pull request: npm ci, the AWML engine's build,
+# typecheck, lint and test. The build and rebase workflows push and merge with the repository's
+# GitHub App, so their pushes start it as a person's would. Deploying is up to whoever runs a
+# registry: scripts/deploy.sh deploys to Cloudflare.
 #
 # When a check fails on main, a last job reports it. This is the workflow drawn at
 # https://awml.io/chrismdp/fix-failing-main. If an issue labelled failing-main is already open, it
@@ -41,7 +41,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # The AWML engine is built from the commit vendor/awml/version.json pins, and never kept in
+      # git (issue #73). Its build is kept by that commit and the build scripts, so a run builds it
+      # only when either changes.
+      - id: engine
+        run: echo "commit=$(node -p 'require("./vendor/awml/version.json").commit')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            vendor/awml/awml.wasm
+            vendor/awml/wasm_exec.js
+            vendor/awml/build.json
+          key: awml-engine-${{ steps.engine.outputs.commit }}-${{ hashFiles('scripts/engine-build.sh', 'scripts/engine-lib.sh', 'scripts/engine-go.mjs') }}
       - run: npm ci
+      - run: npm run engine:build
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test

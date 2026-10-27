@@ -1,0 +1,2 @@
+awml convert: converted, but do this by hand:
+  part "order" was a trigger marked untrusted, and an outside action isn't: mark the trigger it starts, acme/order#low, untrusted instead
