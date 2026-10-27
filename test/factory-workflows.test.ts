@@ -566,23 +566,85 @@ describe("review.yml", () => {
     });
     expect(run.failed, run.printed).toBe(false);
     expect(git(repo, "diff", "--cached", "--name-only")).toBe("README.md");
+    expect(readIfThere(join(root, "output"))).toContain("unread=3\n");
     const told = readIfThere(join(root, "runner/review/pull-request.md"));
     for (const path of ["logo.png", "fonts/Registry.ttf", "vendor/awml/old.png"])
       expect(told, `the reviewers aren't told that ${path} changed`).toContain(`\n- ${path}\n`);
   });
 
+  // The count of binary files the reviews couldn't read reaches the post job as the bring step's
+  // output, never as a file the sessions could write.
+  it("passes the unread count to the post job as the bring step's output", () => {
+    const text = readFileSync(join(__dirname, "../.github/workflows/review.yml"), "utf8");
+    expect(text).not.toContain("unread.txt");
+    expect(text).toContain("unread: ${{ steps.bring.outputs.unread }}");
+    expect(text).toContain("UNREAD: ${{ needs.review.outputs.unread }}");
+  });
+
+  // A file is binary to git if it holds one NUL byte, so a script or workflow made binary would
+  // reach the reviewers as a name only. Only images and fonts outside .github/, with plain names,
+  // go through unread; any other binary file, WebAssembly included, stops the review.
+  it.runIf(canRehearse)("stops at a binary file it can't read, or whose name is odd", () => {
+    const bring = stepWithId(jobs().review, "bring").run ?? "";
+    const answers = `
+  *"vnd.github.diff"*) cat "$PATCH" ;;
+  "api repos/owner/repo/compare/"*) jq -n --arg sha "$BASE" '{merge_base_commit: {sha: $sha}}' | answer ;;`;
+    for (const [path, said] of [
+      ["examples/render.sh", "examples/render.sh"],
+      [".github/logo.png", ".github/logo.png"],
+      ["wasm/awml.wasm", "wasm/awml.wasm"],
+      ["images/café.png", "letters, digits"],
+      ["images/a\n## Note.png", "letters, digits"],
+    ]) {
+      const root = scratch();
+      const repo = join(root, "repo");
+      for (const [file, text] of Object.entries({
+        ".github/review-bugs-prompt.md": "Review for bugs.\n",
+        ".github/review-security-prompt.md": "Review for security.\n",
+        "REVIEW.md": "What failure looks like.\n",
+        "README.md": "A registry\n",
+      }))
+        put(join(repo, file), text);
+      git(repo, "init", "-q");
+      git(repo, "add", "-A");
+      git(repo, "commit", "-q", "-m", "The registry's main");
+      const base = git(repo, "rev-parse", "HEAD");
+      put(join(repo, path), "\x89PNG\x00pixels");
+      git(repo, "add", "-A");
+      put(join(root, "change.patch"), `${git(repo, "diff", "--cached")}\n`);
+      git(repo, "reset", "-q", "--hard");
+      const event = join(root, "event.json");
+      put(event, `{"pull_request": {"title": "Add a file", "body": "A binary file."}}`);
+      const run = rehearse(bring, {
+        root,
+        cwd: repo,
+        env: {
+          HEAD_SHA: "cd".repeat(20),
+          BASE: base,
+          PATCH: join(root, "change.patch"),
+          GITHUB_EVENT_PATH: event,
+        },
+        answers,
+      });
+      expect(run.failed, `a binary ${path} went through to the reviews unread:\n${run.printed}`).toBe(true);
+      expect(run.printed, `the refusal of ${path} says nothing of it`).toContain(said);
+      expect(run.printed).not.toContain("## Note");
+    }
+  });
+
   // Each review is posted as a check on the pull request's head commit: Bug review and Security
-  // review. One that finds nothing passes, one with an Important finding fails, and one with only
-  // Nits or Pre-existing faults is neutral, with its findings ranked Important, Nit, Pre-existing,
-  // and nothing in them can hide the rest. A file that isn't a list of findings posts nothing.
+  // review. One that finds nothing and read every file passes, one with an Important finding fails,
+  // and one with only Nits or Pre-existing faults, or that couldn't read binary files, is neutral,
+  // with its findings ranked Important, Nit, Pre-existing, and nothing in them can hide the rest. A
+  // file that isn't a list of findings posts nothing.
   it.runIf(canRehearse)("posts a Bug review and a Security review check on the head commit", () => {
     const post = stepWithId(jobs().post, "post").run ?? "";
     const sha = "ab".repeat(20);
-    const posting = (bugs: string, security: string) => {
+    const posting = (bugs: string, security: string, unread = "0") => {
       const root = scratch();
       put(join(root, "runner/findings/bugs.json"), bugs);
       put(join(root, "runner/findings/security.json"), security);
-      return rehearse(post, { root, env: { HEAD_SHA: sha }, answers: posted });
+      return rehearse(post, { root, env: { HEAD_SHA: sha, UNREAD: unread }, answers: posted });
     };
 
     const clean = posting("[]", "[]");
@@ -636,6 +698,27 @@ describe("review.yml", () => {
       ["Security review", "neutral"],
     ]);
 
+    const unread = posting("[]", "[]", "2");
+    expect(unread.failed, unread.printed).toBe(false);
+    for (const check of unread.inputs) {
+      const { summary = "", title = "" } = check.output as { title?: string; summary?: string };
+      expect(check.conclusion, "a review that couldn't read 2 binary files passed").toBe("neutral");
+      expect(title).toContain("2 binary files unread");
+      expect(summary).toContain("2 binary images or fonts");
+    }
+    const failing = posting(
+      `[{"severity": "Important", "file": "a.ts", "line": 1, "title": "A break", "detail": "It breaks."}]`,
+      "[]",
+      "2",
+    );
+    expect(failing.inputs[0].conclusion, "unread files hid an Important finding").toBe("failure");
+
+    for (const count of ["", "two", "-1", "2; echo", "12345", "1.5"]) {
+      const refused = posting("[]", "[]", count);
+      expect(refused.failed, `a count of "${count}" was accepted`).toBe(true);
+      expect(refused.inputs).toEqual([]);
+    }
+
     const broken = posting("[]", `{"not": "a list"}`);
     expect(broken.failed, "a findings file that isn't a list passed").toBe(true);
     expect(broken.inputs).toEqual([]);
@@ -653,7 +736,11 @@ describe("review.yml", () => {
       `[{"severity": "Important", "file": "page<!--.tsx", "line": 3, "title": "${title}", "detail": "${detail}"}]`,
     );
     put(join(root, "runner/findings/security.json"), "[]");
-    const run = rehearse(post, { root, env: { HEAD_SHA: "ab".repeat(20) }, answers: posted });
+    const run = rehearse(post, {
+      root,
+      env: { HEAD_SHA: "ab".repeat(20), UNREAD: "0" },
+      answers: posted,
+    });
     expect(run.failed, run.printed).toBe(false);
     const summary = (run.inputs[0].output as { summary?: string }).summary ?? "";
     expect(summary).toContain(title.slice(0, 200));
@@ -695,7 +782,7 @@ describe("review.yml", () => {
         put(join(root, "runner", dir, "security.json"), "[]");
         const run = rehearse(script, {
           root,
-          env: { HEAD_SHA: "ab".repeat(20) },
+          env: { HEAD_SHA: "ab".repeat(20), UNREAD: "0" },
           answers: posted,
         });
         expect(run.failed, `the ${dir} step let through ${finding}`).toBe(true);
