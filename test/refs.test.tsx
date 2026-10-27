@@ -4,8 +4,10 @@
 // Checks tab, and only against workflows the reader may see; a public
 // workflow refers only to public ones; and a workflow's page lists the
 // workflows that refer to it, as far as the viewer may see them.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { count } from "drizzle-orm";
 import { getDb } from "@/db/client";
+import { workflowRef } from "@/db/schema";
 import { revokeToken, listTokens } from "@/server/tokens";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
@@ -313,5 +315,51 @@ describe("security boundaries", () => {
       const res = await push("acme", "dinners", { token }, dinners("acme/secret#list"), "private");
       expect(res.status).toBe(401);
     }
+  });
+});
+
+// D1, where the hosted registry keeps its data, binds at most 100 values in a
+// statement; the tests refuse any statement that binds more (test/setup.ts).
+describe("a workflow of many refs, within D1's limit on bound values", () => {
+  // A workflow whose n lists each refer to the list of acme/list-1 to
+  // acme/list-n, which a private workflow may do before they are pushed.
+  const manyLists = (n: number) => {
+    const lists = Array.from({ length: n }, (_, i) => i + 1);
+    return `awml: "0.6"
+title: Many lists
+parts:
+  - { id: plan, kind: ai, label: "Plan the week's dinners" }
+${lists.map((i) => `  - { id: list_${i}, kind: context, label: "List ${i}", ref: acme/list-${i}#list }`).join("\n")}
+lines:
+${lists.map((i) => `  - { from: list_${i}, to: plan, kind: data }`).join("\n")}
+`;
+  };
+
+  it("pushes a workflow with 40 refs and keeps every one", async () => {
+    const { ana } = await world();
+    await pushed("acme", "many", { token: ana.token }, manyLists(40), "private");
+    const [{ refs }] = await (await getDb()).select({ refs: count() }).from(workflowRef);
+    expect(refs).toBe(40);
+    await pushed("acme", "list-40", { token: ana.token }, shopping(), "public");
+    const api = await (await request("GET", "/api/v1/acme/list-40", { as: { token: ana.token } })).json();
+    expect(api.referredBy).toEqual([{ owner: "acme", slug: "many", title: "Many lists", visibility: "private", parts: ["list"] }]);
+  });
+
+  it("leaves no version behind when its refs can't all be written", async () => {
+    const { ana } = await world();
+    await pushed("acme", "many", { token: ana.token }, manyLists(1), "private");
+    const db = await getDb();
+    const insert = db.insert.bind(db);
+    const refused = vi.spyOn(db, "insert").mockImplementation(((table: Parameters<typeof insert>[0]) => {
+      if (table === workflowRef) throw new Error("D1 refused it");
+      return insert(table);
+    }) as typeof db.insert);
+    await expect(push("acme", "many", { token: ana.token }, manyLists(2), "private")).rejects.toThrow("D1 refused it");
+    refused.mockRestore();
+    const api = await (await request("GET", "/api/v1/acme/many", { as: { token: ana.token } })).json();
+    expect(api.versions.map((v: { number: number }) => v.number)).toEqual([1]);
+    const [{ refs }] = await db.select({ refs: count() }).from(workflowRef);
+    expect(refs).toBe(1);
+    expect((await pushed("acme", "many", { token: ana.token }, manyLists(2), "private")).number).toBe(2);
   });
 });

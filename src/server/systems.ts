@@ -11,6 +11,7 @@
 // are.
 import { and, desc, eq, inArray, max, or, sql } from "drizzle-orm";
 import type { Db } from "@/db/client";
+import { insertRows } from "@/db/rows";
 import { membership, system, systemMember, systemVersion, user, version, workflow } from "@/db/schema";
 import type { Files } from "@/engine";
 import { record } from "./audit";
@@ -41,10 +42,12 @@ async function findSystem(db: Db, owner: Owner, slug: string) {
 
 const MEMBER = /^([^/\s]+)\/([^/\s]+)$/;
 
+type Held = { id: string; owner: Owner; slug: string };
+
 // A workflow a system of the holder may have as a member, by its owner and
 // slug, or null: one the holder may see and the pusher may see too. A private
 // workflow outside either is the same as one that doesn't exist.
-async function heldWorkflow(db: Db, viewer: Viewer, holder: Owner, ownerSlug: string, slug: string) {
+async function heldWorkflow(db: Db, viewer: Viewer, holder: Owner, ownerSlug: string, slug: string): Promise<Held | null> {
   const owner = await findOwner(db, ownerSlug);
   if (!owner) return null;
   const [w] = await db
@@ -58,9 +61,11 @@ async function heldWorkflow(db: Db, viewer: Viewer, holder: Owner, ownerSlug: st
     )
     .limit(1);
   if (!w) return null;
+  // A backstop that never decides alone: only the holder or its members push,
+  // and each of them may see every workflow the next check lets the holder hold.
   if (w.visibility === "private" && !(await isOwnerOrMember(db, owner, viewer?.id))) return null;
   if (!(await ownerMaySee(db, holder, owner, w.visibility))) return null;
-  return { id: w.id, owner: owner.slug, slug };
+  return { id: w.id, owner, slug };
 }
 
 // The refusal of a member, the same whether the system's owner may not hold
@@ -78,12 +83,12 @@ async function membersOf(
   viewer: Viewer,
   holder: Owner,
   members: unknown,
-): Promise<Result<{ found: { id: string; owner: string; slug: string }[] }>> {
+): Promise<Result<{ found: Held[] }>> {
   if (!Array.isArray(members) || members.length === 0)
     return refuse(422, "members: name at least one workflow, as owner/slug.");
   const errors: string[] = [];
   const named = new Set<string>();
-  const found: { id: string; owner: string; slug: string }[] = [];
+  const found: Held[] = [];
   for (const m of members) {
     const match = typeof m === "string" ? MEMBER.exec(m) : null;
     if (!match) {
@@ -114,9 +119,9 @@ export async function pushSystemVersion(
   if (!viewer) return refuse(401, SIGN_IN_TO_PUSH);
   const owner = await findOwner(db, ownerSlug);
   if (!owner) return refuse(404, "Not found.");
-  const existing = await findSystem(db, owner, slug);
-  const allowed = await mayPushTo(db, viewer, owner, existing);
+  const allowed = await mayPushTo(db, viewer, owner);
   if (!allowed.ok) return allowed;
+  const existing = await findSystem(db, owner, slug);
 
   const slugProblem = systemSlugProblem(slug);
   if (slugProblem) return refuse(422, slugProblem);
@@ -165,9 +170,26 @@ export async function pushSystemVersion(
       .onConflictDoNothing()
       .returning({ id: systemVersion.id });
     if (inserted.length) {
-      await db.insert(systemMember).values(
-        members.found.map((m, position) => ({ versionId: inserted[0].id, position, workflowId: m.id, owner: m.owner, slug: m.slug })),
-      );
+      // A version is never left without its members: if they can't all be
+      // written, the version goes too, and the members written with it.
+      try {
+        await insertRows(
+          db,
+          systemMember,
+          members.found.map((m, position) => ({
+            versionId: inserted[0].id,
+            position,
+            workflowId: m.id,
+            owner: m.owner.slug,
+            slug: m.slug,
+            ownerUserId: m.owner.type === "user" ? m.owner.id : null,
+            ownerOrganisationId: m.owner.type === "organisation" ? m.owner.id : null,
+          })),
+        );
+      } catch (e) {
+        await db.delete(systemVersion).where(eq(systemVersion.id, inserted[0].id));
+        throw e;
+      }
       break;
     }
     if (attempt === 4) throw new Error("could not number the version");
@@ -190,8 +212,8 @@ async function versionList(db: Db, systemId: string) {
 }
 
 // A member as the viewer may know it: a workflow they may see, with its
-// latest version's files; or one deleted, to those who may see into the
-// owner it was pushed as. Every other member is only counted.
+// latest version's files; or one deleted, to the account that owned it when
+// it was pushed, or its members. Every other member is only counted.
 export type SeenMember =
   | {
       state: "found";
@@ -210,44 +232,47 @@ const workflowOwnerSql = sql<string>`coalesce(
   (select slug from organisation where organisation.id = ${workflow.ownerOrganisationId})
 )`;
 
+// An owner by its account, user or organisation, as a row holds it.
+const ownerOf = (row: { ownerUserId: string | null; ownerOrganisationId: string | null }, slug: string): Owner =>
+  row.ownerUserId
+    ? { type: "user", id: row.ownerUserId, slug, name: "" }
+    : { type: "organisation", id: row.ownerOrganisationId!, slug, name: "" };
+
 // Each member of a system's version the viewer may see, in the order pushed,
 // and how many they may not. A member made private since it was added is
 // hidden as any private member is.
 async function membersAsSeen(db: Db, viewer: Viewer, versionId: string) {
   const rows = await db
-    .select()
+    .select({
+      owner: systemMember.owner,
+      slug: systemMember.slug,
+      ownerUserId: systemMember.ownerUserId,
+      ownerOrganisationId: systemMember.ownerOrganisationId,
+      // The workflow as it is now; its id is null when it has been deleted.
+      workflow: {
+        id: workflow.id,
+        owner: workflowOwnerSql,
+        ownerUserId: workflow.ownerUserId,
+        ownerOrganisationId: workflow.ownerOrganisationId,
+        slug: workflow.slug,
+        title: workflow.title,
+        visibility: workflow.visibility,
+      },
+    })
     .from(systemMember)
+    .leftJoin(workflow, eq(workflow.id, systemMember.workflowId))
     .where(eq(systemMember.versionId, versionId))
     .orderBy(systemMember.position);
-  const ids = rows.map((r) => r.workflowId);
-  const workflows = ids.length
-    ? await db
-        .select({
-          id: workflow.id,
-          owner: workflowOwnerSql,
-          ownerUserId: workflow.ownerUserId,
-          ownerOrganisationId: workflow.ownerOrganisationId,
-          slug: workflow.slug,
-          title: workflow.title,
-          visibility: workflow.visibility,
-        })
-        .from(workflow)
-        .where(inArray(workflow.id, ids))
-    : [];
-  const byId = new Map(workflows.map((w) => [w.id, w]));
   const shown: SeenMember[] = [];
   let hidden = 0;
   for (const r of rows) {
-    const w = byId.get(r.workflowId);
-    if (!w) {
-      const was = await findOwner(db, r.owner);
-      if (was && (await isOwnerOrMember(db, was, viewer?.id))) shown.push({ state: "missing", owner: r.owner, slug: r.slug });
+    const w = r.workflow;
+    if (!w?.id) {
+      if (await isOwnerOrMember(db, ownerOf(r, r.owner), viewer?.id)) shown.push({ state: "missing", owner: r.owner, slug: r.slug });
       else hidden++;
       continue;
     }
-    const owner: Owner = w.ownerUserId
-      ? { type: "user", id: w.ownerUserId, slug: w.owner, name: "" }
-      : { type: "organisation", id: w.ownerOrganisationId!, slug: w.owner, name: "" };
+    const owner = ownerOf(w, w.owner);
     if (w.visibility === "private" && !(await isOwnerOrMember(db, owner, viewer?.id))) {
       hidden++;
       continue;
@@ -258,19 +283,21 @@ async function membersAsSeen(db: Db, viewer: Viewer, versionId: string) {
       .where(eq(version.workflowId, w.id))
       .orderBy(desc(version.number))
       .limit(1);
+    const number = latest?.number ?? 0;
     const files: Files = {};
     if (latest?.workflow != null) files.workflow = latest.workflow;
     if (latest?.security != null) files.security = latest.security;
     if (latest?.platform != null) files.platform = latest.platform;
+    // Recorded as opening the workflow at that version is.
     if (w.visibility === "private" && owner.type === "organisation" && viewer)
-      await record(db, owner.id, viewer.id, "private_view", `${w.owner}/${w.slug}`);
+      await record(db, owner.id, viewer.id, "private_view", `${w.owner}/${w.slug} v${number}`);
     shown.push({
       state: "found",
       owner: w.owner,
       slug: w.slug,
       title: w.title,
       visibility: w.visibility,
-      number: latest?.number ?? 0,
+      number,
       files,
       awml: awmlOf(files.workflow ?? files.security ?? files.platform ?? null),
     });
@@ -336,14 +363,17 @@ const isLatest = sql`${systemVersion.number} = (select max(v2.number) from syste
 
 // The systems the viewer may see, as a condition on the system table: the
 // public ones, and the private ones of the viewer and their organisations.
-async function seenBy(db: Db, viewer: Viewer) {
-  const theirs = viewer
-    ? (await db.select({ id: membership.organisationId }).from(membership).where(eq(membership.userId, viewer.id))).map((m) => m.id)
-    : [];
+// Their organisations are asked for in the same statement, however many.
+function seenBy(db: Db, viewer: Viewer) {
   return or(
     eq(system.visibility, "public"),
     viewer ? eq(system.ownerUserId, viewer.id) : undefined,
-    theirs.length ? inArray(system.ownerOrganisationId, theirs) : undefined,
+    viewer
+      ? inArray(
+          system.ownerOrganisationId,
+          db.select({ id: membership.organisationId }).from(membership).where(eq(membership.userId, viewer.id)),
+        )
+      : undefined,
   );
 }
 
@@ -358,7 +388,7 @@ export async function systemsOf(db: Db, viewer: Viewer, workflowId: string): Pro
     .from(systemMember)
     .innerJoin(systemVersion, and(eq(systemVersion.id, systemMember.versionId), isLatest))
     .innerJoin(system, eq(system.id, systemVersion.systemId))
-    .where(and(eq(systemMember.workflowId, workflowId), await seenBy(db, viewer)));
+    .where(and(eq(systemMember.workflowId, workflowId), seenBy(db, viewer)));
   return rows.sort((a, b) => `${a.owner}/${a.slug}`.localeCompare(`${b.owner}/${b.slug}`));
 }
 

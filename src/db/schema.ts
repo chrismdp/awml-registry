@@ -435,7 +435,8 @@ export const systemVersion = sqliteTable(
 // the workflow's latest version, so it records no version. The workflow is
 // held by its id, so a rename of its owner is followed, and not as a foreign
 // key, so a deleted one is still known to have been there; its owner and slug
-// as pushed say what it was.
+// as pushed say what it was, and its owner's account, user or organisation,
+// who may still be told it is missing, whatever names change hands after.
 export const systemMember = sqliteTable(
   "system_member",
   {
@@ -447,10 +448,13 @@ export const systemMember = sqliteTable(
     workflowId: text("workflow_id").notNull(),
     owner: text("owner").notNull(),
     slug: text("slug").notNull(),
+    ownerUserId: text("owner_user_id"),
+    ownerOrganisationId: text("owner_organisation_id"),
   },
   (t) => [
     index("system_member_version_idx").on(t.versionId),
     index("system_member_workflow_idx").on(t.workflowId),
+    check("system_member_one_owner", sql`(${t.ownerUserId} IS NULL) <> (${t.ownerOrganisationId} IS NULL)`),
   ],
 );
 

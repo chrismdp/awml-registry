@@ -68,9 +68,9 @@ export async function pushPlatformVersion(
   if (!viewer) return refuse(401, SIGN_IN_TO_PUSH);
   const owner = await findOwner(db, ownerSlug);
   if (!owner) return refuse(404, "Not found.");
-  const existing = await findPlatform(db, owner, slug);
-  const allowed = await mayPushTo(db, viewer, owner, existing);
+  const allowed = await mayPushTo(db, viewer, owner);
   if (!allowed.ok) return allowed;
+  const existing = await findPlatform(db, owner, slug);
 
   const slugProblem = platformSlugProblem(slug);
   if (slugProblem) return refuse(422, slugProblem);

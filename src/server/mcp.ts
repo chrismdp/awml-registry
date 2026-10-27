@@ -18,7 +18,7 @@ import { mcpUrl, ownUrl } from "./http";
 import { fitWorkflow, type Fit } from "./fit";
 import { organisationsOf } from "./organisations";
 import { pushPlatformVersion, readPlatformVersion, searchPlatforms } from "./platforms";
-import { checkWorkflow, explore, forkWorkflow, ownerPage, pushVersion, readVersion } from "./registry";
+import { checkWorkflow, explore, forkWorkflow, ownerWorkflows, pushVersion, readVersion } from "./registry";
 import { pushSystemVersion } from "./systems";
 import { userIdForSecret } from "./tokens";
 import { renamedTo, savedNotice, setUsername } from "./usernames";
@@ -331,7 +331,7 @@ function server(person: Person) {
         : [person.username, ...(await organisationsOf(db, person.id)).map((o) => o.slug)];
       const rows: Listed[] = [];
       for (const o of owners) {
-        const found = await ownerPage(db, person, o);
+        const found = await ownerWorkflows(db, person, o);
         if (!found) return NOT_FOUND;
         rows.push(...found.workflows.map((w) => ({ owner: found.owner.slug, ...w })));
       }

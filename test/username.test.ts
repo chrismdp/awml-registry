@@ -659,9 +659,14 @@ describe("old names on /mcp", () => {
       expect((await call("fit_workflow", { workflow: "olive/plans" }, bearer)).text).toBe("Not found: olive/plans.");
       const named = await call("fit_workflow", { file: dinners, platforms: ["olive/vault"] }, bearer);
       expect([named.isError, named.text]).toEqual([true, "Not found: olive/vault."]);
-      expect((await call("publish", { owner: "olive", slug: "plans", workflow: dinners }, bearer)).text).toBe("Not found.");
-      expect((await call("add_platform", { owner: "olive", slug: "vault", description: worker }, bearer)).text).toBe(
-        "Not found.",
+      // A push is answered as one to a missing workflow or platform: the 403
+      // of an organisation they don't belong to.
+      const refused = "Only members of olive can push here.";
+      expect((await call("publish", { owner: "olive", slug: "plans", workflow: dinners }, bearer)).text).toBe(refused);
+      expect((await call("publish", { owner: "olive", slug: "nothing-here", workflow: dinners }, bearer)).text).toBe(refused);
+      expect((await call("add_platform", { owner: "olive", slug: "vault", description: worker }, bearer)).text).toBe(refused);
+      expect((await call("add_platform", { owner: "olive", slug: "nothing-here", description: worker }, bearer)).text).toBe(
+        refused,
       );
     }
     // Olive's own workflow is under her current name, as ever.

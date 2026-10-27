@@ -7,7 +7,7 @@ import { getDb } from "@/db/client";
 import { auditEvent } from "@/db/schema";
 import { listTokens, revokeToken } from "@/server/tokens";
 import ConsentPage from "@/app/consent/page";
-import { BASE, example, orgWith, person, request } from "./helpers";
+import { BASE, example, orgWith, person, request, statements } from "./helpers";
 import { call, CIMD_CLIENT, connect, MCP, message, post, serveMetadata } from "./mcp-client";
 import { renderPage } from "./pages";
 import { route } from "./router";
@@ -168,6 +168,15 @@ describe("the MCP server at /mcp", () => {
     expect(await call("list", { owner: "nobody-here" }, mo.token)).toMatchObject({ isError: true, text: "Not found." });
   });
 
+  it("lists without asking anything of the owners' systems, which it doesn't give", async () => {
+    const { mo } = await twoOrgs();
+    statements.length = 0;
+    expect((await call("list", { owner: "acme" }, mo.token)).data.workflows).toHaveLength(1);
+    expect((await call("list", {}, mo.token)).data.workflows).toHaveLength(1);
+    expect(statements.some((s) => s.includes('from "workflow"'))).toBe(true);
+    expect(statements.filter((s) => s.includes('from "system"'))).toEqual([]);
+  });
+
   it("searches the public gallery by title", async () => {
     const { bea } = await twoOrgs();
     await publish(bea.token, {
@@ -289,7 +298,9 @@ describe("Positive boundary", () => {
     expect(own.data.workflows).toEqual([expect.objectContaining({ owner: nell.username, slug: "diary", visibility: "private" })]);
     expect((await call("get", { owner: nell.username, slug: "diary" }, mo.token)).text).toBe("Not found.");
     expect((await call("list", { owner: nell.username }, mo.token)).data.workflows).toEqual([]);
-    expect((await publish(mo.token, { owner: nell.username, slug: "diary", workflow })).text).toBe("Not found.");
+    const toPrivate = await publish(mo.token, { owner: nell.username, slug: "diary", workflow });
+    expect([toPrivate.isError, toPrivate.text]).toEqual([true, `Only ${nell.username} can push here.`]);
+    expect((await publish(mo.token, { owner: nell.username, slug: "nothing-here", workflow })).text).toBe(toPrivate.text);
     expect(await audit("push", nell.id)).toEqual([]);
   });
 });
@@ -331,8 +342,11 @@ describe("Negative boundary", () => {
     expect((await call("list", { owner: "acme" }, nell.token)).data.workflows).toEqual([]);
     const searched = await call("search", { query: "dinners" }, nell.token);
     expect(searched.data.workflows.map((w: { slug: string }) => w.slug)).not.toContain("payroll");
+    // A push is answered as for a missing workflow, by who may push there.
     const pushed = await publish(nell.token, { owner: "acme", slug: "payroll", workflow });
-    expect([pushed.isError, pushed.text]).toEqual([true, "Not found."]);
+    expect([pushed.isError, pushed.text]).toEqual([true, "Only members of acme can push here."]);
+    const toMissing = await publish(nell.token, { owner: "acme", slug: "nothing-here", workflow });
+    expect([toMissing.isError, toMissing.text]).toEqual([pushed.isError, pushed.text]);
     const versions = await call("get", { owner: "acme", slug: "payroll" }, olive.token);
     expect(versions.data.versions).toEqual([1]);
   });
@@ -348,7 +362,7 @@ describe("Cross-tenant boundary", () => {
       ]);
       expect((await call("list", {}, bearer)).data.workflows.map((w: { owner: string }) => w.owner)).not.toContain("beta");
       expect((await call("get", { owner: "beta", slug: "secret-plans" }, bearer)).text).toBe("Not found.");
-      expect((await publish(bearer, { owner: "beta", slug: "secret-plans", workflow })).text).toBe("Not found.");
+      expect((await publish(bearer, { owner: "beta", slug: "secret-plans", workflow })).text).toBe("Only members of beta can push here.");
       const intoPublic = await publish(bearer, { owner: "beta", slug: "open-plans", workflow });
       expect([intoPublic.isError, intoPublic.text]).toEqual([true, "Only members of beta can push here."]);
       expect((await publish(bearer, { owner: "beta", slug: "brand-new", workflow })).isError).toBe(true);
@@ -514,7 +528,9 @@ describe("platforms through /mcp", () => {
     const missing = await call("get_platform", { owner: "acme", slug: "nothing-here" }, nell.token);
     expect([hidden.isError, hidden.text]).toEqual([missing.isError, missing.text]);
     expect((await call("search_platforms", {}, nell.token)).data.platforms.map((p: { slug: string }) => p.slug)).toEqual(["open-box"]);
-    expect((await call("add_platform", { owner: "acme", slug: "back-office", description: worker }, nell.token)).text).toBe("Not found.");
+    expect((await call("add_platform", { owner: "acme", slug: "back-office", description: worker }, nell.token)).text).toBe(
+      "Only members of acme can push here.",
+    );
     const named = await call("fit_workflow", { file: clientEmail, platforms: ["acme/back-office"] }, nell.token);
     expect([named.isError, named.text]).toEqual([true, "Not found: acme/back-office."]);
     const all = await call("fit_workflow", { file: clientEmail }, nell.token);
@@ -529,7 +545,9 @@ describe("platforms through /mcp", () => {
       const searched = await call("search_platforms", { query: "vault" }, bearer);
       expect([searched.data.platforms, searched.text]).toEqual([[], "No platforms."]);
       expect((await call("get_platform", { owner: "beta", slug: "vault" }, bearer)).text).toBe("Not found.");
-      expect((await call("add_platform", { owner: "beta", slug: "vault", description: worker }, bearer)).text).toBe("Not found.");
+      expect((await call("add_platform", { owner: "beta", slug: "vault", description: worker }, bearer)).text).toBe(
+        "Only members of beta can push here.",
+      );
       const intoPublic = await call("add_platform", { owner: "beta", slug: "open-box", description: worker }, bearer);
       expect([intoPublic.isError, intoPublic.text]).toEqual([true, "Only members of beta can push here."]);
       const fitted = await call("fit_workflow", { file: clientEmail }, bearer);

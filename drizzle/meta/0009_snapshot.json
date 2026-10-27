@@ -1890,7 +1890,9 @@
         "position": { "name": "position", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false },
         "workflow_id": { "name": "workflow_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
         "owner": { "name": "owner", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
-        "slug": { "name": "slug", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false }
+        "slug": { "name": "slug", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "owner_user_id": { "name": "owner_user_id", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "owner_organisation_id": { "name": "owner_organisation_id", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false }
       },
       "indexes": {
         "system_member_version_idx": { "name": "system_member_version_idx", "columns": ["version_id"], "isUnique": false },
@@ -1909,7 +1911,12 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "checkConstraints": {
+        "system_member_one_owner": {
+          "name": "system_member_one_owner",
+          "value": "(\"system_member\".\"owner_user_id\" IS NULL) <> (\"system_member\".\"owner_organisation_id\" IS NULL)"
+        }
+      }
     },
     "system_version": {
       "name": "system_version",

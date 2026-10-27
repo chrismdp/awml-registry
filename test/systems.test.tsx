@@ -4,11 +4,13 @@
 // latest version. Its page draws the map of the members the viewer may see,
 // checks them together, says who waits and where they run, and leaves out
 // every member the viewer may not see, saying only how many there are.
-import { describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { describe, expect, it, vi } from "vitest";
+import { and, eq, like } from "drizzle-orm";
 import { getDb } from "@/db/client";
-import { auditEvent, workflow as workflowTable } from "@/db/schema";
-import { addMember } from "@/server/organisations";
+import { auditEvent, systemMember, workflow as workflowTable } from "@/db/schema";
+import { engine } from "@/engine";
+import { addMember, createOrganisation, removeMember } from "@/server/organisations";
+import { readSystemVersion } from "@/server/systems";
 import { listTokens, revokeToken } from "@/server/tokens";
 import SystemPage from "@/app/[owner]/systems/[slug]/page";
 import SystemChecksPage from "@/app/[owner]/systems/[slug]/checks/page";
@@ -217,10 +219,56 @@ describe("pushing a system", () => {
     expect((await pushSystem("acme", "kitchen", { token: nell.token }, members)).status).toBe(403);
     expect((await pushSystem("acme", "kitchen", undefined, members)).status).toBe(401);
     expect((await pushSystem("ana", "kitchen", { token: bea.token }, kitchen(["beta/bakes"]))).status).toBe(403);
-    // A private system answers a stranger's push as a missing one would.
+  });
+
+  it("answers a stranger's push to a private system exactly as to a missing one, so it never says one is there", async () => {
+    const { ana, bea, nell } = await world();
+    const members = kitchen(["acme/shopping"]);
     await pushedSystem("acme", "private", { token: ana.token }, kitchen(["acme/shopping"], { visibility: "private" }));
-    const toPrivate = await pushSystem("acme", "private", { token: nell.token }, members);
-    expect(toPrivate).toEqual({ status: 404, body: { errors: ["Not found."] } });
+    await pushedSystem("ana", "private", { token: ana.token }, kitchen(["acme/shopping"], { visibility: "private" }));
+    for (const who of [nell, bea]) {
+      const toPrivate = await pushSystem("acme", "private", { token: who.token }, members);
+      expect(toPrivate).toEqual({ status: 403, body: { errors: ["Only members of acme can push here."] } });
+      expect(await pushSystem("acme", "missing", { token: who.token }, members)).toEqual(toPrivate);
+      const toPersons = await pushSystem("ana", "private", { token: who.token }, members);
+      expect(toPersons).toEqual({ status: 403, body: { errors: ["Only ana can push here."] } });
+      expect(await pushSystem("ana", "missing", { token: who.token }, members)).toEqual(toPersons);
+    }
+    expect((await tab("acme", "private", "map", ana)).html).toContain("Version 1 of 1");
+  });
+
+  it("refuses a later push that changes the system's visibility, either way", async () => {
+    const { ana } = await world();
+    const as = { token: ana.token };
+    await pushedSystem("acme", "kitchen", as, kitchen(["acme/shopping"]));
+    await pushedSystem("acme", "larder", as, kitchen(["acme/shopping"], { visibility: "private" }));
+    expect(await pushSystem("acme", "kitchen", as, kitchen(["acme/shopping"], { visibility: "private" }))).toEqual({
+      status: 422,
+      body: { errors: ["This system is public. Its first push set that, and a later push cannot change it."] },
+    });
+    expect(await pushSystem("acme", "larder", as, kitchen(["acme/shopping"], { visibility: "public" }))).toEqual({
+      status: 422,
+      body: { errors: ["This system is private. Its first push set that, and a later push cannot change it."] },
+    });
+    expect((await tab("acme", "kitchen", "map")).html).toContain("System · Public · ");
+    expect((await tab("acme", "larder", "map")).status).toBe(404);
+    // A push that says the visibility it already has is taken.
+    expect((await pushedSystem("acme", "larder", as, kitchen(["acme/shopping"], { visibility: "private" }))).number).toBe(2);
+  });
+
+  it("records a push to an organisation's system in its audit log, and nothing for a person's", async () => {
+    const { ana, mo } = await world();
+    await pushedSystem("acme", "kitchen", { token: mo.token }, kitchen(["acme/shopping"]));
+    await pushedSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "acme/dinners"]));
+    await pushedSystem("ana", "home", { token: ana.token }, kitchen(["acme/shopping"]));
+    const pushes = await (await getDb())
+      .select({ actor: auditEvent.actorId, target: auditEvent.target })
+      .from(auditEvent)
+      .where(and(eq(auditEvent.action, "push"), like(auditEvent.target, "%/systems/%")));
+    expect(pushes).toEqual([
+      { actor: mo.id, target: "acme/systems/kitchen v1" },
+      { actor: ana.id, target: "acme/systems/kitchen v2" },
+    ]);
   });
 
   it("lets an organisation's member push as its owner does, and see its private members", async () => {
@@ -426,6 +474,55 @@ lines:
     expect(map.html).not.toContain("Bakes");
   });
 
+  it("shows another organisation's member and a visitor an organisation's public system holding its own private workflow as 1 private workflow, and nothing of it on any tab", async () => {
+    const { ana, bea } = await world();
+    await pushWorkflow("acme", "pantry", { token: ana.token }, workflow("Pantry", "Pantry"), "private");
+    await pushedSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "acme/pantry"]));
+    for (const who of [bea, undefined]) {
+      for (const page of await everyTab("acme", "kitchen", who)) {
+        expect(page.status).toBe(200);
+        expect(page.html).toContain("1 private workflow");
+        expect(page.html).toContain("shown incomplete");
+        expect(page.html).toContain('href="/acme/shopping"');
+        expect(page.html).not.toMatch(/pantry/i);
+      }
+    }
+    for (const page of await everyTab("acme", "kitchen", ana)) {
+      expect(page.html).toContain('href="/acme/pantry"');
+      expect(page.html).not.toContain("private workflow");
+    }
+  });
+
+  it("hides an organisation's private workflow on a person's public system from that person once they leave it", async () => {
+    const { ana, mo } = await world();
+    await pushedSystem(mo.username, "home", { token: mo.token }, kitchen(["acme/shopping", "acme/dinners"]));
+    expect((await tab(mo.username, "home", "map", mo)).html).toContain('href="/acme/dinners"');
+    const left = await removeMember(await getDb(), mo.id, "acme", mo.id);
+    expect(left.ok).toBe(true);
+    for (const page of await everyTab(mo.username, "home", mo)) {
+      expect(page.status).toBe(200);
+      expect(page.html).toContain("1 private workflow");
+      expect(page.html).toContain('href="/acme/shopping"');
+      expect(page.html).not.toMatch(/dinners/i);
+    }
+    expect((await tab(mo.username, "home", "map", ana)).html).toContain('href="/acme/dinners"');
+  });
+
+  it("checks another owner's public member on the Checks tab, listed read-only with the system's own", async () => {
+    const { ana } = await world();
+    await pushedSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "beta/bakes"]));
+    for (const who of [ana, undefined]) {
+      const checks = await tab("acme", "kitchen", "checks", who);
+      expect(checks.html).toContain('href="/beta/bakes"');
+      expect(checks.html).toContain(" · beta/bakes");
+      expect(checks.html).not.toContain(" · beta/bakes · not drawn");
+      const bakes = /<h2>beta\/bakes\.yaml<\/h2>[\s\S]*?<\/section>/.exec(checks.html)?.[0] ?? "";
+      expect(bakes).toContain("data-check=");
+      expect(bakes).toContain("Passed");
+      expect(bakes).not.toContain("badge bad");
+    }
+  });
+
   it("shows a deleted member to its owner as missing, and to anyone else as a private workflow", async () => {
     const { ana, bea, nell } = await world();
     await pushedSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "beta/bakes"]));
@@ -437,6 +534,22 @@ lines:
     const toNell = await tab("acme", "kitchen", "map", nell);
     expect(toNell.html).toContain("1 private workflow");
     expect(toNell.html).not.toContain("beta/bakes");
+  });
+
+  it("knows a deleted member's owner by account, so whoever takes its owner's name after never sees it", async () => {
+    const { ana, nell } = await world();
+    await pushedSystem("ana", "home", { token: ana.token }, kitchen(["acme/shopping", "ana/notes"]));
+    const rename = (who: { token: string }, username: string) =>
+      request("PATCH", "/api/v1/me", { as: { token: who.token }, json: { username } });
+    expect((await rename(ana, "ana-cooks")).status).toBe(200);
+    expect((await rename(nell, "ana")).status).toBe(200);
+    await (await getDb()).delete(workflowTable).where(eq(workflowTable.slug, "notes"));
+    const toAna = await tab("ana-cooks", "home", "map", ana);
+    expect(toAna.html).toContain("ana/notes");
+    expect(toAna.html).toContain("missing");
+    const toNell = await tab("ana-cooks", "home", "map", nell);
+    expect(toNell.html).toContain("1 private workflow");
+    expect(toNell.html).not.toMatch(/notes/i);
   });
 
   it("sends each tab under a name its person gave up to the same tab under their new one", async () => {
@@ -465,14 +578,15 @@ lines:
     expect(events).toHaveLength(1);
   });
 
-  it("records in an organisation's audit log that a member saw its private workflow on a system, and nothing for a stranger", async () => {
+  it("records in an organisation's audit log that a member saw its private workflow on a system, at its latest version, and nothing for a stranger", async () => {
     const { ana, mo, nell } = await world();
+    await pushWorkflow("acme", "dinners", { token: ana.token }, workflow("Dinners", "Suppers"), "private");
     await pushedSystem("ana", "home", { token: ana.token }, kitchen(["acme/shopping", "acme/dinners"]));
     const views = async () =>
       (await getDb())
         .select({ actor: auditEvent.actorId })
         .from(auditEvent)
-        .where(and(eq(auditEvent.action, "private_view"), eq(auditEvent.target, "acme/dinners")));
+        .where(and(eq(auditEvent.action, "private_view"), eq(auditEvent.target, "acme/dinners v2")));
     await tab("ana", "home", "map", nell);
     expect(await views()).toEqual([]);
     await tab("ana", "home", "map", mo);
@@ -529,6 +643,20 @@ describe("finding systems", () => {
     }
   });
 
+  it("finds a public system by its title in the gallery's search, and never a private one", async () => {
+    const { ana } = await world();
+    const as = { token: ana.token };
+    await pushedSystem("acme", "kitchen", as, kitchen(["acme/shopping"]));
+    await pushedSystem("acme", "larder", as, { ...kitchen(["acme/shopping"]), title: "Kitchen larder", visibility: "private" });
+    await pushedSystem("acme", "bakery", as, { ...kitchen(["acme/shopping"]), title: "Bakery" });
+    for (const who of [ana, undefined]) {
+      const page = await renderPage(GalleryPage, {}, { as: asCookie(who), search: { q: "kitchen" } });
+      expect(page.html).toContain('href="/acme/systems/kitchen"');
+      expect(page.html).not.toMatch(/larder/i);
+      expect(page.html).not.toContain("/acme/systems/bakery");
+    }
+  });
+
   it("lists public systems in the gallery's own section, and never a private one", async () => {
     const { ana } = await world();
     await pushedSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping"]));
@@ -539,5 +667,62 @@ describe("finding systems", () => {
       expect(page.html).toContain('href="/acme/systems/kitchen"');
       expect(page.html).not.toContain("Larder");
     }
+  });
+});
+
+// D1, where the hosted registry keeps its data, binds at most 100 values in a
+// statement; the tests refuse any statement that binds more (test/setup.ts).
+describe("a big system, within D1's limit on bound values", () => {
+  // n public workflows of acme, acme/many-1 to acme/many-n, written straight
+  // to the database, as pushing each would take long.
+  async function manyWorkflows(n: number, by: { id: string }) {
+    const summary = await engine.summarise({ workflow: workflow("Many", "Many") });
+    const names = [];
+    for (let i = 1; i <= n; i++) {
+      await storeVersion("acme", `many-${i}`, by, { workflow: workflow(`Many ${i}`, `Many ${i}`) }, { summary });
+      names.push(`acme/many-${i}`);
+    }
+    return names;
+  }
+
+  it("pushes a system of 101 workflows and reads every one back, in the order pushed", async () => {
+    const { ana } = await world();
+    const members = await manyWorkflows(101, ana);
+    await pushedSystem("acme", "big", { token: ana.token }, kitchen(members));
+    const read = (await readSystemVersion(await getDb(), null, "acme", "big", "latest"))!;
+    expect(read.members.map((m) => `${m.owner}/${m.slug}`)).toEqual(members);
+    expect(read.hidden).toBe(0);
+  });
+
+  it("leaves no version behind when its members can't all be written", async () => {
+    const { ana } = await world();
+    await pushedSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping"]));
+    const db = await getDb();
+    const insert = db.insert.bind(db);
+    const refused = vi.spyOn(db, "insert").mockImplementation(((table: Parameters<typeof insert>[0]) => {
+      if (table === systemMember) throw new Error("D1 refused it");
+      return insert(table);
+    }) as typeof db.insert);
+    await expect(pushSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping", "beta/bakes"]))).rejects.toThrow(
+      "D1 refused it",
+    );
+    refused.mockRestore();
+    const map = await tab("acme", "kitchen", "map");
+    expect(map.html).toContain("Version 1 of 1");
+    expect(map.html).not.toContain("beta/bakes");
+    expect((await pushedSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping"]))).number).toBe(2);
+  });
+
+  it("shows a person in 101 organisations a workflow's systems, referrers and forks", async () => {
+    const { ana } = await world();
+    const db = await getDb();
+    for (let i = 1; i <= 101; i++) {
+      const made = await createOrganisation(db, ana.id, { slug: `club-${i}`, name: `Club ${i}` });
+      expect(made.ok).toBe(true);
+    }
+    await pushedSystem("acme", "kitchen", { token: ana.token }, kitchen(["acme/shopping"]));
+    const page = await renderPage(WorkflowPage, { owner: "acme", slug: "shopping" }, { as: asCookie(ana) });
+    expect(page.status).toBe(200);
+    expect(page.html).toMatch(/In <a href="\/acme\/systems\/kitchen">Kitchen<\/a>/);
   });
 });

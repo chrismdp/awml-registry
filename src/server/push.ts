@@ -14,15 +14,10 @@ export type Kind = "workflow" | "platform" | "system";
 export const SIGN_IN_TO_PUSH = "Sign in, or send a token as Authorization: Bearer <token>.";
 
 // Only the user, or an organisation's members, may push to its items. Anyone
-// else pushing to a private item gets the 404 a missing one gives.
-export async function mayPushTo(
-  db: Db,
-  viewer: NonNullable<Viewer>,
-  owner: Owner,
-  existing: { visibility: Visibility } | null,
-): Promise<Result<{}>> {
+// else gets the same 403 whatever is at the slug, a private item, a public one
+// or nothing, so a push never tells them a private item is there.
+export async function mayPushTo(db: Db, viewer: NonNullable<Viewer>, owner: Owner): Promise<Result<{}>> {
   if (await isOwnerOrMember(db, owner, viewer.id)) return { ok: true };
-  if (existing?.visibility === "private") return refuse(404, "Not found.");
   return refuse(403, `Only ${owner.type === "user" ? owner.slug : `members of ${owner.slug}`} can push here.`);
 }
 

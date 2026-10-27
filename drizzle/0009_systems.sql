@@ -38,7 +38,10 @@ CREATE TABLE `system_member` (
 	`workflow_id` text NOT NULL,
 	`owner` text NOT NULL,
 	`slug` text NOT NULL,
-	FOREIGN KEY (`version_id`) REFERENCES `system_version`(`id`) ON UPDATE no action ON DELETE cascade
+	`owner_user_id` text,
+	`owner_organisation_id` text,
+	FOREIGN KEY (`version_id`) REFERENCES `system_version`(`id`) ON UPDATE no action ON DELETE cascade,
+	CONSTRAINT "system_member_one_owner" CHECK(("system_member"."owner_user_id" IS NULL) <> ("system_member"."owner_organisation_id" IS NULL))
 );
 --> statement-breakpoint
 CREATE INDEX `system_member_version_idx` ON `system_member` (`version_id`);--> statement-breakpoint
