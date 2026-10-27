@@ -104,7 +104,13 @@ describe("the MCP server at /mcp", () => {
     const ana = await person("ana");
     const first = await publish(ana.token, { owner: ana.username, slug: "dinners", workflow });
     expect(first.isError).toBe(false);
-    expect(first.data).toEqual({ owner: ana.username, slug: "dinners", number: 1, url: `${BASE}/${ana.username}/dinners` });
+    expect(first.data).toEqual({
+      owner: ana.username,
+      slug: "dinners",
+      number: 1,
+      url: `${BASE}/${ana.username}/dinners`,
+      rewrites: [],
+    });
     expect(first.text).toContain(`${BASE}/${ana.username}/dinners`);
     const second = await publish(ana.token, { owner: ana.username, slug: "dinners", workflow });
     expect(second.data.number).toBe(2);

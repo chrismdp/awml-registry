@@ -1,12 +1,13 @@
 import { notFound, permanentRedirect } from "next/navigation";
-import { mistakesIn, type CheckedFile } from "@/components/Checks";
+import { mistakesIn, type CheckedFile, type CheckRow } from "@/components/Checks";
 import type { VersionViewProps } from "@/components/VersionView";
-import { engine } from "@/engine";
+import { engine, type ListedCheck } from "@/engine";
 import { asRead } from "@/server/as-read";
+import { refPath, refsAsSeen } from "@/server/refs";
 import { awmlOf, implementationsOf } from "@/server/awml-file";
 import { followOldName, isPageView, pageContext, underOwner, workflowPath, type PageView } from "@/server/page";
 import { organisationsOf } from "@/server/organisations";
-import { forksOf, readVersion, VIEWS, type FileName, type View } from "@/server/registry";
+import { forksOf, readVersion, referrersOf, VIEWS, type FileName, type View } from "@/server/registry";
 
 // One version for its page, `n` or "latest", with the view asked for: a view
 // drawn, every file as text for "yaml", or what checking them found for
@@ -74,17 +75,7 @@ export async function loadVersion(
       if (f.name === "workflow") {
         const stored = v.checks && (await engine.check(r.file)).length === 0 ? v.checks : null;
         const list = stored ?? { awml: engine.version, checks: await engine.checks(r.file) };
-        return {
-          name: f.name,
-          checkedBy: list.awml,
-          listed: stored ? "stored" : "now",
-          rows: list.checks.map(({ name, mistakes, ...listed }) => ({
-            name,
-            mistakes: listed.result === "fail" ? mistakes : [],
-            warnings: listed.result === "warn" ? mistakes : [],
-            listed,
-          })),
-        };
+        return { name: f.name, checkedBy: list.awml, listed: stored ? "stored" : "now", rows: rowsOf(list.checks) };
       }
       return {
         name: f.name,
@@ -94,6 +85,28 @@ export async function loadVersion(
       };
     }),
   );
+
+  // A workflow's refs, as the viewer may know what each names. Refs follow
+  // the latest version of what they name, so when the viewer may see any of
+  // it, the Checks tab lists the checks now, of the file given with each
+  // workflow its refs name that the viewer may see. The file still checks
+  // alone, so whether it is drawn goes by its checks alone.
+  const workflowRead = workflow ? readFile("workflow") : undefined;
+  const refs = workflowRead ? await refsAsSeen(db, viewer, v.owner, v.slug, workflowRead) : { shown: [], given: [] };
+  const shownChecks: CheckedFile[] = refs.given.length
+    ? await Promise.all(
+        checks.map(async (f) =>
+          f.name !== "workflow"
+            ? f
+            : {
+                name: f.name,
+                checkedBy: engine.version,
+                listed: "now" as const,
+                rows: rowsOf(await engine.checksWith({ file: refPath(v.owner, v.slug), source: workflowRead! }, refs.given)),
+              },
+        ),
+      )
+    : checks;
 
   // The file the shown view is drawn from, and for a workflow's platform view,
   // the implementation drawn, if it has any. A platform view stored before
@@ -134,11 +147,23 @@ export async function loadVersion(
     })),
     nowhere,
     files,
-    checks,
+    checks: shownChecks,
+    refs: refs.shown,
+    referredBy: (await referrersOf(db, viewer, v.owner, v.slug)) ?? [],
     mermaid: drawable ? await engine.draw(readFile(source)!, drawnImplementation(source, placed, readFile(source)!)) : "",
     summary: v.summary,
     versions: v.versions,
   };
+}
+
+// Each check AWML listed, as a row of the Checks tab.
+function rowsOf(checks: ListedCheck[]): CheckRow[] {
+  return checks.map(({ name, mistakes, ...listed }) => ({
+    name,
+    mistakes: listed.result === "fail" ? mistakes : [],
+    warnings: listed.result === "warn" ? mistakes : [],
+    listed,
+  }));
 }
 
 // The implementation a view draws of a file as the engine reads it: the one

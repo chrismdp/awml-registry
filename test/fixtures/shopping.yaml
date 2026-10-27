@@ -1,0 +1,18 @@
+awml: "0.6"
+title: The family's shopping
+description: |
+  This workflow keeps the family's shopping list topped up. The list is the dinners workflow's,
+  dinners.yaml alongside, so this file refers to it and keeps its own copy. The family is
+  fictional.
+scopes:
+  - { id: carers, label: "carers: + June, Beth" }
+  - { id: family, label: "family: parents, kids", in: carers }
+parts:
+  - { id: sun, kind: trigger, label: "Sunday 18:00" }
+  - { id: favourites, kind: context, label: "Favourites, recipes and the shopping list", in: family, ref: dinners.yaml#favourites }
+  - { id: low, kind: code, op: check, label: "Check what's running low", in: family }
+  - { id: chat, kind: surface, label: "Family chat", in: family }
+lines:
+  - { from: sun, to: low, kind: start }
+  - { from: favourites, to: low, kind: data }
+  - { from: low, to: chat, kind: data }

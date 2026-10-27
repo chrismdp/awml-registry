@@ -16,6 +16,7 @@ describe("pushing a workflow through the API", () => {
       slug: "dinners",
       number: 1,
       url: `http://localhost:3000/${ana.username}/dinners/v/1`,
+      rewrites: [],
     });
   });
 

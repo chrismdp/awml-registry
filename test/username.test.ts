@@ -527,7 +527,13 @@ describe("old names on /mcp", () => {
 
     // Writes to the old name go to the current owner.
     const published = await call("publish", { owner: "ana", slug: "dinners", workflow: dinners }, ana.token);
-    expect(published.data).toEqual({ owner: "ana-cooks", slug: "dinners", number: 2, url: `${BASE}/ana-cooks/dinners` });
+    expect(published.data).toEqual({
+      owner: "ana-cooks",
+      slug: "dinners",
+      number: 2,
+      url: `${BASE}/ana-cooks/dinners`,
+      rewrites: [],
+    });
     const added = await call("add_platform", { owner: "ana", slug: "worker", description: worker }, ana.token);
     expect(added.data).toEqual({
       owner: "ana-cooks",

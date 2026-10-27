@@ -1,6 +1,6 @@
-import { and, count, desc, eq, inArray, max, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, max, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@/db/client";
-import { membership, user, version, workflow } from "@/db/schema";
+import { membership, user, version, workflow, workflowRef } from "@/db/schema";
 import { edition } from "@/edition";
 import { engine, type Files } from "@/engine";
 import { record } from "./audit";
@@ -9,6 +9,7 @@ import { findOwner, isOwnerOrMember, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH } from "./push";
 import { asRead } from "./as-read";
 import { awmlOf, isOlderAwml, readYaml, WORKFLOW_IS_TOO_OLD } from "./awml-file";
+import { namedAtPush, refPath, rewriteRefs, type Rewrite } from "./refs";
 import { refuse, type Result } from "./result";
 import { workflowSlugProblem } from "./slugs";
 import type { Viewer } from "./viewer";
@@ -110,7 +111,8 @@ async function roomForPrivate(db: Db, owner: Owner & { type: "user" }): Promise<
   );
 }
 
-type Pushed = Result<{ owner: string; slug: string; number: number }>;
+// A version saved, and each path ref its push rewrote as owner/slug#id.
+type Pushed = Result<{ owner: string; slug: string; number: number; rewrites: Rewrite[] }>;
 
 export async function pushVersion(
   db: Db,
@@ -148,7 +150,9 @@ async function saveVersion(
 
   const read = fileFrom(body);
   if (!read.ok) return read;
-  const { file } = read;
+  const rewritten = rewriteRefs(read.file, owner.slug);
+  if (!rewritten.ok) return rewritten;
+  const { file, rewrites, refs } = rewritten;
 
   const pushed = await pushedVisibility(owner, existing, body.visibility, "workflow");
   if (!pushed.ok) return pushed;
@@ -160,6 +164,13 @@ async function saveVersion(
 
   const { errors, check, title } = await checkFile(file);
   if (errors.length) return refuse(422, ...errors);
+  if (refs.length) {
+    const named = await namedAtPush(db, owner, slug, visibility, refs);
+    if (!named.ok) return named;
+    const listed = await engine.checksWith({ file: refPath(owner.slug, slug), source: file }, named.given);
+    const mistakes = listed.filter((c) => c.result === "fail").flatMap((c) => c.mistakes);
+    if (mistakes.length) return refuse(422, ...mistakes.map((m) => `workflow: ${m}`));
+  }
 
   const summary = await engine.summarise({ workflow: file });
   const checks = { awml: engine.version, checks: await engine.checks(file) };
@@ -203,12 +214,18 @@ async function saveVersion(
       })
       .onConflictDoNothing()
       .returning({ id: version.id });
-    if (inserted.length) break;
+    if (inserted.length) {
+      if (refs.length)
+        await db.insert(workflowRef).values(
+          refs.map((r) => ({ versionId: inserted[0].id, part: r.part, targetOwner: r.owner, targetSlug: r.slug, targetPart: r.id })),
+        );
+      break;
+    }
     if (attempt === 4) throw new Error("could not number the version");
   }
   await db.update(workflow).set({ title: title!, updatedAt: new Date() }).where(eq(workflow.id, w.id));
   if (owner.type === "organisation") await record(db, owner.id, viewer.id, "push", `${owner.slug}/${slug} v${number}`);
-  return { ok: true, owner: owner.slug, slug, number };
+  return { ok: true, owner: owner.slug, slug, number, rewrites };
 }
 
 export type ForkBody = { owner?: unknown; slug?: unknown; visibility?: unknown; version?: unknown };
@@ -273,13 +290,9 @@ async function originOf(db: Db, viewer: Viewer, forkedFrom: string | null) {
   return { forked: true, forkedFrom: seen ? { owner: o.owner, slug: o.slug, number: o.number } : null };
 }
 
-// A workflow's forks that the viewer may see, of any of its versions: the
-// public ones, and the private ones of the viewer and their organisations.
-// How many there are, and the newest `limit` of them. Null for a workflow
-// the viewer may not read.
-export async function forksOf(db: Db, viewer: Viewer, ownerSlug: string, slug: string, limit = 20) {
-  const found = await readable(db, viewer, ownerSlug, slug);
-  if (!found) return null;
+// The workflows the viewer may see, as a condition on the workflow table:
+// the public ones, and the private ones of the viewer and their organisations.
+async function seenBy(db: Db, viewer: Viewer) {
   const theirs = viewer
     ? (
         await db
@@ -288,14 +301,65 @@ export async function forksOf(db: Db, viewer: Viewer, ownerSlug: string, slug: s
           .where(eq(membership.userId, viewer.id))
       ).map((m) => m.id)
     : [];
-  const where = and(
-    eq(version.workflowId, found.workflow.id),
-    or(
-      eq(workflow.visibility, "public"),
-      viewer ? eq(workflow.ownerUserId, viewer.id) : undefined,
-      theirs.length ? inArray(workflow.ownerOrganisationId, theirs) : undefined,
-    ),
+  return or(
+    eq(workflow.visibility, "public"),
+    viewer ? eq(workflow.ownerUserId, viewer.id) : undefined,
+    theirs.length ? inArray(workflow.ownerOrganisationId, theirs) : undefined,
   );
+}
+
+// The workflows whose latest version refers to a part of this one, that the
+// viewer may see, each with the parts of this one it names, by owner and
+// slug. A referrer the viewer may not see is neither listed nor counted.
+// Null for a workflow the viewer may not read.
+export async function referrersOf(db: Db, viewer: Viewer, ownerSlug: string, slug: string) {
+  const found = await readable(db, viewer, ownerSlug, slug);
+  if (!found) return null;
+  return referrers(db, viewer, found.owner, found.workflow);
+}
+
+export type Referrer = { owner: string; slug: string; title: string; visibility: "public" | "private"; parts: string[] };
+
+async function referrers(db: Db, viewer: Viewer, owner: Owner, w: Workflow): Promise<Referrer[]> {
+  const rows = await db
+    .select({
+      id: workflow.id,
+      owner: ownerSlugSql,
+      slug: workflow.slug,
+      title: workflow.title,
+      visibility: workflow.visibility,
+      part: workflowRef.targetPart,
+    })
+    .from(workflowRef)
+    .innerJoin(version, and(eq(version.id, workflowRef.versionId), isLatest))
+    .innerJoin(workflow, eq(workflow.id, version.workflowId))
+    .where(
+      and(
+        eq(workflowRef.targetOwner, owner.slug),
+        eq(workflowRef.targetSlug, w.slug),
+        ne(workflow.id, w.id),
+        await seenBy(db, viewer),
+      ),
+    );
+  const byWorkflow = new Map<string, Referrer>();
+  for (const { id, part, ...r } of rows) {
+    const listed = byWorkflow.get(id) ?? { ...r, parts: [] };
+    if (!listed.parts.includes(part)) listed.parts.push(part);
+    byWorkflow.set(id, listed);
+  }
+  return [...byWorkflow.values()]
+    .map((r) => ({ ...r, parts: r.parts.sort() }))
+    .sort((a, b) => `${a.owner}/${a.slug}`.localeCompare(`${b.owner}/${b.slug}`));
+}
+
+// A workflow's forks that the viewer may see, of any of its versions: the
+// public ones, and the private ones of the viewer and their organisations.
+// How many there are, and the newest `limit` of them. Null for a workflow
+// the viewer may not read.
+export async function forksOf(db: Db, viewer: Viewer, ownerSlug: string, slug: string, limit = 20) {
+  const found = await readable(db, viewer, ownerSlug, slug);
+  if (!found) return null;
+  const where = and(eq(version.workflowId, found.workflow.id), await seenBy(db, viewer));
   const [{ total }] = await db
     .select({ total: count() })
     .from(workflow)
@@ -343,6 +407,7 @@ export async function readWorkflow(db: Db, viewer: Viewer, ownerSlug: string, sl
     createdAt: w.createdAt,
     ...(await originOf(db, viewer, w.forkedFrom)),
     versions: await versionList(db, w.id),
+    referredBy: await referrers(db, viewer, owner, w),
   };
 }
 

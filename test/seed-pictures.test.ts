@@ -64,6 +64,17 @@ describe("seeding a registry for the build's pictures", () => {
     expect(fork.body).toMatchObject({ visibility: "public", forkedFrom: { owner: "acme", slug: "dinners", number: 1 } });
   });
 
+  it("pushes acme/shopping, whose path ref to dinners.yaml is stored naming acme/dinners, so dinners lists it", async () => {
+    await seeded();
+    const shopping = await read("/api/v1/acme/shopping/v/1");
+    expect(shopping.body.visibility).toBe("public");
+    expect(shopping.body.files.workflow).toContain("ref: acme/dinners#favourites");
+    const dinners = await read("/api/v1/acme/dinners");
+    expect(dinners.body.referredBy).toEqual([
+      { owner: "acme", slug: "shopping", title: "The family's shopping", visibility: "public", parts: ["favourites"] },
+    ]);
+  });
+
   it("pushes acme's platforms, the worker at two versions with its recipe and one kept private", async () => {
     const { cookie } = await seeded();
     const worker = await read("/api/v1/acme/platforms/worker");
