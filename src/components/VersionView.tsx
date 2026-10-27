@@ -5,6 +5,7 @@ import type { PageView } from "@/server/page";
 import type { PartLink } from "@/server/part-links";
 import type { FileName, Origin, Referrer, View } from "@/server/registry";
 import type { ShownRef } from "@/server/refs";
+import type { ListedSystem } from "@/server/systems";
 import { fork } from "@/app/[owner]/[slug]/actions";
 import { names, stepCount } from "@/server/summary";
 import { CURRENT_AWML } from "@/server/awml-file";
@@ -57,6 +58,8 @@ export type VersionViewProps = {
   referredBy: Referrer[];
   // The parts the drawing marks as linked to other workflows, either way.
   links: PartLink[];
+  // The systems the viewer may see whose latest version has this workflow.
+  systems: ListedSystem[];
   // The shown file drawn, or "" when it is not a drawing view or the file has mistakes.
   mermaid: string;
   summary: Summary;
@@ -273,6 +276,25 @@ export function VersionView(p: VersionViewProps) {
                 ))}
               </dl>
             </section>
+
+            {p.systems.length > 0 && (
+              <section className="side">
+                <h2>
+                  Systems <span className="tab-count">{p.systems.length}</span>
+                </h2>
+                <ul className="forks">
+                  {p.systems.map((s) => (
+                    <li key={`${s.owner}/${s.slug}`}>
+                      In <Link href={`/${s.owner}/systems/${s.slug}`}>{s.title}</Link>
+                      <span className="note">
+                        {` · ${s.owner}/systems/${s.slug}`}
+                        {s.visibility === "private" ? " · private" : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
 
             {p.referredBy.length > 0 && (
               <section className="side">

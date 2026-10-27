@@ -1,5 +1,6 @@
 import { and, count, desc, eq, inArray, max, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@/db/client";
+import { insertRows } from "@/db/rows";
 import { membership, user, version, workflow, workflowRef } from "@/db/schema";
 import { edition } from "@/edition";
 import { engine, type Files } from "@/engine";
@@ -12,6 +13,7 @@ import { awmlOf, isOlderAwml, readYaml, WORKFLOW_IS_TOO_OLD } from "./awml-file"
 import { namedAtPush, refPath, rewriteRefs, type Rewrite } from "./refs";
 import { refuse, type Result } from "./result";
 import { workflowSlugProblem } from "./slugs";
+import { ownerSystems, systemsOf } from "./systems";
 import type { Viewer } from "./viewer";
 
 export const VIEWS = ["security", "platform"] as const;
@@ -128,9 +130,9 @@ export async function pushVersion(
 }
 
 // A push, or with `forkedFrom`, the first version of a fork, which must make
-// a new workflow: a slug already taken in the owner is a 409. Whether the
-// caller may push there is asked as if the slug were free, so a fork tells
-// nobody about a private workflow they could not push to.
+// a new workflow: a slug already taken in the owner is a 409, asked only of
+// someone who may push there, so a fork tells nobody about a private
+// workflow they could not push to.
 async function saveVersion(
   db: Db,
   viewer: NonNullable<Viewer>,
@@ -139,9 +141,9 @@ async function saveVersion(
   body: PushBody,
   forkedFrom?: string,
 ): Promise<Pushed> {
-  const existing = await findWorkflow(db, owner, slug);
-  const allowed = await mayPushTo(db, viewer, owner, forkedFrom ? null : existing);
+  const allowed = await mayPushTo(db, viewer, owner);
   if (!allowed.ok) return allowed;
+  const existing = await findWorkflow(db, owner, slug);
   const taken = () => refuse(409, `${owner.slug}/${slug} is taken. Fork it under another slug.`);
   if (forkedFrom && existing) return taken();
 
@@ -215,10 +217,18 @@ async function saveVersion(
       .onConflictDoNothing()
       .returning({ id: version.id });
     if (inserted.length) {
-      if (refs.length)
-        await db.insert(workflowRef).values(
+      // A version is never left without its refs: if they can't all be
+      // written, the version goes too, and the refs written with it.
+      try {
+        await insertRows(
+          db,
+          workflowRef,
           refs.map((r) => ({ versionId: inserted[0].id, part: r.part, targetOwner: r.owner, targetSlug: r.slug, targetPart: r.id })),
         );
+      } catch (e) {
+        await db.delete(version).where(eq(version.id, inserted[0].id));
+        throw e;
+      }
       break;
     }
     if (attempt === 4) throw new Error("could not number the version");
@@ -292,19 +302,17 @@ async function originOf(db: Db, viewer: Viewer, forkedFrom: string | null) {
 
 // The workflows the viewer may see, as a condition on the workflow table:
 // the public ones, and the private ones of the viewer and their organisations.
-async function seenBy(db: Db, viewer: Viewer) {
-  const theirs = viewer
-    ? (
-        await db
-          .select({ id: membership.organisationId })
-          .from(membership)
-          .where(eq(membership.userId, viewer.id))
-      ).map((m) => m.id)
-    : [];
+// Their organisations are asked for in the same statement, however many.
+function seenBy(db: Db, viewer: Viewer) {
   return or(
     eq(workflow.visibility, "public"),
     viewer ? eq(workflow.ownerUserId, viewer.id) : undefined,
-    theirs.length ? inArray(workflow.ownerOrganisationId, theirs) : undefined,
+    viewer
+      ? inArray(
+          workflow.ownerOrganisationId,
+          db.select({ id: membership.organisationId }).from(membership).where(eq(membership.userId, viewer.id)),
+        )
+      : undefined,
   );
 }
 
@@ -338,7 +346,7 @@ async function referrers(db: Db, viewer: Viewer, owner: Owner, w: Workflow): Pro
         eq(workflowRef.targetOwner, owner.slug),
         eq(workflowRef.targetSlug, w.slug),
         ne(workflow.id, w.id),
-        await seenBy(db, viewer),
+        seenBy(db, viewer),
       ),
     );
   const byWorkflow = new Map<string, Referrer>();
@@ -359,7 +367,7 @@ async function referrers(db: Db, viewer: Viewer, owner: Owner, w: Workflow): Pro
 export async function forksOf(db: Db, viewer: Viewer, ownerSlug: string, slug: string, limit = 20) {
   const found = await readable(db, viewer, ownerSlug, slug);
   if (!found) return null;
-  const where = and(eq(version.workflowId, found.workflow.id), await seenBy(db, viewer));
+  const where = and(eq(version.workflowId, found.workflow.id), seenBy(db, viewer));
   const [[{ total }], forks] = await Promise.all([
     db
       .select({ total: count() })
@@ -410,7 +418,15 @@ export async function readWorkflow(db: Db, viewer: Viewer, ownerSlug: string, sl
     ...(await originOf(db, viewer, w.forkedFrom)),
     versions: await versionList(db, w.id),
     referredBy: await referrers(db, viewer, owner, w),
+    systems: await systemsOf(db, viewer, w.id),
   };
+}
+
+// The systems a workflow is in that the viewer may see (see systemsOf). Null
+// for a workflow the viewer may not read.
+export async function systemsWith(db: Db, viewer: Viewer, ownerSlug: string, slug: string) {
+  const found = await readable(db, viewer, ownerSlug, slug);
+  return found ? systemsOf(db, viewer, found.workflow.id) : null;
 }
 
 export async function readVersion(
@@ -512,8 +528,9 @@ export async function explore(db: Db, query = "", limit = 50) {
     .limit(limit);
 }
 
-// An owner's workflows: the public ones to everyone, the private ones to members too.
-export async function ownerPage(db: Db, viewer: Viewer, ownerSlug: string) {
+// An owner's workflows: the public ones to everyone, the private ones to
+// members too.
+export async function ownerWorkflows(db: Db, viewer: Viewer, ownerSlug: string) {
   const owner = await findOwner(db, ownerSlug);
   if (!owner) return null;
   const member = await isOwnerOrMember(db, owner, viewer?.id);
@@ -525,44 +542,43 @@ export async function ownerPage(db: Db, viewer: Viewer, ownerSlug: string) {
   return { owner, member, workflows };
 }
 
+// An owner's page: their workflows and their systems, each as ownerWorkflows
+// gives the workflows.
+export async function ownerPage(db: Db, viewer: Viewer, ownerSlug: string) {
+  const found = await ownerWorkflows(db, viewer, ownerSlug);
+  return found && { ...found, systems: await ownerSystems(db, found.owner, found.member) };
+}
+
 // Every workflow of an organisation with its latest summary, and the totals across them.
 export async function inventory(db: Db, viewer: Viewer, orgSlug: string) {
   const owner = await findOwner(db, orgSlug);
   if (!owner || owner.type !== "organisation") return null;
   if (!(await isOwnerOrMember(db, owner, viewer?.id))) return null;
   const workflows = await db
-    .select({ id: workflow.id, slug: workflow.slug, title: workflow.title, visibility: workflow.visibility })
+    .select({
+      slug: workflow.slug,
+      title: workflow.title,
+      visibility: workflow.visibility,
+      number: version.number,
+      summary: version.summary,
+      hasSecurity: sql<number>`${version.workflow} is not null or ${version.security} is not null`,
+      hasPlatform: sql<number>`${version.platform} is not null`,
+    })
     .from(workflow)
+    .leftJoin(version, and(eq(version.workflowId, workflow.id), isLatest))
     .where(eq(workflow.ownerOrganisationId, owner.id))
     .orderBy(workflow.slug);
-  const ids = workflows.map((w) => w.id);
-  const latest = ids.length
-    ? await db
-        .select({
-          workflowId: version.workflowId,
-          number: version.number,
-          summary: version.summary,
-          hasSecurity: sql<number>`${version.workflow} is not null or ${version.security} is not null`,
-          hasPlatform: sql<number>`${version.platform} is not null`,
-        })
-        .from(version)
-        .where(and(inArray(version.workflowId, ids), isLatest))
-    : [];
-  const byWorkflow = new Map(latest.map((l) => [l.workflowId, l]));
-  const rows = workflows.map((w) => {
-    const l = byWorkflow.get(w.id);
-    return {
-      slug: w.slug,
-      title: w.title,
-      visibility: w.visibility,
-      latest: l?.number ?? null,
-      summary: l?.summary ?? null,
-      hasSecurity: Boolean(l?.hasSecurity),
-      // A workflow says where it runs in its implementations, whose
-      // blocks its summary counts as platforms.
-      hasPlatform: Boolean(l?.hasPlatform) || (l?.summary.platforms ?? 0) > 0,
-    };
-  });
+  const rows = workflows.map((w) => ({
+    slug: w.slug,
+    title: w.title,
+    visibility: w.visibility,
+    latest: w.number,
+    summary: w.summary,
+    hasSecurity: Boolean(w.hasSecurity),
+    // A workflow says where it runs in its implementations, whose
+    // blocks its summary counts as platforms.
+    hasPlatform: Boolean(w.hasPlatform) || (w.summary?.platforms ?? 0) > 0,
+  }));
   const summaries = rows.flatMap((r) => (r.summary ? [r.summary] : []));
   return { organisation: owner, rows, totals: total(summaries), measures: measures(summaries) };
 }

@@ -625,6 +625,18 @@ describe("an organisation's inventory", () => {
     );
   });
 
+  it("lists an organisation of 101 workflows, each at its latest version, within D1's limit on bound values", async () => {
+    const olive = await person("olive");
+    await orgWith("acme", olive);
+    const summary = JSON.parse(example("legacy/dinners-security.summary.json"));
+    const slugs = Array.from({ length: 101 }, (_, i) => `w-${String(i + 1).padStart(3, "0")}`);
+    for (const slug of slugs) await storeVersion("acme", slug, olive, { workflow: dinners }, { summary });
+    await storeVersion("acme", "w-101", olive, { workflow: dinners }, { summary });
+    const inv = (await inventory(await getDb(), await getViewer(new Headers({ cookie: olive.cookie })), "acme"))!;
+    expect(inv.rows.map((r) => r.slug)).toEqual(slugs);
+    expect(inv.rows.map((r) => r.latest)).toEqual([...Array(100).fill(1), 2]);
+  });
+
   it("says so when an organisation has no workflows yet", async () => {
     const olive = await person("olive");
     await orgWith("acme", olive);

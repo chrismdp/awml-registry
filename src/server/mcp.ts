@@ -18,7 +18,8 @@ import { mcpUrl, ownUrl } from "./http";
 import { fitWorkflow, type Fit } from "./fit";
 import { organisationsOf } from "./organisations";
 import { pushPlatformVersion, readPlatformVersion, searchPlatforms } from "./platforms";
-import { checkWorkflow, explore, forkWorkflow, ownerPage, pushVersion, readVersion } from "./registry";
+import { checkWorkflow, explore, forkWorkflow, ownerWorkflows, pushVersion, readVersion } from "./registry";
+import { pushSystemVersion } from "./systems";
 import { userIdForSecret } from "./tokens";
 import { renamedTo, savedNotice, setUsername } from "./usernames";
 import { viewerFor, type Viewer } from "./viewer";
@@ -177,7 +178,7 @@ function server(person: Person) {
         "get to read one, list for an " +
         "owner's workflows and search for public ones. Use search_platforms and get_platform to find platforms and " +
         "read their descriptions and install recipes, add_platform to save one, and fit_workflow to find where a " +
-        "workflow can run. Use set_username to change the signed-in person's own username. Every call acts as the " +
+        "workflow can run. Use publish_system to save a system, several workflows seen together. Use set_username to change the signed-in person's own username. Every call acts as the " +
         "signed-in person.",
     },
   );
@@ -330,7 +331,7 @@ function server(person: Person) {
         : [person.username, ...(await organisationsOf(db, person.id)).map((o) => o.slug)];
       const rows: Listed[] = [];
       for (const o of owners) {
-        const found = await ownerPage(db, person, o);
+        const found = await ownerWorkflows(db, person, o);
         if (!found) return NOT_FOUND;
         rows.push(...found.workflows.map((w) => ({ owner: found.owner.slug, ...w })));
       }
@@ -440,6 +441,39 @@ function server(person: Person) {
       if (!pushed.ok) return refused(pushed.errors);
       const url = platformPage(pushed.owner, pushed.slug);
       return answer(`Saved version ${pushed.number} of the platform ${pushed.owner}/${pushed.slug}: ${url}`, {
+        owner: pushed.owner,
+        slug: pushed.slug,
+        number: pushed.number,
+        url,
+      });
+    },
+  );
+
+  s.registerTool(
+    "publish_system",
+    {
+      title: "Publish a system",
+      description:
+        "Save a new version of the system owner/systems/slug: several workflows given to the engine together, which the registry draws as one map, checks together and fits together. Each member, as owner/slug, follows that workflow's latest version. The owner is your own username or an organisation you belong to, and a member must be a workflow the owner may see: a public one of any owner, the owner's own, and for a person, the private ones of their organisations. So an organisation's system holds only its own workflows and public ones. Another owner's public workflow may be a member, read-only; to change one, fork it and put the fork in the system. The first version sets whether the system is public or private. A public system may hold private workflows: anyone who may not see one sees only that the system has it. Gives the system's page and the new version number.",
+      inputSchema: z.object({
+        owner,
+        slug: z.string().describe("The system's slug: lowercase letters, digits and single hyphens"),
+        title: z.string().describe("The system's title"),
+        description: z.string().optional().describe("What the system is for, as Markdown"),
+        members: z.array(z.string()).describe("The workflows in it, each as owner/slug, at least one, each once"),
+        visibility: z
+          .enum(["public", "private"])
+          .optional()
+          .describe("Only for the first version. Default public. Private on your own account is seen by you alone."),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ owner, slug, title, description, members, visibility }) => {
+      const db = await getDb();
+      const pushed = await pushSystemVersion(db, person, await current(db, owner), slug, { title, description, members, visibility });
+      if (!pushed.ok) return refused(pushed.errors);
+      const url = ownUrl(`/${pushed.owner}/systems/${pushed.slug}`);
+      return answer(`Saved version ${pushed.number} of the system ${pushed.owner}/systems/${pushed.slug}: ${url}`, {
         owner: pushed.owner,
         slug: pushed.slug,
         number: pushed.number,

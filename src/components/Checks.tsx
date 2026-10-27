@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { ListedCheck } from "@/engine";
 import type { ShownRef } from "@/server/refs";
 import type { FileName } from "@/server/registry";
@@ -18,9 +19,10 @@ export type CheckRow = {
 // per check, "stored" when AWML listed them at push, or "now" when the AWML
 // the registry runs listed them here. Otherwise the file was checked again
 // here by `awml check`, which gives only the mistakes it finds, so it has
-// one row.
+// one row. A system's member is named as owner/slug, the path the engine is
+// given it at.
 export type CheckedFile = {
-  name: FileName;
+  name: FileName | `${string}/${string}`;
   rows: CheckRow[];
   checkedBy: { tag: string; commit: string };
   listed: "stored" | "now" | false;
@@ -84,26 +86,38 @@ function Refs({ refs }: { refs: ShownRef[] }) {
   );
 }
 
-// What checking a version's files found, file by file, and the AWML that checked them.
-export function Checks({ title, files, refs = [] }: { title: string; files: CheckedFile[]; refs?: ShownRef[] }) {
+// What checking a version's files found, file by file, and the AWML that
+// checked them. A system's page says itself how they were checked, as `intro`.
+export function Checks({
+  title,
+  files,
+  refs = [],
+  intro,
+}: {
+  title: string;
+  files: CheckedFile[];
+  refs?: ShownRef[];
+  intro?: ReactNode;
+}) {
   const listed = files.every((f) => f.listed);
   const now = files.some((f) => f.listed === "now");
   const spec = `https://github.com/chrismdp/awml/blob/${files[0]?.checkedBy.commit}/SPEC.md#the-file-format`;
   return (
     <div className="checks" role="tabpanel" aria-label={`${title}, checks`}>
       <p className="checks-intro">
-        {listed ? (
-          <>
-            AWML checked this file when it was pushed, and the registry refuses a push with any mistake.{" "}
-            {now && "It is checked again here, by the AWML this registry runs. "}Here is each check it ran, in the order
-            its spec gives them.
-          </>
-        ) : (
-          <>
-            AWML checked each file when it was pushed, and the registry refuses a push with any mistake. Each file is
-            checked again here, by the AWML this registry runs.
-          </>
-        )}
+        {intro ??
+          (listed ? (
+            <>
+              AWML checked this file when it was pushed, and the registry refuses a push with any mistake.{" "}
+              {now && "It is checked again here, by the AWML this registry runs. "}Here is each check it ran, in the
+              order its spec gives them.
+            </>
+          ) : (
+            <>
+              AWML checked each file when it was pushed, and the registry refuses a push with any mistake. Each file is
+              checked again here, by the AWML this registry runs.
+            </>
+          ))}
       </p>
       <Refs refs={refs} />
       {files.map((f) => (

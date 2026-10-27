@@ -87,3 +87,12 @@ export type PlatformTab = "offers" | "recipe" | "yaml";
 // `owner/platforms/slug`.
 export const platformPath = (owner: string, slug: string, n: string | number, tab: PlatformTab = "offers") =>
   `/${encodeURIComponent(owner)}/platforms${underOwner(slug, n, tab === "offers" ? undefined : tab)}`;
+
+// A system's page shows the map of its workflows, their checks, who waits on
+// them, or where they run.
+export type SystemTab = "map" | "checks" | "who-waits" | "where-it-runs";
+
+// The address of a system's page: its latest version or version `n`, and one
+// tab, or none for the map, as a platform's page is addressed.
+export const systemPath = (owner: string, slug: string, n: string | number, tab: SystemTab = "map") =>
+  `/${encodeURIComponent(owner)}/systems${underOwner(slug, n, tab === "map" ? undefined : tab)}`;

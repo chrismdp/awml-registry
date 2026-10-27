@@ -8,7 +8,7 @@ import { awmlOf, implementationsOf } from "@/server/awml-file";
 import { followOldName, isPageView, pageContext, underOwner, workflowPath, type PageView } from "@/server/page";
 import { partLinks } from "@/server/part-links";
 import { organisationsOf } from "@/server/organisations";
-import { forksOf, readVersion, referrersOf, VIEWS, type FileName, type View } from "@/server/registry";
+import { forksOf, readVersion, referrersOf, systemsWith, VIEWS, type FileName, type View } from "@/server/registry";
 
 // One version for its page, `n` or "latest", with the view asked for: a view
 // drawn, every file as text for "yaml", or what checking them found for
@@ -104,10 +104,11 @@ export async function loadVersion(
   // The reads besides the version don't depend on each other, so they run at
   // once rather than one after another.
   const workflowRead = workflow ? readFile("workflow") : undefined;
-  const [refs, forks, referredBy, organisations] = await Promise.all([
+  const [refs, forks, referredBy, systems, organisations] = await Promise.all([
     workflowRead ? refsAsSeen(db, viewer, v.owner, v.slug, workflowRead) : { shown: [], given: [] },
     forksOf(db, viewer, v.owner, v.slug),
     referrersOf(db, viewer, v.owner, v.slug),
+    systemsWith(db, viewer, v.owner, v.slug),
     v.visibility === "public" && viewer ? organisationsOf(db, viewer.id) : [],
   ]);
   const shownChecks: CheckedFile[] = refs.given.length
@@ -172,6 +173,7 @@ export async function loadVersion(
     // The parts the drawing marks as linked to other workflows, from what the
     // viewer may know of both, so it names nothing they can't see.
     links: partLinks(refs.shown, referredBy ?? []),
+    systems: systems ?? [],
     mermaid: drawable ? await engine.draw(readFile(source)!, drawnImplementation(source, placed, readFile(source)!)) : "",
     summary: v.summary,
     versions: v.versions,
@@ -179,7 +181,7 @@ export async function loadVersion(
 }
 
 // Each check AWML listed, as a row of the Checks tab.
-function rowsOf(checks: ListedCheck[]): CheckRow[] {
+export function rowsOf(checks: ListedCheck[]): CheckRow[] {
   return checks.map(({ name, mistakes, ...listed }) => ({
     name,
     mistakes: listed.result === "fail" ? mistakes : [],

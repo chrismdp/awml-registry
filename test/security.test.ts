@@ -22,6 +22,12 @@ import { renderPage, type Page } from "./pages";
 
 const workflow = example("dinners.yaml");
 
+// A push's status and what it says, to compare one refusal with another.
+const answer = async (res: Response | Promise<Response>) => {
+  const r = await res;
+  return { status: r.status, body: await r.json() };
+};
+
 // Pushes both files, so every view of the workflow has something to show.
 async function push(org: string, slug: string, as: Who, visibility?: "public" | "private") {
   return request("POST", `/api/v1/${org}/${slug}/versions`, {
@@ -176,9 +182,11 @@ describe("Cross-tenant boundary", () => {
     ).toBe(404);
   });
 
-  it("a token from a member of one organisation cannot push to another organisation's private workflows", async () => {
+  it("a token from a member of one organisation cannot push to another organisation's private workflows, and is answered as for a missing one", async () => {
     const { mo } = await twoOrgs();
-    expect((await push("beta", "secret-plans", { token: mo.token })).status).toBe(404);
+    const toPrivate = await answer(push("beta", "secret-plans", { token: mo.token }));
+    expect(toPrivate).toEqual({ status: 403, body: { errors: ["Only members of beta can push here."] } });
+    expect(await answer(push("beta", "nothing-here", { token: mo.token }))).toEqual(toPrivate);
   });
 
   it("a token from a member of one organisation cannot push to another organisation's public workflows", async () => {
@@ -550,10 +558,13 @@ describe("Private platforms", () => {
       expect([read.status, await read.text()]).toEqual([200, backOffice]);
     });
 
-    it("a non-member cannot push to a private platform: 404, and nothing is saved", async () => {
+    it("a non-member cannot push to a private platform: answered as for a missing one, and nothing is saved", async () => {
       const { nell, olive } = await platforms();
-      const res = await pushPlatform("acme", "back-office", { token: nell.token }, { description: backOffice });
-      expect(res.status).toBe(404);
+      const toPrivate = await answer(pushPlatform("acme", "back-office", { token: nell.token }, { description: backOffice }));
+      expect(toPrivate).toEqual({ status: 403, body: { errors: ["Only members of acme can push here."] } });
+      expect(await answer(pushPlatform("acme", "nothing-here", { token: nell.token }, { description: backOffice }))).toEqual(
+        toPrivate,
+      );
       const read = await (await request("GET", "/api/v1/platforms/acme/back-office", { as: { token: olive.token } })).json();
       expect(read.versions).toHaveLength(1);
     });
@@ -609,7 +620,11 @@ describe("Private platforms", () => {
     it("a token from a member of one organisation can neither read nor push another organisation's private platforms", async () => {
       const { mo } = await platforms();
       expect(await platformReads("beta", "vault", { token: mo.token })).toEqual(allPlatformReads(404));
-      expect((await pushPlatform("beta", "vault", { token: mo.token }, { description: backOffice })).status).toBe(404);
+      const toPrivate = await answer(pushPlatform("beta", "vault", { token: mo.token }, { description: backOffice }));
+      expect(toPrivate).toEqual({ status: 403, body: { errors: ["Only members of beta can push here."] } });
+      expect(await answer(pushPlatform("beta", "nothing-here", { token: mo.token }, { description: backOffice }))).toEqual(
+        toPrivate,
+      );
     });
 
     it("a token from a member of one organisation cannot push to another organisation's public platforms", async () => {
@@ -762,7 +777,7 @@ describe("Private platforms", () => {
       }
       await request("POST", `/api/orgs/acme/members/${mo.id}/remove`, { as: { cookie: mo.cookie } });
       expect(await platformReads("acme", "back-office", { token: mo.token })).toEqual(allPlatformReads(404));
-      expect((await pushPlatform("acme", "back-office", { token: mo.token }, { description: backOffice })).status).toBe(404);
+      expect((await pushPlatform("acme", "back-office", { token: mo.token }, { description: backOffice })).status).toBe(403);
     });
 
     it("the edition decides whether an organisation may push and keep private platforms, as for workflows", async () => {
@@ -939,8 +954,10 @@ describe("A user's own private workflows", () => {
       const { ana, nell } = await anaDiary();
       const reads = await tokenReads(ana.username, "diary", nell.token);
       expect([reads.api.status, reads.versionApi.status, reads.yaml.status]).toEqual([404, 404, 404]);
-      expect((await push(ana.username, "diary", { token: nell.token })).status).toBe(404);
-      expect((await push(ana.username, "diary", { cookie: nell.cookie })).status).toBe(404);
+      const refused = { status: 403, body: { errors: [`Only ${ana.username} can push here.`] } };
+      expect(await answer(push(ana.username, "diary", { token: nell.token }))).toEqual(refused);
+      expect(await answer(push(ana.username, "diary", { cookie: nell.cookie }))).toEqual(refused);
+      expect(await answer(push(ana.username, "nothing-here", { token: nell.token }))).toEqual(refused);
     });
 
     it("the owner and a member of an organisation its owner belongs to can neither read nor push it", async () => {
@@ -949,7 +966,7 @@ describe("A user's own private workflows", () => {
         expect(await everyRead({ cookie: who.cookie }, ana.username, "diary")).toEqual(all(404));
         const reads = await tokenReads(ana.username, "diary", who.token);
         expect([reads.api.status, reads.versionApi.status, reads.yaml.status]).toEqual([404, 404, 404]);
-        expect((await push(ana.username, "diary", { token: who.token })).status).toBe(404);
+        expect((await push(ana.username, "diary", { token: who.token })).status).toBe(403);
       }
       const read = await (await request("GET", `/api/v1/${ana.username}/diary`, { as: { token: ana.token } })).json();
       expect(read.versions).toHaveLength(1);
@@ -966,7 +983,7 @@ describe("A user's own private workflows", () => {
     it("a role in an organisation gives nothing on a user's own account; the user alone reads and pushes", async () => {
       const { ana, olive } = await anaDiary();
       expect(await everyRead({ cookie: olive.cookie }, ana.username, "diary")).toEqual(all(404));
-      expect((await push(ana.username, "diary", { token: olive.token })).status).toBe(404);
+      expect((await push(ana.username, "diary", { token: olive.token })).status).toBe(403);
       expect((await push(ana.username, "diary", { token: ana.token })).status).toBe(201);
     });
 

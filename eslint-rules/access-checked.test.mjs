@@ -43,6 +43,16 @@ tester.run("access-checked", rule, {
       code: `const found = await readPlatformVersion(await getDb(), viewer, owner, slug, n);`,
     },
     {
+      name: "a system's page reads through readSystemVersion",
+      filename: at("[owner]/systems/[slug]/load.ts"),
+      code: `const { db, viewer } = await pageContext(); const s = await readSystemVersion(db, viewer, owner, slug, n); if (!s) await followOldName(db, owner);`,
+    },
+    {
+      name: "a system's push goes through pushSystemVersion",
+      filename: at("api/v1/[owner]/systems/[slug]/versions/route.ts"),
+      code: `const db = await getDb(); const pushed = await pushSystemVersion(db, viewer, owner, slug, body);`,
+    },
+    {
       name: "the fit goes through fitWorkflow",
       filename: at("api/v1/fit/route.ts"),
       code: `const fitted = await fitWorkflow(await getDb(), viewer, body);`,

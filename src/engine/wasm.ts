@@ -15,18 +15,25 @@ function awml() {
   return started;
 }
 
+type Listed = {
+  checks: (Omit<ListedCheck, "skippedBecause" | "mistakes"> & {
+    skipped_because?: string;
+    mistakes: { file?: string; message: string }[];
+  })[];
+};
+
 // Every check AWML runs on the files given together, with the mistakes and
 // warnings it finds in the first. A check that found some only in the others
 // passes for the first.
 async function listChecks(files: Named[]): Promise<ListedCheck[]> {
-  const listed = JSON.parse((await awml()).checksJSON(files)) as {
-    checks: (Omit<ListedCheck, "skippedBecause" | "mistakes"> & {
-      skipped_because?: string;
-      mistakes: { file?: string; message: string }[];
-    })[];
-  };
+  return checksFor(JSON.parse((await awml()).checksJSON(files)) as Listed, files[0].file, true);
+}
+
+// The checks listed for files given together, as they fall to one of them: a
+// mistake that names no file falls to the first.
+function checksFor(listed: Listed, file: string, first: boolean): ListedCheck[] {
   return listed.checks.map((c) => {
-    const mistakes = c.mistakes.filter((m) => m.file === undefined || m.file === files[0].file).map((m) => m.message);
+    const mistakes = c.mistakes.filter((m) => (m.file === undefined ? first : m.file === file)).map((m) => m.message);
     const result = (c.result === "fail" || c.result === "warn") && mistakes.length === 0 ? "pass" : c.result;
     return {
       id: c.id,
@@ -66,5 +73,15 @@ export const wasmEngine: Engine = {
   fit: memoise(
     async (workflow: string, descriptions: string[], implementation = "") =>
       JSON.parse((await awml()).fitJSON([workflow, ...descriptions], implementation)) as FitReport,
+  ),
+  checksAcross: memoise(async (files: Named[]) => {
+    const listed = JSON.parse((await awml()).checksJSON(files)) as Listed;
+    return files.map((f, i) => ({ file: f.file, checks: checksFor(listed, f.file, i === 0) }));
+  }),
+  summariseAcross: memoise(async (files: Named[]) => (await awml()).summary(files) as Summary),
+  drawMap: memoise(async (files: Named[]) => (await awml()).draw(files)),
+  fitAcross: memoise(
+    async (files: Named[], descriptions: string[]) =>
+      JSON.parse((await awml()).fitJSON([...files, ...descriptions])) as FitReport,
   ),
 };

@@ -12,7 +12,7 @@ import type { Db } from "@/db/client";
 import { version, workflow } from "@/db/schema";
 import type { Named } from "@/engine";
 import { asRead } from "./as-read";
-import { findOwner, isOwnerOrMember, type Owner } from "./owners";
+import { findOwner, isOwnerOrMember, ownerMaySee, type Owner } from "./owners";
 import type { Visibility } from "./push";
 import { refuse, type Result } from "./result";
 import { isSlug, workflowSlugProblem } from "./slugs";
@@ -168,13 +168,6 @@ export async function namedAtPush(
     if (file) given.push(file);
   }
   return errors.length ? refuse(422, ...errors) : { ok: true, given };
-}
-
-// Whether an owner may see a workflow of another: a public one, its own, and
-// for a person, a private one of an organisation they belong to.
-async function ownerMaySee(db: Db, owner: Owner, of: Owner, visibility: Visibility) {
-  if (visibility === "public" || (owner.type === of.type && owner.id === of.id)) return true;
-  return owner.type === "user" && isOwnerOrMember(db, of, owner.id);
 }
 
 // A ref as a viewer may know what it names: a workflow they may see, one not

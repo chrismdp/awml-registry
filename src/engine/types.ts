@@ -30,6 +30,9 @@ export type Summary = {
   people?: { label: string; kind: "person" | "review" }[] | null;
   scopeNames?: string[] | null;
   platformNames?: string[] | null;
+  // Given several workflows, each part more than one of them holds, by the
+  // ref between them, with the titles of the workflows that hold it.
+  shared?: { label: string; kind: string; workflows: string[] }[] | null;
 };
 
 // What `awml fit --json` gives: for each platform, whether the workflow fits
@@ -96,4 +99,21 @@ export interface Engine {
   // placement is judged instead, each block against the description it
   // names. Every file must pass check.
   fit(workflow: string, descriptions: string[], implementation?: string): Promise<FitReport>;
+
+  // Several workflows given together, as a system gives them, each at a path
+  // ending owner/slug.yaml so the refs between them are followed. Every file
+  // must pass check, except for checksAcross; the others throw the mistakes
+  // following the refs finds.
+  //
+  // Every check AWML runs on the files together, listed for each file with
+  // the mistakes and warnings found in it.
+  checksAcross(files: Named[]): Promise<{ file: string; checks: ListedCheck[] }[]>;
+  // What the workflows' summary counts and names across them all, with the
+  // parts they share.
+  summariseAcross(files: Named[]): Promise<Summary>;
+  // The map: one box per workflow, the parts they share drawn once. A single
+  // workflow draws its security view.
+  drawMap(files: Named[]): Promise<string>;
+  // Each platform described judged running every workflow given.
+  fitAcross(files: Named[], descriptions: string[]): Promise<FitReport>;
 }
