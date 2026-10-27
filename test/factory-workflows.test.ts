@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -21,7 +21,10 @@ type Job = {
 };
 
 function readJobs(file: string): Record<string, Job> {
-  const text = readFileSync(join(__dirname, "../.github/workflows", file), "utf8");
+  const text = readFileSync(
+    join(__dirname, "../.github/workflows", file),
+    "utf8",
+  );
   return (parse(text) as { jobs: Record<string, Job> }).jobs;
 }
 
@@ -60,9 +63,15 @@ describe("build.yml", () => {
     const start = jobs.start;
     expect(start, "build.yml has no start job").toBeDefined();
     expect(writes(start)).toEqual(["issues"]);
-    expect(steps(start).map((each) => each.uses).filter(Boolean)).toEqual([]);
+    expect(
+      steps(start)
+        .map((each) => each.uses)
+        .filter(Boolean),
+    ).toEqual([]);
     expect(runs(start)).toContain("<!-- factory-status -->");
-    expect(steps(start).every((each) => each["continue-on-error"] === true)).toBe(true);
+    expect(
+      steps(start).every((each) => each["continue-on-error"] === true),
+    ).toBe(true);
     expect(needs(jobs.draft)).toEqual(["start"]);
     expect(jobs.draft.if).toContain("!cancelled()");
     for (const name of ["draft", "check"]) {
@@ -73,10 +82,14 @@ describe("build.yml", () => {
   // The jobs that end a build edit the same status comment, to say how it ended.
   it("edits its status when it ends", () => {
     for (const name of ["open", "retry"]) {
-      expect(runs(jobs[name]), `${name} doesn't edit the status comment`).toContain(
-        "<!-- factory-status -->",
-      );
-      expect(jobs[name].permissions?.issues, `${name} can't write to issues`).toBe("write");
+      expect(
+        runs(jobs[name]),
+        `${name} doesn't edit the status comment`,
+      ).toContain("<!-- factory-status -->");
+      expect(
+        jobs[name].permissions?.issues,
+        `${name} can't write to issues`,
+      ).toBe("write");
     }
   });
 });
@@ -91,18 +104,27 @@ describe("resolve.yml", () => {
     const start = jobs.start;
     expect(start, "resolve.yml has no start job").toBeDefined();
     expect(needs(start)).toEqual(["find"]);
-    expect(String(start.strategy?.matrix?.pull)).toContain("needs.find.outputs.pulls");
+    expect(String(start.strategy?.matrix?.pull)).toContain(
+      "needs.find.outputs.pulls",
+    );
     expect(writes(start)).toEqual(["pull-requests"]);
-    expect(steps(start).map((each) => each.uses).filter(Boolean)).toEqual([]);
-    expect(steps(start).every((each) => each["continue-on-error"] === true)).toBe(true);
+    expect(
+      steps(start)
+        .map((each) => each.uses)
+        .filter(Boolean),
+    ).toEqual([]);
+    expect(
+      steps(start).every((each) => each["continue-on-error"] === true),
+    ).toBe(true);
     const script = runs(start);
     expect(script).toContain(marker);
     expect(script).not.toContain("<!-- factory-status -->");
     expect(script).toContain("actions/runs/$GITHUB_RUN_ID");
     expect(script).toContain("gh pr comment");
-    expect(script, "start should post a new comment, never edit an old one").not.toContain(
-      "PATCH",
-    );
+    expect(
+      script,
+      "start should post a new comment, never edit an old one",
+    ).not.toContain("PATCH");
   });
 
   // Posting the status must never stop the rebase.
@@ -122,14 +144,54 @@ describe("resolve.yml", () => {
     expect(edit.if).toContain("!cancelled()");
     expect(edit.run).toContain(marker);
     expect(edit.run).toContain("PATCH");
-    expect(edit.run, "the edit must find this run's comment, not an older one").toContain(
-      "actions/runs/$GITHUB_RUN_ID",
-    );
+    expect(
+      edit.run,
+      "the edit must find this run's comment, not an older one",
+    ).toContain("actions/runs/$GITHUB_RUN_ID");
     const names = steps(push).map((each) => each.name);
     expect(names.indexOf("Edit the status comment")).toBeGreaterThan(
       names.indexOf("Comment when resolution failed"),
     );
-    expect(step(push, "Comment on the pull request").run).toContain("gh pr comment");
-    expect(step(push, "Comment when resolution failed").run).toContain("gh pr comment");
+    expect(step(push, "Comment on the pull request").run).toContain(
+      "gh pr comment",
+    );
+    expect(step(push, "Comment when resolution failed").run).toContain(
+      "gh pr comment",
+    );
+  });
+});
+
+describe("every workflow step that holds the Claude token", () => {
+  it("scrubs the token from the commands Claude starts", () => {
+    const dir = join(__dirname, "../.github/workflows");
+    const files = readdirSync(dir).filter((file) => /\.ya?ml$/.test(file));
+    let holders = 0;
+    for (const file of files) {
+      const text = readFileSync(join(dir, file), "utf8");
+      const jobs =
+        (
+          parse(text) as {
+            jobs?: Record<
+              string,
+              { steps?: { name?: string; env?: Record<string, unknown> }[] }
+            >;
+          }
+        ).jobs ?? {};
+      for (const [name, job] of Object.entries(jobs)) {
+        for (const each of job.steps ?? []) {
+          if (
+            each.env === undefined ||
+            !("CLAUDE_CODE_OAUTH_TOKEN" in each.env)
+          )
+            continue;
+          holders++;
+          expect(
+            each.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
+            `${file}'s ${name} step "${each.name}" gives Claude its token without scrubbing it from Claude's commands`,
+          ).toBe("1");
+        }
+      }
+    }
+    expect(holders).toBeGreaterThan(0);
   });
 });
