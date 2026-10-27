@@ -1,6 +1,6 @@
 import "./flow.css";
 import type { PartLink } from "@/server/part-links";
-import { destination } from "../links";
+import { destination, NEW_TAB } from "../links";
 import type { Drawing, Note } from "./drawing";
 import { Arrowheads, LabelGraphic, LineGraphic, NoteIcon, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import { MAX_ZOOM } from "../viewport";
@@ -8,7 +8,9 @@ import { MAX_ZOOM } from "../viewport";
 // A drawing as one SVG, scaled to fit whatever holds it, as the server sends
 // it: a browser with no scripts sees it whole, a link on a part or a box
 // works, and a note shows on hover. It is also the gallery's thumbnail. On a
-// page that runs scripts, React Flow takes over from it (Drawing.tsx).
+// page that runs scripts, React Flow takes over from it (Drawing.tsx). Its
+// links open in a new tab when `newTab`, as in a drawing embedded on another
+// site (#75).
 export function StaticDrawing({
   drawing,
   id,
@@ -17,6 +19,7 @@ export function StaticDrawing({
   label,
   hidden = false,
   defs = true,
+  newTab = false,
 }: {
   drawing: Drawing;
   // A name no other drawing on the page has, for its arrowheads.
@@ -29,8 +32,10 @@ export function StaticDrawing({
   // of their own, which React Flow's lines use too: an arrowhead takes its
   // visibility from where it is defined, so it can't be in an SVG React Flow hides.
   defs?: boolean;
+  newTab?: boolean;
 }) {
   const { box } = drawing;
+  const target = newTab ? NEW_TAB : {};
   const notes = notesBy(drawing.notes);
   const linked = new Map(links.map((l) => [l.part, l]));
   const scopes = [...drawing.scopes].sort((a, b) => a.depth - b.depth);
@@ -50,7 +55,7 @@ export function StaticDrawing({
         return (
           <g key={s.id} transform={`translate(${s.x}, ${s.y})`} data-scope={s.id} data-in={s.scope}>
             {href ? (
-              <a href={href} aria-label={`Open ${s.lines.join(" ") || s.name}`}>
+              <a href={href} aria-label={`Open ${s.lines.join(" ") || s.name}`} {...target}>
                 {graphic}
               </a>
             ) : (
@@ -72,7 +77,7 @@ export function StaticDrawing({
           <g key={p.id} transform={`translate(${p.x}, ${p.y})`} data-part={p.id} data-in={p.scope}>
             {link && <title>{link.title}</title>}
             {to && to !== "menu" ? (
-              <a href={to} aria-label={`${p.lines.join(" ")}. ${link!.title.split("\n").join(". ")}`}>
+              <a href={to} aria-label={`${p.lines.join(" ")}. ${link!.title.split("\n").join(". ")}`} {...target}>
                 {graphic}
               </a>
             ) : (

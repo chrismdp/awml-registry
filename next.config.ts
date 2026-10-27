@@ -17,10 +17,39 @@ const swaps = {
     : "./src/server/metadata-transport.ts",
 };
 
+// Who may frame a page (#75). Another site may frame only an embed page,
+// which sends `frame-ancestors *` and no X-Frame-Options; every other address
+// sends `frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN`, so sign-in
+// and settings can't be clickjacked. The embed pages' addresses are one
+// pattern, and every other address is any path it doesn't match, so each
+// address gets one set or the other. An owner's or a slug's name is spelled
+// as names are, and never a name kept for other pages under it, so no other
+// page's address is taken for an embed's: /api/auth/..., /platforms/... and
+// /{owner}/platforms/... or /{owner}/systems/... are not. Next matches these
+// on its own server, and OpenNext in the Worker, from the routes manifest.
+const NAME = "[a-z0-9][a-z0-9-]*";
+const OWNER = `(?!(?:api|platforms)/)${NAME}`;
+const SLUG = `(?!(?:platforms|systems)/)${NAME}`;
+const EMBEDS = `(?:${OWNER}/${SLUG}/embed|${OWNER}/${SLUG}/v/[0-9]+/embed|${OWNER}/systems/${NAME}/embed)`;
+
 const nextConfig: NextConfig = {
   output: cloudflare ? undefined : "standalone",
   serverExternalPackages: ["better-sqlite3", "nodemailer"],
-  experimental: { authInterrupts: true },
+  // Next's own server matches the headers' paths with case only when told,
+  // as OpenNext's Worker always does, so the two frame the same addresses.
+  experimental: { authInterrupts: true, caseSensitiveRoutes: true },
+  async headers() {
+    return [
+      {
+        source: `/:path((?!${EMBEDS}/?$).*)`,
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'self'" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+        ],
+      },
+      { source: `/:embed(${EMBEDS})`, headers: [{ key: "Content-Security-Policy", value: "frame-ancestors *" }] },
+    ];
+  },
   turbopack: { resolveAlias: swaps },
   webpack(config) {
     for (const [from, to] of Object.entries(swaps)) config.resolve.alias[from] = path.resolve(to);

@@ -42,6 +42,12 @@ describe("following a part", () => {
     expect(followOf("menu", plain, true)).toBe("close");
   });
 
+  it("always opens a new tab in a drawing embedded on another site (#75), never the frame", () => {
+    expect(followOf("/acme/shopping#list", plain, false, true)).toEqual({ to: "/acme/shopping#list", newTab: true });
+    expect(followOf("menu", plain, false, true)).toBe("menu");
+    expect(followOf(null, plain, false, true)).toBeNull();
+  });
+
   it("does nothing on a part that leads nowhere", () => {
     expect(followOf(destination(hidden), plain, false)).toBeNull();
   });

@@ -32,6 +32,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 | Systems | AWML 0.6 has no system file (chrismdp/awml#94): a system is several workflows given to the engine together. The registry keeps a system as a thing of its own at `/{owner}/systems/{slug}`, pushed, versioned and owned as a platform is, each version a title, a Markdown description and its members as `owner/slug`. Members follow their latest version; a version records only which workflows are in it. Another owner's public workflow may be a member, read-only: to change one, fork it and | Systems | AWML 0.6 has no system file (chrismdp/awml#94): a system is several workflows given to the engine together. The registry keeps a system as a thing of its own at `/{owner}/systems/{slug}`, pushed, versioned and owned as a platform is, each version a title, a Markdown description and its members as `owner/slug`. Members follow their latest version; a version records only which workflows are in it. Another owner's public workflow may be a member, read-only: to change one, fork it and put the fork in. What a system may hold is judged by what its owner may see, as refs are: a person's system may hold their organisations' private workflows, and an organisation's only its own and public ones. A public system may have private members, which a viewer who may not see them gets only counted, as "1 private workflow", and every tab leaves out. Each member's page lists the systems it is in, for each the viewer may see (see "Systems"). Decided 2026-10-27 (issue #50). |
 | Drawings' font | A drawing's text is set in Inter. The registry serves Inter itself, as a WOFF2 under the SIL Open Font License, so a drawing looks the same in every browser. Decided 2026-10-22. The server sizes a drawing's boxes and breaks its labels into lines by Inter's widths, in `src/components/flow/inter-widths.ts`, which `scripts/inter-widths.mjs` measures from the font in Chrome. Decided 2026-10-27 (issue #62). |
 | Drawings | The registry draws a workflow and a system's map its own way, not as Mermaid draws them: the graph is read back from the engine's Mermaid text, laid out on the server with ELK and kept, sent to the page as positions only, shown as an SVG that needs no scripts and then taken over by React Flow, so a reader can drag its parts, and laid out again in the browser by a force-directed layout of the same graph, which starts from the server's (#78); Flow only (#51) is a switch; a part's notes are behind an icon (#60); a workflow's box on a system's map opens its page (#61). A dragged layout is never kept. See "Drawings". Decided 2026-10-27 (issue #62); the force-directed layout became the only one once the page runs on 2026-10-27 (issue #78). |
+| Embedding | A public workflow's drawing, or a public system's map, can be shown on another site in an iframe, at its own `/embed` address: the drawing alone, every link opening a new tab, worked out for nobody, so it reads no session and a private item is a 404 to everyone. Only those addresses may be framed by another site; every other page sends `frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN`. See "Embedding". Decided 2026-10-27 (issue #75). |
 | Moving between a workflow's tabs | A workflow page's tabs, and its platform view's choice of implementation, are Next.js links. They work as plain links in a browser that runs no scripts; otherwise a click on one is a client navigation that keeps the scroll position, so only the new tab is fetched and React Flow stays loaded. A tab isn't fetched before it is clicked: with no `loading.tsx` and no partial prerendering, Next's default prefetch asks only for the route's shape, so no tab is rendered for a viewer, and no private view recorded, until they open it. A drawing tab's drawing comes laid out with the page, as an SVG, so it shows at once, with nothing to wait for; two drawings on one page each get their own element ids. On the server, only the security and platform views draw. The engine starts at the beginning of a page's request, so its first start overlaps the database reads. Each running server or Worker remembers the engine's answers for the files it was given, up to 200 of each kind of answer, so the same files are worked out once; an answer is found again only from the same files, and a refs check's files include the latest versions of the workflows its refs name, so a viewer only ever gets back what the files they may see give. What a page reads that doesn't depend on another read is read at once. Decided 2026-10-27 (issue #54). |
 
 ## What v1 does
@@ -47,6 +48,7 @@ This file records what the registry does and the decisions behind it. AWML itsel
 - **Forks of public workflows.** Added after v1, on 2026-10-25 (see "Forks").
 - **References between workflows.** Added after v1, on 2026-10-27 (see "References between workflows").
 - **Systems: several workflows seen together.** Added after v1, on 2026-10-27 (see "Systems").
+- **Drawings embedded on other sites.** Added after v1, on 2026-10-27 (see "Embedding").
 
 ## Drawings
 
@@ -108,6 +110,8 @@ Platforms have a namespace of their own, under `/{owner}/platforms` and `/api/v1
 | `/{owner}/{slug}/yaml` | The latest version's file as text, `workflow.yaml`, full width with a Copy button and a Download link. The page keeps its header, with the version that opens the list of versions, and its tabs, and shows nothing generated: no drawing, no summary, no Change it box |
 | `/{owner}/{slug}/checks` | The latest version's checks (see "Checks"), after its References, when its file has refs (see "References between workflows"). Its tab, after YAML, carries a tick when no check failed, or the number of mistakes |
 | `/{owner}/{slug}/v/{n}`, `/{owner}/{slug}/v/{n}/security`, `/platform`, `/platform/{implementation}`, `/yaml`, `/checks` | One version, the same ways |
+| `/{owner}/{slug}/embed` | The latest version's drawing alone, to show on another site in an iframe, with a link to the workflow's page in its corner (see "Embedding"). `?view=platform`, `&implementation={id}` and `?flow=1` choose what it shows. The same 404 for a private workflow as a missing one, to everyone. Added on 2026-10-27 |
+| `/{owner}/{slug}/v/{n}/embed` | One version's drawing, fixed, the same way |
 | `/{owner}/{slug}?view={view}`, `/{owner}/{slug}/v/{n}?view={view}` | Where the views were. Redirect permanently (308) to the view's own address, such as `/{owner}/{slug}/platform`, whether or not the workflow is there, so the redirect tells nobody anything |
 | `/{owner}/{slug}/v/{n}/workflow.yaml` | The version's file as YAML |
 | `/{org}/inventory` | The organisation's inventory, for members |
@@ -132,6 +136,7 @@ Platforms have a namespace of their own, under `/{owner}/platforms` and `/api/v1
 | `/{owner}/systems/{slug}` | A system's latest version (see "Systems"), under a header of `{owner} / systems / {slug}`, its title, "System", public or private and the version, which opens the list of versions as a workflow's does, and its description rendered from Markdown, any raw HTML in it shown as text. Its first tab, Map, draws the map of its members. Beside it, "Workflows", its members. 404 to anyone who may not see it. Added on 2026-10-27 |
 | `/{owner}/systems/{slug}/checks`, `/who-waits`, `/where-it-runs` | The latest version's other tabs: Checks, Who waits and Where it runs (see "Systems") |
 | `/{owner}/systems/{slug}/v/{n}`, and `/checks`, `/who-waits`, `/where-it-runs` under it | One version, the same ways. Its members are still the workflows' latest versions |
+| `/{owner}/systems/{slug}/embed` | The latest version's map alone, to show on another site in an iframe, as someone signed out sees it, with a link to the system's page in its corner (see "Embedding"). `?flow=1` as for a workflow. The same 404 for a private system as a missing one, to everyone. Added on 2026-10-27 |
 | `POST /api/v1/{owner}/systems/{slug}/versions` | Push a system version. Body JSON `{"title": "...", "description": "<markdown>"?, "members": ["owner/slug", ...], "visibility": "public"\|"private"?}`. The first push makes the system and sets its visibility (default public). Returns 201 with `{owner, slug, number, url}`, `url` being the version's page, `/{owner}/systems/{slug}/v/{n}`, or 422 with `{errors: [...]}` (see "Systems"). Added on 2026-10-27 |
 | `/platforms/{owner}/{slug}`, its tabs, versions and files | Where a platform's pages were until 2026-10-22. Each redirects permanently (308) to the same address under `/{owner}/platforms/{slug}`, the files keeping the query, whether or not the platform is there, so the redirect tells nobody anything; the address it sends to makes its own access check |
 | `POST /api/v1/fit` | Where a workflow can run (see "Platforms and the fit") |
@@ -316,6 +321,38 @@ The registry has no admin role, so no boundary below is an admin's.
 | Invalid token | A revoked or made-up token gets the same 401 for a push to a private, a public and a missing system |
 | Roles | An organisation's owner and member both push its systems and see its private members; a push to an organisation's system, and opening a private one, are recorded in its audit log, and nothing of a person's |
 
+## Embedding
+
+Added on 2026-10-27 (issue #75), for a chrismdp.com post that embeds the Counting House workflows and their system. A public workflow's drawing, or a public system's map, can be shown on another site in an iframe:
+
+```html
+<iframe src="https://awml.io/chrismdp/counting-house-rung-1-off/embed"
+        width="700" height="450" style="border: 0" loading="lazy"
+        title="Fernwick Air: rebook after a missed connection, tier off"></iframe>
+```
+
+**Its address.** `/{owner}/{slug}/embed` draws the latest version, `/{owner}/{slug}/v/{n}/embed` one version, fixed, and `/{owner}/systems/{slug}/embed` the system's map. With no options a workflow's embed draws who may see each part. `?view=platform` draws where each part runs instead, for the implementation `&implementation={id}` names, or else the first, as the workflow's page picks it; an implementation the version doesn't have is a 404, as on the page. `?flow=1` starts with Flow only on. An owner's old name redirects to the same embed under their new one, with the same options.
+
+**What it shows.** The drawing alone, filling the frame, drawn as on the item's page (see "Drawings"), with pan, zoom, Fit and Flow only, the physics settling it as on the page. The frame is compact: its switches are smaller, so a small frame such as 600×400, or a phone's, keeps more of itself for the drawing (`COMPACT_INSET` in `src/components/viewport.ts`). The switches are in the top right and the zoom buttons in the bottom left. In the bottom right a link, `{title} · awml.io`, opens the item's page in a new tab; a self-hosted registry gives its own host. There is no site header, footer or navigation. The root layout takes its header from a chrome slot (`src/app/@chrome`), which is empty for the three embed pages, and the embed pages have a layout of their own. A workflow that isn't drawn says why in the frame, as its page does. A system some of whose members someone signed out may not see says "1 private workflow left out", and draws nothing of them.
+
+**Links.** Every link in an embed opens a new tab, never the frame: the corner link, a part linked to other workflows and its menu (#55), and a workflow's box on a map (#61).
+
+**Public only.** An embed reads no session or cookie. It is worked out for nobody, by the same code as the item's page (`src/server/embed.ts`), so it shows exactly what someone signed out sees there, a system's members and a part's links included. A private workflow or system gets the same 404 as a missing one, whoever is signed in.
+
+**Who may frame a page.** Only the embed pages may be framed by another site: they send `Content-Security-Policy: frame-ancestors *` and no `X-Frame-Options`. Every other address sends `Content-Security-Policy: frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN`, so sign-in and settings can't be clickjacked. The rules are in one place, `headers()` in `next.config.ts`, which OpenNext applies in the Worker from the routes manifest. One pattern gives the embed pages' addresses, and the other rule takes every path it doesn't match, so each address gets one set of headers or the other. The pattern never takes another page's address for an embed's. It leaves out an owner or a slug kept for other pages, such as `/api/auth/...`, `/platforms/...` and `/{owner}/platforms/...`, a name in another case, and anything after `embed`. Next's own server matches these headers with case, as the Worker does, because `experimental.caseSensitiveRoutes` is set.
+
+**Speed.** An embed is worked out as the item's page is, by the same reads and the same engine calls, so each server's kept engine answers and layouts serve both. It reads nothing the page doesn't, and is sent with the same headers for caching as the page.
+
+**On awml.io's home page.** The hosted repo can show the same drawing inline. It renders `EmbeddedDrawing` from `src/components/Embed.tsx` with the props `workflowEmbed(owner, slug, n, options)` or `systemEmbed(owner, slug, options)` give (`src/server/embed.ts`), inside an element with a height of its own.
+
+The registry has no admin role, so no boundary below is an admin's.
+
+| Boundary | Test |
+|---|---|
+| Positive | A public workflow's latest version, one version and a public system's map are drawn at their embed addresses, each option choosing its view (`test/embed.test.tsx`) |
+| Negative | A private workflow, its versions and a private system get the same 404 as missing ones, signed out and signed in as their owner, and the embed pages read no request headers at all; no address but an embed's may be framed by another site, sign-in, settings and a workflow's page included (`test/frame-headers.test.ts`) |
+| Cross-tenant | A public system with a private member is embedded as someone signed out sees it, even for the member's owner: "1 private workflow left out", and nothing of it in the page (`test/embed.test.tsx`) |
+
 ## The edition hook
 
 `src/edition.ts` exports one object the hosted repo replaces with its own file. In v1 it carries:
@@ -443,4 +480,4 @@ Added on 2026-10-22 for AWML 0.4. AWML 0.4 keeps each workflow in one file: the 
 
 ## Not in v1
 
-Comments and diffs between versions; live records and red lines sent in from running systems; SAML and Microsoft sign-in; teams inside an organisation; stars; any AI feature of the registry's own; billing (hosted repo); the marketing pages (hosted repo). The MCP server, platforms and the fit, forks, references between workflows and systems came after v1 (above).
+Comments and diffs between versions; live records and red lines sent in from running systems; SAML and Microsoft sign-in; teams inside an organisation; stars; any AI feature of the registry's own; billing (hosted repo); the marketing pages (hosted repo). The MCP server, platforms and the fit, forks, references between workflows, systems and embedding came after v1 (above).
