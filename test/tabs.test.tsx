@@ -1,68 +1,93 @@
 // Moving between a workflow page's tabs (issue #54): a tab is a client
 // navigation, so Mermaid stays loaded; a tab draws only what it shows; the
 // engine works out each answer once for the same files; and a diagram tab
-// never shows Mermaid's text before its drawing.
+// never shows Mermaid's text before its drawing, unless Mermaid can't draw it.
 import fs from "node:fs";
 import path from "node:path";
-import { isValidElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { engine } from "@/engine";
 import { memoise } from "@/engine/memo";
-import { VersionView } from "@/components/VersionView";
-import { clientHref, TAB_LINKS, TabNavigation } from "@/components/TabNavigation";
-import { loadVersion } from "@/app/[owner]/[slug]/load";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
 import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
 import WorkflowYamlPage from "@/app/[owner]/[slug]/yaml/page";
 import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
+import ImplementationPage from "@/app/[owner]/[slug]/platform/[implementation]/page";
 import { example, person, request } from "./helpers";
 import { renderPage } from "./pages";
+
+// Next's Link, standing in as the plain link it renders, saying how it was
+// asked to navigate: data-link for a client navigation, data-scroll for its
+// scroll, and data-prefetch only when the link asks for other than Next's
+// default prefetch.
+vi.mock("next/link", async () => {
+  const { createElement } = await import("react");
+  return {
+    default: ({ href, scroll, prefetch, ...rest }: { href: string; scroll?: boolean; prefetch?: boolean | null }) =>
+      createElement("a", {
+        ...rest,
+        href,
+        "data-link": "",
+        "data-scroll": String(scroll ?? true),
+        ...(prefetch === undefined ? {} : { "data-prefetch": String(prefetch) }),
+      }),
+  };
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function pushed() {
+const dinners = example("dinners.yaml");
+// The family's dinners with a second implementation, so the platform view
+// offers a choice of the two.
+const twoPlaces = `${dinners.trimEnd()}
+  away:
+    label: Away for the summer
+    blocks:
+      - { id: cloud, label: "A cloud server", parts: [${[...dinners.matchAll(/parts: \[([^\]]*)\]/g)].map((m) => m[1]).join(", ")}] }
+`;
+
+async function pushed(workflow = dinners) {
   const ana = await person("ana");
   const res = await request("POST", `/api/v1/${ana.username}/dinners/versions`, {
     as: { token: ana.token },
-    json: { workflow: example("dinners.yaml") },
+    json: { workflow },
   });
   expect(res.status).toBe(201);
   return ana.username;
 }
 
-// Every element in a tree of React elements, depth first.
-function* elements(node: ReactNode): Generator<{ type: unknown; props: Record<string, unknown> }> {
-  if (Array.isArray(node)) for (const n of node) yield* elements(n);
-  else if (isValidElement(node)) {
-    const el = node as unknown as { type: unknown; props: Record<string, unknown> };
-    yield el;
-    yield* elements(el.props.children as ReactNode);
-  }
-}
+// The opening tag of each tab, and of each choice of implementation.
+const tabLinks = (html: string) => [...html.matchAll(/<a [^>]*\brole="tab"[^>]*>/g)].map(([tag]) => tag);
+const implementationLinks = (html: string) =>
+  [...html.matchAll(/<a [^>]*\bclass="implementation"[^>]*>/g)].map(([tag]) => tag);
 
 describe("a workflow page's tabs", () => {
-  it("moves between the tabs by client navigation on every tab", async () => {
-    const owner = await pushed();
-    for (const asked of [undefined, "platform", "yaml", "checks"] as const) {
-      const tree = VersionView(await loadVersion(owner, "dinners", "latest", asked));
-      expect([...elements(tree)].filter((el) => el.type === TabNavigation)).toHaveLength(1);
+  it("moves between the tabs and the implementations by client navigation, keeping the scroll position", async () => {
+    const owner = await pushed(twoPlaces);
+    const params = { owner, slug: "dinners" };
+    const pages = [WorkflowPage, WorkflowPlatformPage, WorkflowYamlPage, WorkflowChecksPage];
+    const shown = [];
+    for (const page of pages) shown.push((await renderPage(page, params)).html);
+    shown.push((await renderPage(ImplementationPage, { ...params, implementation: "away" })).html);
+    for (const html of shown) {
+      expect(tabLinks(html)).toHaveLength(4);
+      for (const tag of tabLinks(html)) {
+        expect(tag).toContain('data-link=""');
+        expect(tag).toContain('data-scroll="false"');
+        // Next's default prefetch: with no loading.tsx and no partial
+        // prerendering, it fetches only the route's tree, so no tab is
+        // rendered for the viewer before they click it.
+        expect(tag).not.toContain("data-prefetch");
+      }
     }
-  });
-
-  it("takes a plain click on a tab or an implementation, and leaves any other click to the browser", () => {
-    const tab = { closest: (sel: string) => (sel === TAB_LINKS ? { getAttribute: () => "/ana/dinners/yaml" } : null) };
-    const click = (over: Partial<Parameters<typeof clientHref>[0]> = {}) =>
-      clientHref({ button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, target: tab as never, ...over });
-    expect(TAB_LINKS).toBe('.tabs a[role="tab"], nav.implementations a');
-    expect(click()).toBe("/ana/dinners/yaml");
-    for (const over of [{ button: 1 }, { metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { defaultPrevented: true }])
-      expect(click(over), JSON.stringify(over)).toBeUndefined();
-    expect(click({ target: { closest: () => null } as never })).toBeUndefined();
-    // Only an address on this site.
-    for (const href of ["//elsewhere.example/x", "https://elsewhere.example/x", "javascript:alert(1)"])
-      expect(click({ target: { closest: () => ({ getAttribute: () => href }) } as never }), href).toBeUndefined();
+    const choices = [shown[1], shown[4]].flatMap(implementationLinks);
+    expect(choices).toHaveLength(4);
+    for (const tag of choices) {
+      expect(tag).toContain('data-link=""');
+      expect(tag).toContain('data-scroll="false"');
+      expect(tag).not.toContain("data-prefetch");
+    }
   });
 
   it("draws only on the tabs that show a drawing", async () => {
@@ -93,9 +118,11 @@ describe("a workflow page's tabs", () => {
     expect(order.filter((o) => o === "start")).toHaveLength(1);
   });
 
-  it("hides Mermaid's text in the frame while it draws, when the browser runs scripts", () => {
+  it("hides Mermaid's text in the frame while it draws, when the browser runs scripts, unless Mermaid can't draw it", () => {
     const css = fs.readFileSync(path.join(__dirname, "../src/app/site.css"), "utf8");
-    expect(css).toContain("@media (scripting: enabled) { .panzoom:not(.drawn) .drawing pre { display: none; } }");
+    expect(css).toContain(
+      "@media (scripting: enabled) { .panzoom:not(.drawn) .drawing:not(.failed) pre { display: none; } }",
+    );
   });
 });
 

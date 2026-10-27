@@ -225,6 +225,35 @@ describe("security boundaries", () => {
     expect(asMo.html).toContain("&quot;Acme&#x27;s own label&quot; there");
   });
 
+  it("cross-tenant: the engine's kept answers for an insider's view never reach an outsider's view of the same tab", async () => {
+    const { ana, bea, mo } = await world();
+    // Beta's plan refers to acme's private secret and to its public shopping,
+    // so everyone who may see the plan has it checked against shopping, and
+    // only someone in acme against the secret too. It is pushed before either,
+    // so the first time the engine checks it against them is Mo's view.
+    const plan = dinners("acme/secret#list", "Guess").replace(
+      "  - { id: plan,",
+      '  - { id: shop, kind: context, label: "Shopping list", ref: acme/shopping#list }\n  - { id: plan,',
+    );
+    await pushed("beta", "plan", { token: bea.token }, plan, "private");
+    await pushed("acme", "secret", { token: ana.token }, shopping("Acme's own label"), "private");
+    await pushed("acme", "shopping", { token: ana.token }, shopping(), "public");
+    // Mo, in acme and beta, views its Checks tab; then Bea, in beta only, the
+    // same tab of the same file; then Mo again.
+    const views = [];
+    for (const who of [mo, bea, mo]) views.push((await checksTab("beta", "plan", who)).html);
+    const [insider, outsider, insiderAgain] = views;
+    expect(outsider).toContain('<a href="/acme/shopping">acme/shopping</a>#list');
+    expect(outsider).toContain("a workflow you can&#x27;t see");
+    expect(outsider).not.toContain("acme/secret");
+    expect(outsider).not.toContain("Acme&#x27;s own label");
+    expect(outsider).not.toMatch(/href="\/acme\/secret/);
+    for (const html of [insider, insiderAgain]) {
+      expect(html).toContain('<a href="/acme/secret">acme/secret</a>#list');
+      expect(html).toContain("&quot;Acme&#x27;s own label&quot; there");
+    }
+  });
+
   it("cross-tenant: Referred to by never lists or counts a referrer the viewer can't see", async () => {
     const { ana, bea, nell } = await world();
     await pushed("acme", "shopping", { token: ana.token }, shopping(), "public");

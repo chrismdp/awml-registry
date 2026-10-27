@@ -40,8 +40,13 @@ export async function loadVersion(
   asked?: PageView,
   implementation?: string,
 ): Promise<VersionViewProps> {
-  // The engine starts, the first time, while the database is read. Should it
-  // fail, the first call that needs it says so.
+  // The engine starts, the first time, while the database is read; should it
+  // fail, the first call that needs it says so. The start isn't awaited, so a
+  // later request may await it after this one has ended. On a Worker that is
+  // safe only because it uses no timer or I/O of this request, which workerd
+  // would cancel with the request: the module comes compiled, and Go sets
+  // AWML's functions before its run returns. If it ever needs either, pass it
+  // to getCloudflareContext().ctx.waitUntil.
   engine.start().catch(() => {});
   const { db, viewer } = await pageContext();
   const v = await readVersion(db, viewer, owner, slug, n === "latest" ? "latest" : n);
@@ -95,8 +100,8 @@ export async function loadVersion(
   // workflow its refs name that the viewer may see. The file still checks
   // alone, so whether it is drawn goes by its checks alone.
   //
-  // What the page reads besides the version doesn't depend on itself, so it
-  // is read at once rather than one after another.
+  // The reads besides the version don't depend on each other, so they run at
+  // once rather than one after another.
   const workflowRead = workflow ? readFile("workflow") : undefined;
   const [refs, forks, referredBy, organisations] = await Promise.all([
     workflowRead ? refsAsSeen(db, viewer, v.owner, v.slug, workflowRead) : { shown: [], given: [] },
