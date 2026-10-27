@@ -11,12 +11,12 @@ import {
   boxText,
   containers,
   depths,
+  headHeight,
+  headWidth,
   lineLabel,
   partText,
   SCOPE_PAD,
-  SCOPE_TITLE,
-  scopeTitle,
-  titleWidth,
+  scopeHeading,
   type Drawing,
   type Drawings,
   type Undrawn,
@@ -69,6 +69,27 @@ const OPTIONS = {
   "elk.layered.edgeLabels.sideSelection": "SMART_DOWN",
 };
 
+// Each scope's heading, its name and who it is for (#67), with who it is for
+// broken into lines that fit the least room what the scope holds leaves:
+// the width of the widest part, box or scope in it, however ELK lays them
+// out. Each scope's is worked out once, from the deepest up.
+function headings(g: Graph, holding: Set<string>, widthOf: (id: string) => number) {
+  const depth = depths(g);
+  const room = new Map<string, number>();
+  const fits = (scope: string | undefined, width: number) => {
+    if (scope !== undefined) room.set(scope, Math.max(room.get(scope) ?? 0, width));
+  };
+  for (const p of g.parts) fits(p.scope, widthOf(p.id));
+  for (const s of g.scopes) if (!holding.has(s.id)) fits(s.scope, widthOf(s.id));
+  const heading = new Map<string, ReturnType<typeof scopeHeading>>();
+  for (const s of g.scopes.filter((s) => holding.has(s.id)).sort((a, b) => depth.get(b.id)! - depth.get(a.id)!)) {
+    const h = scopeHeading(s, room.get(s.id) ?? 0);
+    heading.set(s.id, h);
+    fits(s.scope, Math.max((room.get(s.id) ?? 0) + 2 * SCOPE_PAD, headWidth(h)));
+  }
+  return (s: Graph["scopes"][number]) => heading.get(s.id) ?? scopeHeading(s, 0);
+}
+
 // Lays a graph out: every part's and scope's box, every line's route and its
 // label's, in the drawing's own coordinates.
 export async function layOutGraph(g: Graph): Promise<Drawing> {
@@ -77,6 +98,7 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
   const parts = new Map(g.parts.map((p) => [p.id, { part: p, ...partText(p) }]));
   const boxes = new Map(g.scopes.filter((s) => !holding.has(s.id)).map((s) => [s.id, boxText(s)]));
   const labels = new Map(g.lines.flatMap((l) => (l.label ? [[l.id, lineLabel(l.label)] as const] : [])));
+  const headingOf = headings(g, holding, (id) => parts.get(id)?.width ?? boxes.get(id)?.width ?? 0);
 
   const childrenOf = (scope: string | undefined): ElkNode[] => [
     ...g.scopes
@@ -84,13 +106,19 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
       .map((s): ElkNode => {
         const box = boxes.get(s.id);
         if (box) return { id: s.id, width: box.width, height: box.height };
+        const heading = headingOf(s);
         return {
           id: s.id,
           children: childrenOf(s.id),
           layoutOptions: {
-            "elk.padding": `[top=${SCOPE_TITLE.height + 6},left=${SCOPE_PAD},bottom=${SCOPE_PAD},right=${SCOPE_PAD}]`,
+            "elk.padding": `[top=${headHeight(heading.who)},left=${SCOPE_PAD},bottom=${SCOPE_PAD},right=${SCOPE_PAD}]`,
+            // At least as wide as its heading. Laying the scopes out nested
+            // together (INCLUDE_CHILDREN), top to bottom, ELK reads a scope's
+            // least size as (height, width), the other way round: given
+            // (width, 0), it made a scope as tall as its heading was wide,
+            // however little it held, and no wider (#67).
             "elk.nodeSize.constraints": "MINIMUM_SIZE",
-            "elk.nodeSize.minimum": `(${Math.ceil(titleWidth(s) + 2 * SCOPE_TITLE.left)}, 0)`,
+            "elk.nodeSize.minimum": `(0, ${headWidth(heading)})`,
           },
         };
       }),
@@ -139,7 +167,7 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
   });
   const drawnScopes: DrawnScope[] = g.scopes.map((s) => ({
     id: s.id,
-    ...scopeTitle(s),
+    ...headingOf(s),
     dashed: s.dashed,
     ...(s.fill && s.stroke ? { fill: s.fill, stroke: s.stroke } : {}),
     ...(s.scope ? { scope: s.scope } : {}),

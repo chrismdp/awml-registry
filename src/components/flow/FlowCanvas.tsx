@@ -7,11 +7,11 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
-  getBezierPath,
   useInternalNode,
   useNodesInitialized,
   useNodesState,
   useReactFlow,
+  useStore,
   type Edge,
   type EdgeProps,
   type InternalNode,
@@ -22,7 +22,7 @@ import {
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { PartLink } from "@/server/part-links";
-import type { Drawing, DrawnLine, DrawnPart, DrawnScope, Note, Point, Rect } from "./drawing";
+import { labelAt, squareRoute, type Drawing, type DrawnLine, type DrawnPart, type DrawnScope, type Note, type Point, type Rect } from "./drawing";
 import { LabelGraphic, LineGraphic, NoteIcon, NOTE_R, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import type { Body, Physics } from "./physics";
 import { Press } from "../links";
@@ -59,7 +59,7 @@ type Shared = {
 type PartData = Shared & { part: DrawnPart };
 type ScopeData = Shared & { scope: DrawnScope; hull?: boolean };
 type NotesData = Shared & { whole: Note[] };
-type LineData = { id: string; line: DrawnLine; physics: boolean; from?: Point; to?: Point };
+type LineData = { id: string; line: DrawnLine; from?: Point; to?: Point };
 type PartNode = Node<PartData, "part">;
 type ScopeNode = Node<ScopeData, "scope">;
 type NotesNode = Node<NotesData, "notes">;
@@ -181,29 +181,32 @@ function Canvas(p: FlowCanvasProps) {
     if (refit) fitted.current = true;
     if (mode === "layered") {
       setNodes(layeredNodes(drawing, shared));
-      setEdges(linesOf(drawing, p.id, false));
+      setEdges(linesOf(drawing, p.id));
       if (refit) requestAnimationFrame(() => !stopped && flow.setViewport(fitOf(drawing.box), { duration: 200 }));
     } else {
-      let started = false;
+      // Fitted to where the physics first puts the nodes, which React Flow
+      // may not have yet when the physics has started.
+      let first: Rect | undefined;
       import("./physics").then(async ({ startPhysics }) => {
         const sim = await startPhysics(
           drawing,
-          (bodies) => {
+          (bodies, hulls) => {
             if (stopped) return;
-            const next = physicsNodes(drawing, bodies, shared);
-            if (!started) setNodes(next);
-            else {
+            const next = physicsNodes(drawing, bodies, hulls, shared);
+            if (!first) {
+              first = boundsOf(next);
+              setNodes(next);
+            } else {
               const at = new Map(next.map((n) => [n.id, n]));
               setNodes((old) => old.map((n) => (at.has(n.id) ? { ...n, position: at.get(n.id)!.position, width: at.get(n.id)!.width, height: at.get(n.id)!.height } : n)));
             }
-            started = true;
           },
           () => {},
         );
         if (stopped) return sim.stop();
         physics.current = sim;
-        setEdges(linesOf(drawing, p.id, true));
-        requestAnimationFrame(() => !stopped && flow.setViewport(fitOf(boundsOf(flow.getNodes())), { duration: 200 }));
+        setEdges(linesOf(drawing, p.id));
+        requestAnimationFrame(() => !stopped && first && flow.setViewport(fitOf(first), { duration: 200 }));
       });
     }
     return () => {
@@ -386,28 +389,13 @@ export function layeredNodes(d: Drawing, shared: Shared): FlowNode[] {
 }
 
 // The nodes where the physics has them, with each scope that holds parts
-// drawn as a soft box round wherever they are, behind the lines: round the
-// boxes of the parts in it and of the scopes in it, with room above for its
-// title, so nested scopes nest.
-function physicsNodes(d: Drawing, bodies: Body[], shared: Shared): FlowNode[] {
+// drawn behind the lines as the soft box the physics keeps round wherever
+// they are (physics.ts), nested scopes inside.
+function physicsNodes(d: Drawing, bodies: Body[], boxes: Map<string, Rect>, shared: Shared): FlowNode[] {
   const parts = new Map(d.parts.map((part) => [part.id, part]));
   const scopes = new Map(d.scopes.map((s) => [s.id, s]));
-  const boxOf = new Map<string, Rect>();
-  const hull = (id: string): Rect | undefined => {
-    if (boxOf.has(id)) return boxOf.get(id);
-    const inside = [
-      ...bodies.filter((b) => b.scopes[0] === id).map((b) => ({ x: b.x! - b.width / 2, y: b.y! - b.height / 2, width: b.width, height: b.height })),
-      ...d.scopes.filter((s) => s.scope === id && s.holds).flatMap((s) => hull(s.id) ?? []),
-    ];
-    if (!inside.length) return undefined;
-    const x = Math.min(...inside.map((r) => r.x)) - 20;
-    const y = Math.min(...inside.map((r) => r.y)) - 50;
-    const box = { x, y, width: Math.max(...inside.map((r) => r.x + r.width)) + 20 - x, height: Math.max(...inside.map((r) => r.y + r.height)) + 20 - y };
-    boxOf.set(id, box);
-    return box;
-  };
   const hulls = d.scopes.flatMap((s): ScopeNode[] => {
-    const box = s.holds ? hull(s.id) : undefined;
+    const box = boxes.get(s.id);
     if (!box) return [];
     return [
       {
@@ -424,27 +412,26 @@ function physicsNodes(d: Drawing, bodies: Body[], shared: Shared): FlowNode[] {
       },
     ];
   });
-  const boxes = bodies.map((b): FlowNode => {
+  const moved = bodies.map((b): FlowNode => {
     const at = { position: { x: b.x! - b.width / 2, y: b.y! - b.height / 2 }, width: b.width, height: b.height };
     const part = parts.get(b.id);
     if (part) return { id: b.id, type: "part", ...at, data: { ...shared, part } };
     return { id: b.id, type: "scope", ...at, data: { ...shared, scope: scopes.get(b.id)! } };
   });
   // The notes of the whole drawing keep to its top-left corner.
-  const corner = bodies.length
-    ? { x: Math.min(...bodies.map((b) => b.x! - b.width / 2)), y: Math.min(...bodies.map((b) => b.y! - b.height / 2)) - 80 }
-    : undefined;
-  return [...hulls, ...boxes, ...notesNode(d, shared, corner)].map((n) => labelled(n, shared));
+  const all = [...boxes.values(), ...bodies.map((b) => ({ x: b.x! - b.width / 2, y: b.y! - b.height / 2 }))];
+  const corner = all.length ? { x: Math.min(...all.map((r) => r.x)) + 24, y: Math.min(...all.map((r) => r.y)) - 32 } : undefined;
+  return [...hulls, ...moved, ...notesNode(d, shared, corner)].map((n) => labelled(n, shared));
 }
 
-function linesOf(d: Drawing, id: string, physics: boolean): FlowEdge[] {
+function linesOf(d: Drawing, id: string): FlowEdge[] {
   const at = new Map([...d.parts, ...d.scopes].map((b) => [b.id, { x: b.x, y: b.y }]));
   return d.lines.map((line) => ({
     id: line.id,
     source: line.from,
     target: line.to,
     type: "line",
-    data: { id, line, physics, from: at.get(line.from), to: at.get(line.to) },
+    data: { id, line, from: at.get(line.from), to: at.get(line.to) },
   }));
 }
 
@@ -528,58 +515,50 @@ function rectOf(n: InternalNode) {
   return { x, y, width: n.measured.width ?? n.width ?? 0, height: n.measured.height ?? n.height ?? 0 };
 }
 
-// Where a line from the middle of `r` towards `to` leaves its edge, and which side.
-function edgePoint(r: Rect, to: Point) {
-  const cx = r.x + r.width / 2;
-  const cy = r.y + r.height / 2;
-  const dx = to.x - cx;
-  const dy = to.y - cy;
-  if (!dx && !dy) return { x: cx, y: cy, side: Position.Bottom };
-  const kx = dx ? r.width / 2 / Math.abs(dx) : Infinity;
-  const ky = dy ? r.height / 2 / Math.abs(dy) : Infinity;
-  const k = Math.min(kx, ky);
-  const side = kx < ky ? (dx > 0 ? Position.Right : Position.Left) : dy > 0 ? Position.Bottom : Position.Top;
-  return { x: cx + dx * k, y: cy + dy * k, side };
-}
-
 const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5;
 
-// A line: along the server's route while neither end has moved from where the
-// server put it (or both have moved together, as when their scope does), and
-// otherwise from edge to edge, so it follows a dragged part.
+// How a line runs between the boxes of its ends, `s` and `t`: along the
+// server's route while neither end has moved from where the server put it,
+// `from` and `to` (or both have moved together, as when their scope does),
+// and otherwise square, as the server's routes are (#67): out of the side of
+// one that faces the other, across halfway between them, and into the other,
+// its label as near halfway along as it can be without covering any box in
+// `clear`. So a line stays square when a part is dragged, in Layered and in
+// Physics, and the lines of the parts not dragged keep the server's routes.
+export function lineRoute(
+  line: DrawnLine,
+  s: Rect,
+  t: Rect,
+  from?: Point,
+  to?: Point,
+  clear: Rect[] = [],
+): { points: Point[]; label: Point; server: boolean } {
+  if (line.points.length >= 2 && from && to) {
+    const ds = { x: s.x - from.x, y: s.y - from.y };
+    if (near(ds, { x: t.x - to.x, y: t.y - to.y })) {
+      const moved = (p: Point) => ({ x: p.x + ds.x, y: p.y + ds.y });
+      const points = line.points.map(moved);
+      return { points, label: line.label ? moved(line.label) : points[Math.floor(points.length / 2)], server: true };
+    }
+  }
+  const route = squareRoute(s, t);
+  return { ...route, ...(line.label ? { label: labelAt(route.points, line.label, clear) } : {}), server: false };
+}
+
+// A line, routed by lineRoute, so it follows a dragged part; its label, once
+// it leaves the server's route, clear of every part and box.
 function LineView({ source, target, data }: EdgeProps<FlowEdge>) {
   const s = useInternalNode(source);
   const t = useInternalNode(target);
+  const nodes = useStore((st) => st.nodeLookup);
   if (!s || !t || !data) return null;
   const { line } = data;
-  const sr = rectOf(s);
-  const tr = rectOf(t);
-  let d: string | undefined;
-  let label: Point | undefined;
-  if (!data.physics && line.points.length >= 2 && data.from && data.to) {
-    const ds = { x: sr.x - data.from.x, y: sr.y - data.from.y };
-    const dt = { x: tr.x - data.to.x, y: tr.y - data.to.y };
-    if (near(ds, dt)) {
-      d = roundedPath(line.points.map((p) => ({ x: p.x + ds.x, y: p.y + ds.y })));
-      if (line.label) label = { x: line.label.x + ds.x, y: line.label.y + ds.y };
-    }
-  }
-  if (!d) {
-    const a = edgePoint(sr, { x: tr.x + tr.width / 2, y: tr.y + tr.height / 2 });
-    const b = edgePoint(tr, { x: sr.x + sr.width / 2, y: sr.y + sr.height / 2 });
-    if (data.physics) {
-      d = `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
-      label = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    } else {
-      const [path, lx, ly] = getBezierPath({ sourceX: a.x, sourceY: a.y, sourcePosition: a.side, targetX: b.x, targetY: b.y, targetPosition: b.side });
-      d = path;
-      label = { x: lx, y: ly };
-    }
-  }
+  const clear = line.label ? [...nodes.values()].filter((n) => n.type === "part" || (n.type === "scope" && !(n.data as ScopeData).scope.holds)).map(rectOf) : [];
+  const route = lineRoute(line, rectOf(s), rectOf(t), data.from, data.to, clear);
   return (
     <>
-      <LineGraphic id={data.id} line={line} d={d} />
-      {line.label && label && <LabelGraphic label={line.label} at={label} style={line.style} />}
+      <LineGraphic id={data.id} line={line} d={roundedPath(route.points)} />
+      {line.label && <LabelGraphic label={line.label} at={route.label} style={line.style} />}
     </>
   );
 }
