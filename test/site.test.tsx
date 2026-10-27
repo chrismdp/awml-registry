@@ -80,13 +80,11 @@ const text = (html: string) =>
 
 // The page's view tabs: where each goes, what it says, and whether it is the one on show.
 const tabs = (html: string) =>
-  [...html.matchAll(/<a role="tab" href="([^"]*)" aria-selected="(true|false)">(.*?)<\/a>/g)].map(
-    ([, href, selected, inner]) => ({
-      href,
-      label: text(inner).trim(),
-      selected: selected === "true",
-    }),
-  );
+  [...html.matchAll(/<a ([^>]*\brole="tab"[^>]*)>(.*?)<\/a>/g)].map(([, attrs, inner]) => ({
+    href: /\bhref="([^"]*)"/.exec(attrs)![1],
+    label: text(inner).trim(),
+    selected: attrs.includes('aria-selected="true"'),
+  }));
 
 // The page's header: owner / slug, title, visibility and version.
 const header = (html: string) => text(html.split('<section class="wf-head">')[1].split("</section>")[0]).trim();

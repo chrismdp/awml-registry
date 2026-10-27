@@ -66,6 +66,9 @@ export interface Engine {
   // The AWML it was built from: its release, as `git describe --tags` names
   // it, and its commit (vendor/awml/VERSION).
   version: { tag: string; commit: string };
+  // Starts the engine, if it hasn't started, and says when it has; a page
+  // starts it without waiting, so its first start overlaps reading the database.
+  start(): Promise<void>;
   // One file of an older AWML upgraded, or a 0.3 or 0.2 security view and its
   // platform view joined, as `awml convert` does. A file of the AWML the
   // engine reads comes back unchanged.

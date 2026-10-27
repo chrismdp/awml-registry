@@ -74,10 +74,12 @@ export function VersionView(p: VersionViewProps) {
   const s = p.summary;
   const { publishingLabels } = names(s);
   const tabs: PageView[] = [...p.views, "yaml", "checks"];
+  // Moving between the tabs is a client navigation that keeps the scroll
+  // position, so only the new tab is fetched and Mermaid stays loaded.
   const tablist = (
     <div role="tablist" aria-label="View" className="tabs">
       {tabs.map((view) => (
-        <a key={view} role="tab" href={`${p.address}/${view}`} aria-selected={view === p.shown}>
+        <Link key={view} role="tab" href={`${p.address}/${view}`} aria-selected={view === p.shown} scroll={false}>
           {TAB[view]}
           {view === "checks" &&
             (mistakes === 0 ? (
@@ -91,7 +93,7 @@ export function VersionView(p: VersionViewProps) {
                 <span className="hidden-label">{mistakes === 1 ? "mistake" : "mistakes"}</span>
               </>
             ))}
-        </a>
+        </Link>
       ))}
     </div>
   );
@@ -317,16 +319,17 @@ export function VersionView(p: VersionViewProps) {
 }
 
 // Which implementation the platform view draws: a choice when there is more
-// than one, or the name of the only one.
+// than one, moving between them as between the tabs, or the name of the only
+// one.
 function Implementations({ implementations }: { implementations: VersionViewProps["implementations"] }) {
   if (implementations.length === 0) return null;
   if (implementations.length === 1) return <p className="implementations">{implementations[0].label}</p>;
   return (
     <nav className="implementations" aria-label="Implementation">
       {implementations.map((i) => (
-        <a key={i.id} href={i.href} className="implementation" aria-current={i.shown ? "page" : undefined}>
+        <Link key={i.id} href={i.href} className="implementation" aria-current={i.shown ? "page" : undefined} scroll={false}>
           {i.label}
-        </a>
+        </Link>
       ))}
     </nav>
   );

@@ -37,7 +37,7 @@ const sizeOf = (el: HTMLElement | null): Size => ({ width: el?.clientWidth ?? 0,
 // A workflow's drawing in a frame the reader zooms and moves like a map: by
 // dragging, pinching, double-clicking or tapping, Ctrl or ⌘ with the wheel, the
 // keyboard, or the controls in its corner. Until Mermaid has drawn it, the frame
-// holds the text with no controls.
+// keeps its size with no controls, and holds the text only without scripts.
 export function PanZoom({ text }: { text: string }) {
   const frame = useRef<HTMLDivElement>(null);
   const drawing = useRef<Size>(undefined);

@@ -328,10 +328,10 @@ const recipeWithHtml = `# Install on the laptop
 
 // The page's tabs: where each goes, what it says, and whether it is on show.
 const tabsOf = (html: string) =>
-  [...html.matchAll(/<a role="tab" href="([^"]*)" aria-selected="(true|false)">(.*?)<\/a>/g)].map(([, href, selected, inner]) => ({
-    href,
+  [...html.matchAll(/<a ([^>]*\brole="tab"[^>]*)>(.*?)<\/a>/g)].map(([, attrs, inner]) => ({
+    href: /\bhref="([^"]*)"/.exec(attrs)![1],
     label: text(inner).trim(),
-    selected: selected === "true",
+    selected: attrs.includes('aria-selected="true"'),
   }));
 const headOf = (html: string) => text(html.split('<section class="wf-head">')[1].split("</section>")[0]).trim();
 const show = (P: Page<{ owner: string; slug: string }>, owner: string, slug: string, as?: Who) =>

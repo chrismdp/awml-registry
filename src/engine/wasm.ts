@@ -4,6 +4,7 @@
 import { createAWML, type AWML } from "../../vendor/awml/awml.js";
 import version from "../../vendor/awml/version.json";
 import { loadAwmlModule } from "@/engine/module";
+import { memoise } from "./memo";
 import type { Engine, Files, FitReport, ListedCheck, Named, Summary } from "./types";
 
 // One Go runtime per process or Worker isolate, started on first use.
@@ -38,9 +39,13 @@ async function listChecks(files: Named[]): Promise<ListedCheck[]> {
   });
 }
 
+// Each answer is worked out once for the same files (see ./memo.ts).
 export const wasmEngine: Engine = {
   version,
-  async convert(sources) {
+  async start() {
+    await awml();
+  },
+  convert: memoise(async (sources: string[]) => {
     const running = await awml();
     try {
       return { file: running.convert(sources), mistakes: [] };
@@ -48,27 +53,18 @@ export const wasmEngine: Engine = {
       const { message, converted } = e as Error & { converted?: string };
       return converted === undefined ? { error: message } : { file: converted, mistakes: message.split("\n") };
     }
-  },
-  async check(yaml) {
-    return (await awml()).check(yaml);
-  },
-  async warnings(yaml) {
-    return (await awml()).warnings(yaml);
-  },
-  async checks(yaml) {
-    return listChecks([{ file: "workflow.yaml", source: yaml }]);
-  },
-  async checksWith(file, others) {
-    return listChecks([file, ...others]);
-  },
-  async summarise(files: Files) {
+  }),
+  check: memoise(async (yaml: string) => (await awml()).check(yaml)),
+  warnings: memoise(async (yaml: string) => (await awml()).warnings(yaml)),
+  checks: memoise(async (yaml: string) => listChecks([{ file: "workflow.yaml", source: yaml }])),
+  checksWith: memoise(async (file: Named, others: Named[]) => listChecks([file, ...others])),
+  summarise: memoise(async (files: Files) => {
     const sources = [files.workflow, files.security, files.platform].filter((f): f is string => f !== undefined);
     return (await awml()).summary(sources) as Summary;
-  },
-  async draw(yaml, implementation = "") {
-    return (await awml()).draw(yaml, implementation);
-  },
-  async fit(workflow, descriptions, implementation = "") {
-    return JSON.parse((await awml()).fitJSON([workflow, ...descriptions], implementation)) as FitReport;
-  },
+  }),
+  draw: memoise(async (yaml: string, implementation = "") => (await awml()).draw(yaml, implementation)),
+  fit: memoise(
+    async (workflow: string, descriptions: string[], implementation = "") =>
+      JSON.parse((await awml()).fitJSON([workflow, ...descriptions], implementation)) as FitReport,
+  ),
 };

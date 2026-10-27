@@ -60,19 +60,19 @@ const unescape = (html: string) =>
   html.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
 
 const tabs = (html: string) =>
-  [...html.matchAll(/<a role="tab" href="([^"]*)" aria-selected="(true|false)">(.*?)<\/a>/g)].map(([, href, selected, inner]) => ({
-    href,
+  [...html.matchAll(/<a ([^>]*\brole="tab"[^>]*)>(.*?)<\/a>/g)].map(([, attrs, inner]) => ({
+    href: /\bhref="([^"]*)"/.exec(attrs)![1],
     label: text(inner).trim(),
-    selected: selected === "true",
+    selected: attrs.includes('aria-selected="true"'),
   }));
 
 // The choice of implementation on the platform tab: where each goes, its
 // label, and whether it is the one drawn.
 const choice = (html: string) =>
-  [...html.matchAll(/<a href="([^"]*)" class="implementation"(?: aria-current="page")?>(.*?)<\/a>/g)].map(([whole, href, inner]) => ({
-    href,
+  [...html.matchAll(/<a ([^>]*\bclass="implementation"[^>]*)>(.*?)<\/a>/g)].map(([, attrs, inner]) => ({
+    href: /\bhref="([^"]*)"/.exec(attrs)![1],
     label: text(inner).trim(),
-    current: whole.includes('aria-current="page"'),
+    current: attrs.includes('aria-current="page"'),
   }));
 
 const files = (html: string) =>

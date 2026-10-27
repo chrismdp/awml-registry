@@ -360,18 +360,20 @@ export async function forksOf(db: Db, viewer: Viewer, ownerSlug: string, slug: s
   const found = await readable(db, viewer, ownerSlug, slug);
   if (!found) return null;
   const where = and(eq(version.workflowId, found.workflow.id), await seenBy(db, viewer));
-  const [{ total }] = await db
-    .select({ total: count() })
-    .from(workflow)
-    .innerJoin(version, eq(version.id, workflow.forkedFrom))
-    .where(where);
-  const forks = await db
-    .select({ owner: ownerSlugSql, slug: workflow.slug, title: workflow.title, visibility: workflow.visibility, number: version.number })
-    .from(workflow)
-    .innerJoin(version, eq(version.id, workflow.forkedFrom))
-    .where(where)
-    .orderBy(desc(workflow.createdAt), desc(sql`${workflow}.rowid`))
-    .limit(limit);
+  const [[{ total }], forks] = await Promise.all([
+    db
+      .select({ total: count() })
+      .from(workflow)
+      .innerJoin(version, eq(version.id, workflow.forkedFrom))
+      .where(where),
+    db
+      .select({ owner: ownerSlugSql, slug: workflow.slug, title: workflow.title, visibility: workflow.visibility, number: version.number })
+      .from(workflow)
+      .innerJoin(version, eq(version.id, workflow.forkedFrom))
+      .where(where)
+      .orderBy(desc(workflow.createdAt), desc(sql`${workflow}.rowid`))
+      .limit(limit),
+  ]);
   return { total, forks };
 }
 
@@ -428,23 +430,29 @@ export async function readVersion(
     if (!Number.isInteger(number)) return null;
     where = and(eq(version.workflowId, w.id), eq(version.number, number));
   }
-  const [v] = await db
-    .select({
-      number: version.number,
-      pushedAt: version.pushedAt,
-      pushedBy: user.username,
-      workflow: version.workflow,
-      security: version.security,
-      platform: version.platform,
-      check: version.check,
-      checks: version.checks,
-      summary: version.summary,
-    })
-    .from(version)
-    .innerJoin(user, eq(user.id, version.pushedBy))
-    .where(where)
-    .orderBy(desc(version.number))
-    .limit(1);
+  // The version, the list of versions and where it was forked from are read
+  // at once, as none depends on another.
+  const [[v], origin, versions] = await Promise.all([
+    db
+      .select({
+        number: version.number,
+        pushedAt: version.pushedAt,
+        pushedBy: user.username,
+        workflow: version.workflow,
+        security: version.security,
+        platform: version.platform,
+        check: version.check,
+        checks: version.checks,
+        summary: version.summary,
+      })
+      .from(version)
+      .innerJoin(user, eq(user.id, version.pushedBy))
+      .where(where)
+      .orderBy(desc(version.number))
+      .limit(1),
+    originOf(db, viewer, w.forkedFrom),
+    versionList(db, w.id),
+  ]);
   if (!v) return null;
   await notePrivateView(db, viewer, owner, w, `${owner.slug}/${w.slug} v${v.number}`);
   const files: Files = {};
@@ -464,8 +472,8 @@ export async function readVersion(
     check: v.check,
     checks: v.checks,
     summary: v.summary,
-    ...(await originOf(db, viewer, w.forkedFrom)),
-    versions: await versionList(db, w.id),
+    ...origin,
+    versions,
   };
 }
 
