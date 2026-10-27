@@ -4,7 +4,10 @@ to them unless they open a hole.
 
 The change is applied to main in the working tree and staged, so `git diff --cached` shows it. The
 patch itself is REVIEW_DIR/change.patch, with the pull request's title and description in
-REVIEW_DIR/pull-request.md. They say what the change means to do. Read REVIEW_DIR/REVIEW.md, which
+REVIEW_DIR/pull-request.md. They say what the change means to do. A binary image or font that a pull
+request's diff can't show is left unstaged; the workflow, not the author, lists it at the end of
+REVIEW_DIR/pull-request.md under "Binary files, changed but not shown in the patch". Read
+REVIEW_DIR/REVIEW.md, which
 says what failure looks like here, then AGENTS.md, and docs/SPEC.md for anything the change
 touches, above all its "Access" section.
 
