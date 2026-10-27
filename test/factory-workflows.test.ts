@@ -215,7 +215,7 @@ describe("Claude steps in every workflow", () => {
             .map((prior) => prior.run ?? "")
             .join("\n");
           const where = `${file} ${name}`;
-          expect(before, where).toContain("apt-get install -y bubblewrap");
+          expect(before, where).toContain("apt-get install -y bubblewrap socat");
           expect(before, where).toContain(
             "sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
           );
