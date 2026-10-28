@@ -200,6 +200,26 @@ describe("an embed's options, in its address", () => {
 });
 
 describe("a system's embed", () => {
+  it("says why it draws no map in the system page's own words", async () => {
+    const { ana } = await world();
+    // Nothing to draw for someone signed out: its one member is private.
+    await pushed("ana", "notes", { token: ana.token }, twoPlaces, "private");
+    await pushedSystem("ana", "home", { token: ana.token }, { title: "Home", members: ["ana/notes"] });
+    const none = "None of the workflows you can see in this system is drawn.";
+    expect((await renderPage(SystemPage, { owner: "ana", slug: "home" })).html).toContain(`<p class="cannot-draw">${none}</p>`);
+    expect((await embedded(SystemEmbed, { owner: "ana", slug: "home" })).html).toContain(`<p class="embed-message">${none}</p>`);
+    // A map AWML can't work out: Dinners' copy of the shopping list disagrees with Shopping's
+    // latest version.
+    await pushed("acme", "shopping", { token: ana.token }, twoPlaces);
+    await pushed("acme", "dinners", { token: ana.token }, referring);
+    await pushed("acme", "shopping", { token: ana.token }, twoPlaces.replace('label: "Shopping list"', 'label: "The list"'));
+    await pushedSystem("acme", "kitchen", { token: ana.token }, { title: "The kitchen", members: ["acme/shopping", "acme/dinners"] });
+    const page = await renderPage(SystemPage, { owner: "acme", slug: "kitchen" });
+    const why = /<p class="cannot-draw">(AWML can&#x27;t work this out for these workflows together: [^<]*) <a /.exec(page.html)?.[1];
+    expect(why).toBeDefined();
+    expect((await embedded(SystemEmbed, { owner: "acme", slug: "kitchen" })).html).toContain(`<p class="embed-message">${why}</p>`);
+  });
+
   it("draws the map of its members, with no site navigation, linking to the system's page from its corner", async () => {
     const { ana } = await world();
     await pushed("acme", "shopping", { token: ana.token }, twoPlaces);

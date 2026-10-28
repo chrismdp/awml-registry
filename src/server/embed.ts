@@ -3,6 +3,7 @@ import { versionProps } from "@/app/[owner]/[slug]/load";
 import { systemProps } from "@/app/[owner]/systems/[slug]/load";
 import { mistakesIn } from "@/components/Checks";
 import { undrawnText, type Drawings, type Undrawn } from "@/components/flow/drawing";
+import { NONE_DRAWN, notTogether } from "@/components/SystemView";
 import { count } from "@/components/words";
 import { getDb } from "@/db/client";
 import { engine } from "@/engine";
@@ -104,9 +105,7 @@ export async function systemEmbed(owner: string, slug: string, options: EmbedOpt
     title: p.title,
     href: p.address,
     host: host(),
-    ...(panel.error
-      ? { drawing: null, message: `AWML can't draw these workflows together: ${panel.error}` }
-      : drawn(panel.drawing, "map", "None of this system's workflows can be drawn here.")),
+    ...(panel.error ? { drawing: null, message: notTogether(panel.error) } : drawn(panel.drawing, "map", NONE_DRAWN)),
     links: panel.links ?? [],
     hrefs: panel.hrefs ?? {},
     hidden: p.hidden,

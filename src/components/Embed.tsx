@@ -7,9 +7,10 @@ import { count } from "./words";
 
 // A public workflow's drawing or a system's map, embedded on another site
 // (#75), or shown inline by awml.io's home page: the drawing alone, filling
-// whatever holds it, with pan, zoom, Fit and Flow only, in a compact frame, and a link to the item's page in its bottom right
-// corner. Every link in it opens a new tab, never the frame. Its props come
-// from workflowEmbed or systemEmbed (src/server/embed.ts).
+// whatever holds it, with pan, zoom, Fit and Flow only, in a compact frame,
+// and a link to the item's page in its bottom right corner. Every link in it
+// opens a new tab, never the frame. Its props come from workflowEmbed or
+// systemEmbed (src/server/embed.ts).
 export function EmbeddedDrawing(p: EmbedProps) {
   return (
     <div className="embed">
