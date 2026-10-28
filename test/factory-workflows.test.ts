@@ -2445,6 +2445,18 @@ ${permissionStub}`,
       for (const name of [".npmrc", ".yarnrc", "yarn.lock", ".env", ".claude"]) expect(made, name).not.toContain(name);
     });
 
+    // As the registry's first trial found: the sandbox's placeholders in a new .claude.
+    it.runIf(canRehearse)("makes the patch when the session left a .claude of placeholders", () => {
+      const { root, run } = patch((repo) => {
+        for (const file of [".claude/settings.json", ".claude/settings.local.json"]) put(join(repo, file), "");
+        put(join(repo, ".claude/.cc-writes"), "a record\n");
+        for (const dir of [".claude/agents", ".claude/commands", ".claude/hooks", ".claude/skills"]) mkdirSync(join(repo, dir), { recursive: true });
+      });
+      expect(run.failed, run.printed).toBe(false);
+      expect(left(root, "change/change.patch")).toContain("+Changed");
+      expect(left(root, "change/change.patch")).not.toContain(".claude");
+    });
+
     it.runIf(canRehearse).each([
       ["something in it", (repo: string) => put(join(repo, ".npmrc"), "registry=https://example.com/\n")],
       ["a link", (repo: string) => symlinkSync("/proc/self/environ", join(repo, ".npmrc"))],
@@ -4852,6 +4864,56 @@ describe("placeholders.sh", () => {
     expect(git(repo, "status", "--porcelain", "--ignored")).toBe("");
   });
 
+  // The sandbox and the permission system make placeholders inside .claude too, for its settings,
+  // agents, commands, hooks and skills, and Claude Code keeps its own .cc-writes there. A .claude
+  // that wasn't there before is said in full, each name escaped, and taken away: no change may
+  // carry .claude, and nothing on the host reads it.
+  it.runIf(canRehearse)("says what a new .claude holds, and takes it away", () => {
+    const { root, repo } = tree();
+    record(root, repo);
+    const before = listing(repo);
+    for (const file of [".claude/settings.json", ".claude/settings.local.json", ".claude/.cc-writes"]) put(join(repo, file), "");
+    put(join(repo, ".claude/.cc-writes"), "a record\n");
+    for (const dir of [".claude/agents", ".claude/commands", ".claude/hooks", ".claude/skills"]) mkdirSync(join(repo, dir), { recursive: true });
+    put(join(repo, ".claude/skills/x\n::warning::y/SKILL.md"), "A skill\n");
+    const run = clear(root, repo);
+    expect(run.failed, run.printed).toBe(false);
+    expect(listing(repo)).toEqual(before);
+    expect(run.printed).toContain("The session left these in .claude, which is taken away:");
+    expect(run.printed).toContain('".cc-writes 9"');
+    // No name can start a workflow command.
+    expect(run.printed).not.toMatch(/^::warning::/m);
+  });
+
+  it.runIf(canRehearse)("refuses a new .claude that's a link, and touches nothing it leads to", () => {
+    const { root, repo } = tree();
+    record(root, repo);
+    const outside = join(root, "outside");
+    put(join(outside, "keep.md"), "Kept\n");
+    symlinkSync(outside, join(repo, ".claude"));
+    expect(clear(root, repo).failed).toBe(true);
+    expect(readFileSync(join(outside, "keep.md"), "utf8")).toBe("Kept\n");
+  });
+
+  // The sandbox's own placeholders at the tree's top, beside the scrub's.
+  it.runIf(canRehearse)("takes away the sandbox's placeholders at the tree's top", () => {
+    const { root, repo } = tree();
+    record(root, repo);
+    const before = listing(repo);
+    for (const file of [".mcp.json", ".gitconfig", ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile", ".ripgreprc"]) put(join(repo, file), "");
+    for (const dir of [".vscode", ".idea"]) mkdirSync(join(repo, dir));
+    const run = clear(root, repo);
+    expect(run.failed, run.printed).toBe(false);
+    expect(listing(repo)).toEqual(before);
+  });
+
+  it.runIf(canRehearse).each([".mcp.json", ".gitconfig", ".bashrc", ".ripgreprc"])("refuses a new %s with something in it", (file) => {
+    const { root, repo } = tree();
+    record(root, repo);
+    put(join(repo, file), "something\n");
+    expect(clear(root, repo).failed).toBe(true);
+  });
+
   it.runIf(canRehearse)("leaves a protected path that was there before alone, empty or not", () => {
     const { root, repo } = tree();
     put(join(repo, ".npmrc"), "");
@@ -4888,7 +4950,8 @@ describe("placeholders.sh", () => {
       rmSync(join(repo, ".npmrc"));
       symlinkSync("/proc/self/environ", join(repo, ".npmrc"));
     }],
-    ["a folder with something in it", (repo: string) => put(join(repo, ".claude/commands/x.md"), "A command\n")],
+    // A new .claude is taken away whatever it holds, but no other placeholder folder may hold anything.
+    ["a folder with something in it", (repo: string) => put(join(repo, ".git/modules/x"), "A module\n")],
     ["a commondir that names another folder", (repo: string) => writeFileSync(join(repo, ".git/commondir"), "../other")],
     ["a fifo", (repo: string) => {
       rmSync(join(repo, ".gitmodules"));
