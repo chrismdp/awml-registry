@@ -1494,6 +1494,26 @@ describe("ci.yml", () => {
     });
   });
 
+  // The binaries neither review could read are one Nit, posted by the Bug review alone, so land
+  // counts it once.
+  it.runIf(canRehearse)("posts the unread binaries' Nit from the Bug review alone", () => {
+    let unreadNits = 0;
+    for (const name of ["Bug review", "Security review"]) {
+      const root = scratch();
+      put(join(root, "runner/main/post-findings.sh"), readFileSync(join(github, "post-findings.sh"), "utf8"));
+      put(join(root, "runner/main/scan-tokens.sh"), readFileSync(join(github, "scan-tokens.sh"), "utf8"));
+      put(join(root, "runner/sessions/review/out/f.json"), "[]");
+      const run = rehearse(stepWithId(jobs.review, "post").run ?? "", {
+        root,
+        env: { UNREAD: "2", FINDINGS: "f.json", REVIEW_NAME: name, GITHUB_STEP_SUMMARY: join(root, "summary.md") },
+      });
+      expect(run.failed, run.printed).toBe(false);
+      unreadNits += run.printed.split("\n").filter((line) => /^::warning title=Nit%3A The review could not read/.test(line)).length;
+    }
+    expect(unreadNits).toBe(1);
+    expect(stepWithId(jobs.review, "post").env?.REVIEW_NAME).toBe("${{ matrix.review.name }}");
+  });
+
   // A session's log is printed for the record, but nothing in it can start a workflow command and
   // add an annotation to the check.
   it("prints each session's log with workflow commands stopped", () => {
@@ -1870,6 +1890,16 @@ ${permissionStub}`,
     expect(allowed).not.toContain("Bash(npm ci:*)");
   });
 
+  // The patch is applied to the commit of main the branch started from, which main may have left
+  // behind, so the sessions mustn't take what they see for main as it is now.
+  it("tells the reviews and Classify which commit of main the change is applied to", () => {
+    for (const name of ["review-bugs-prompt.md", "review-security-prompt.md", "classify-prompt.md"]) {
+      const prompt = squash(readFileSync(join(github, name), "utf8"));
+      expect(prompt, name).toContain("applied to the commit of main the branch started from, which may be behind main");
+      expect(prompt, name).not.toContain("applied to main in the working tree");
+    }
+  });
+
   it("tells the fixer not to change the dependencies", () => {
     const prompt = squash(readFileSync(join(github, "fix-prompt.md"), "utf8"));
     expect(prompt).toContain("Don't edit `package.json` or `package-lock.json`");
@@ -2183,6 +2213,27 @@ describe("pull-request-body.sh", () => {
     expect(run.printed).toContain("as @​someone asked. &lt;!-- approve --> Closes `#9`.");
     expect(run.printed.trim().endsWith("Closes #7")).toBe(true);
     expect(run.printed).not.toMatch(/factory-build|digest/);
+  });
+
+  // GitHub shows &lt; literally inside code, so code is left as written, and only text outside it is
+  // escaped: there an HTML comment or a tag could hide the rest.
+  it.runIf(canRehearse)("leaves code as written, and escapes only what's outside it", () => {
+    const run = body({
+      "pull-request.md": [
+        "It types the list as `Array<string>`, and <!-- hides this --> no more.",
+        "```tsx",
+        'export const Page = () => <Main title="x" items={[] as Array<string>} />;',
+        "// @someone's note",
+        "```",
+        "A lone ` backtick doesn't open code, so <!-- this --> is escaped too.",
+      ].join("\n"),
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.printed).toContain("`Array<string>`");
+    expect(run.printed).toContain("&lt;!-- hides this -->");
+    expect(run.printed).toContain('export const Page = () => <Main title="x" items={[] as Array<string>} />;');
+    expect(run.printed).toContain("// @someone's note");
+    expect(run.printed).toContain("so &lt;!-- this --> is escaped too");
   });
 
   it.runIf(canRehearse)("caps the description's length", () => {

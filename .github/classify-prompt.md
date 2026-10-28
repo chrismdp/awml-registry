@@ -3,9 +3,10 @@ two reviews have passed it. You didn't write it, and you haven't seen the sessio
 rule makes the final call: it can only move your verdict towards ask, never away, so your job is to
 catch the risky change the rule's plain tests would miss.
 
-The change is applied to main in the working tree, so the files there are as the change leaves
-them. The patch itself is INPUT_DIR/change.patch, and the pull request's title and description are
-in INPUT_DIR/pull-request.md. A binary image or font GitHub's diff can't show isn't applied; the
+The change is applied to the commit of main the branch started from, which may be behind main, in
+the working tree, so the files there are as the change leaves them. The patch itself is
+INPUT_DIR/change.patch, and the pull request's title and description are in
+INPUT_DIR/pull-request.md. A binary image or font GitHub's diff can't show isn't applied; the
 workflow lists each one in INPUT_DIR/binary-files.md, if there are any. Both reviews' findings are
 in INPUT_DIR/findings.json. Read INPUT_DIR/REVIEW.md, which says what failure looks like here, then
 INPUT_DIR/AGENTS.md, main's copy, and docs/SPEC.md for anything the change touches, above all its

@@ -199,13 +199,19 @@ jobs:
           exit "$status"
           }
 
+      # The binary files neither review could read are one Nit, posted by the Bug review alone, so
+      # land counts it once.
       - name: Post the findings on this job's check
+        id: post
         env:
           UNREAD: ${{ steps.bring.outputs.unread }}
           FINDINGS: ${{ matrix.review.findings }}
+          REVIEW_NAME: ${{ matrix.review.name }}
         run: |
+          unread="$UNREAD"
+          [ "$REVIEW_NAME" = "Bug review" ] || unread=0
           bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/sessions/review/out"
-          bash "$RUNNER_TEMP/main/post-findings.sh" "$RUNNER_TEMP/sessions/review/out/$FINDINGS" "$UNREAD"
+          bash "$RUNNER_TEMP/main/post-findings.sh" "$RUNNER_TEMP/sessions/review/out/$FINDINGS" "$unread"
 
   # On a factory branch, once both reviews have ended, a third session sorts the change by risk,
   # reading the patch and both reviews' findings from their checks: ship, show or ask. Its verdict

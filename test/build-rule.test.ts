@@ -121,7 +121,7 @@ describe("judging a staged change", () => {
     ["yarn.lock", "ask"],
     ["src/package.json.ts", "ship"],
     ["src/my-node_modules/a.js", "ship"],
-  ] as const)("asks about %s anywhere npm reads it", (path, verdict) => {
+  ] as const)("gives %s the verdict %s, wherever npm reads it", (path, verdict) => {
     const repo = newRepo();
     stage(repo, path, "changed\n");
 
@@ -166,7 +166,7 @@ describe("judging a staged change", () => {
     ["a fixture", "test/fixtures/flow/a.mmd", "ask"],
     ["a test", "test/thing.test.ts", "ship"],
     ["a file elsewhere", "src/helpers.ts", "ship"],
-  ] as const)("judges %s under the test folder", (_, path, verdict) => {
+  ] as const)("gives %s, %s, the verdict %s under the test folder", (_, path, verdict) => {
     const repo = newRepo();
     stage(repo, path, "changed\n");
 

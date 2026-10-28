@@ -20,11 +20,24 @@ set -euo pipefail
 
 case "$ISSUE" in ''|*[!0-9]*) echo "The issue must be a number: $ISSUE" >&2; exit 1 ;; esac
 
-# Claude's text is escaped, so it can't hide the rest or mention anyone, capped, and closes no issue:
-# the build's own Closes #n is the last line, which this script writes.
+# Claude's text is capped and closes no issue: the build's own Closes #n is the last line, which this
+# script writes. Outside code it's escaped, so an HTML comment or a tag can't hide the rest and no
+# one is mentioned. Code is left as written, since GitHub shows it literally and would show &lt; as
+# such: a fenced block, or a span between backticks on a line whose backticks pair up. A line with a
+# lone backtick opens no span, so all of it is escaped.
 here="$(dirname "$0")"
 unclose() {
-  jq -jRs '.[0:60000] | gsub("<"; "&lt;") | gsub("@(?=[A-Za-z0-9])"; "@\u200b")' | bash "$here/unclose.sh"
+  jq -jRs '
+    def outside: gsub("<"; "&lt;") | gsub("@(?=[A-Za-z0-9])"; "@\u200b");
+    def spans: [splits("`")] as $parts
+      | if ($parts | length) % 2 == 0 then outside
+        else [$parts | to_entries[] | if .key % 2 == 0 then (.value | outside) else .value end] | join("`") end;
+    .[0:60000] | split("\n")
+    | reduce .[] as $line ({fence: false, out: []};
+        if ($line | test("^\\s*(```|~~~)")) then .fence = (.fence | not) | .out += [$line]
+        elif .fence then .out += [$line]
+        else .out += [$line | spans] end)
+    | .out | join("\n")' | bash "$here/unclose.sh"
 }
 if [ -s "$CHANGE_DIR/pull-request.md" ]; then
   unclose < "$CHANGE_DIR/pull-request.md"
