@@ -954,6 +954,24 @@ describe("the factory's workflows", () => {
       expect(readWorkflow(file).defaults, file).toEqual({ run: { shell: "bash" } });
   });
 
+  // The rebase's sessions only resolve conflicts, so they run on Sonnet; the reviews, Classify,
+  // the build and the fixer run on Opus.
+  it("run the rebase's sessions on Sonnet and every other session on Opus", () => {
+    const models: string[] = [];
+    for (const [file, id, job] of everyJob())
+      for (const each of steps(job))
+        for (const [, model] of runOf(each).matchAll(/\bclaude -p "\$prompt" --model (\S+)/g)) models.push(`${file} ${id}: ${model}`);
+    expect(models.sort()).toEqual([
+      "build.yml draft: opus",
+      "ci.yml classify: opus",
+      "ci.yml review: opus",
+      "fix.yml fix: opus",
+      "resolve.yml draft: sonnet",
+      "resolve.yml draft: sonnet",
+      "resolve.yml draft: sonnet",
+    ]);
+  });
+
   it("pin every action to a commit", () => {
     for (const [file, id, job] of everyJob()) {
       if (file === "notify-awml-io.yml") continue;
