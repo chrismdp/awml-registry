@@ -360,7 +360,9 @@ jobs:
 
       # Claude Code holds the maintainer's login token for its own calls and strips it, with any
       # other credential, from the commands it runs, which run in its sandbox: they see none of
-      # Claude Code's own process, reach no network, and can't write git's files. Under the scrub,
+      # Claude Code's own process and reach no network. They can write .git, apart from what the
+      # scrub guards, its config and hooks among them, so git after the session checks the rest and
+      # takes away the scrub's placeholders before it reads the tree. Under the scrub,
       # Claude Code forces --permission-mode default, so every tool it may use is named. It loads
       # only the settings claude-settings.sh writes in a home of its own, and no MCP servers, since
       # Claude Code picks up a settings file or a .mcp.json that appears in its tree while it runs.
@@ -404,10 +406,11 @@ jobs:
 
       # The pages are pictured unless Claude named none: no pictures.json, or an empty list. A
       # pictures.json that isn't a list still starts the pictures job, which says what is wrong.
-      # Git reads the tree the session wrote, so it runs nothing the session's commands could have
-      # set: the workspace and its .git must be the ones the session started in, git's config byte
-      # for byte as it was, kept where the session couldn't write, and no repository nested below
-      # the top; no global or system config is read, and no hook, fsmonitor, external diff or text
+      # Git reads the tree the session wrote, .git included, so it runs nothing the session's
+      # commands could have set: the workspace and its .git must be the ones the session started in,
+      # the scrub's placeholders taken away, git's config byte for byte as it was, kept where the
+      # session couldn't write, no grafts file and no repository nested below the top; no global or
+      # system config or replace ref is read, and no hook, fsmonitor, external diff or text
       # conversion runs.
       - name: Make the patch
         id: patch

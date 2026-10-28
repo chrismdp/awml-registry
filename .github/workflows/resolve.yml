@@ -162,7 +162,9 @@ jobs:
   # under $RUNNER_TEMP/pr, made before any session starts: a clone of the branch outside the
   # workspace, its rebase started there, its inputs, made read-only, and its sessions' output;
   # what the host reads after a session is kept in the host-only folder instead. A
-  # session only edits the conflicted files and writes its note; Claude Code's scrub denies its
+  # session only edits the conflicted files and writes its note; its commands can write the clone's
+  # .git, apart from its rebase state and what the scrub guards, so the continue checks the clone
+  # before git reads it. Claude Code's scrub denies its
   # commands writes to scripts/, package.json and the lockfile, so git, which writes them when it
   # replays a commit, never runs in a session. Between sessions a step that holds no Claude token
   # adds what was resolved and continues each rebase with git, and a commit that conflicts in turn
