@@ -1,0 +1,524 @@
+# The factory's fixer, drawn in .github/drawings/fix-review-findings.yaml (A failed review is
+# fixed). When CI finishes on a pull request with the tests passed and Bug review or Security review
+# failed, because a review found something Important, a fresh Claude session fixes every finding of
+# both reviews, Nits included, and the repository's app pushes the fix to the pull request's branch
+# as one commit. It reads only GitHub and git: CI's run and its checks, the pull request, and the fix
+# commits already on the branch, which are its tries, counted by the Factory-Fix line each one's
+# message carries, which survives a rebase. It runs no checks of its own: the push starts CI, which
+# judges the fix as it judges every commit. A fix that breaks a test wakes retry.yml instead.
+#
+# It gives up with a new comment after two fix commits on a branch, or when the session makes no
+# fix. It exits quietly if the pull request has closed or anyone has pushed since the review. A fix
+# that touches .github/ or Claude Code's own files is offered, not pushed: a new comment gives the
+# commands to download and apply the run's artifact, kept 30 days. Builds and landing don't call it
+# or wait for it, so a person's pull request is fixed the same way as a build's. Closes
+# chrismdp/awml-registry#82.
+name: Fix review findings
+
+# GitHub runs this from main's copy. The decide job reads with a token that can't write. The fix job
+# holds the Claude token and a token that only reads, checks out the head as data, and runs nothing
+# of its own beside the secret: the session runs every command, tests included, in its sandbox. The
+# write job runs nothing from the change: it applies the fix with git, checked against the digest
+# the fix job gave, and the app's token, minted there for this repository alone, pushes it. Comments
+# use the Actions token. It needs what build.yml lists.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+# No group for the run, or for decide, which only reads and leaves quietly: GitHub keeps one run
+# waiting in a group and cancels it for a newer one whatever cancel-in-progress says, so a run
+# started by someone else's pull request from a branch of the same name could otherwise cancel or
+# displace the real one. The fix and write jobs, which act once decide has chosen the pull request,
+# each have a group of their own keyed on its number, and nothing cancels them. A run whose head
+# has moved posts nothing and pushes nothing, by the lease at the reviewed commit.
+
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      pull-requests: read
+    outputs:
+      outcome: ${{ steps.ready.outputs.outcome }}
+      pr: ${{ steps.ready.outputs.pr }}
+      head_sha: ${{ steps.ready.outputs.head_sha }}
+      branch: ${{ steps.ready.outputs.branch }}
+      failed: ${{ steps.ready.outputs.failed }}
+    steps:
+      # main, to read the branch against with git. Nothing from it runs.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Only a pull_request run from a branch of this repository, whose tests all passed and one of
+      # whose reviews failed. The pull request must be open with the reviewed commit as its head.
+      # Only its outcome, the pull request's number, the reviewed commit and the branch pass on.
+      - name: Check the pull request is open at the reviewed commit, and count its fix commits
+        id: ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          CI_EVENT: ${{ github.event.workflow_run.event }}
+          CI_RUN: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          # Whether GitHub says someone may write to the repository: their role or its base permission is
+          # exactly admin, maintain or write, so a custom role counts only by what it grants.
+          may_write() {
+            [[ "$1" =~ ^[A-Za-z0-9-]{1,39}$ ]] || return 1
+            local role="" permission=""
+            IFS=$'\t' read -r role permission < <(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq '[.role_name // "", .permission // ""] | @tsv' || true) || true
+            case "$role" in admin|maintain|write) return 0 ;; esac
+            case "$permission" in admin|maintain|write) return 0 ;; esac
+            return 1
+          }
+          leave() { echo "$1"; echo "outcome=none" >> "$GITHUB_OUTPUT"; exit 0; }
+          [ "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ] && [ "$CI_EVENT" = pull_request ] ||
+            leave "CI didn't run on a pull request from a branch of this repository."
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || leave "CI's commit isn't a commit id."
+          [[ "$BRANCH" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || leave "The branch's name holds more than letters, digits and ./-_."
+          case "$CI_RUN" in ''|*[!0-9]*) leave "CI's run isn't a number." ;; esac
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/jobs" --paginate --jq '.jobs[]' | jq -s . > "$RUNNER_TEMP/jobs.json"
+          jq -e '[.[] | select(.name == "test")] | length > 0 and all(.[]; .conclusion == "success")' "$RUNNER_TEMP/jobs.json" > /dev/null ||
+            leave "CI's tests didn't all pass, so this is retry's, or nothing's."
+          jq -e 'any(.[]; (.name | IN("Bug review", "Security review")) and .conclusion == "failure")' "$RUNNER_TEMP/jobs.json" > /dev/null ||
+            leave "Neither review failed."
+          # An earlier attempt of this run, on this head, whose tests all passed and a review failed
+          # has already woken the fixer, so a re-run neither fixes nor comments again. One whose tests
+          # failed was retry's, and the fixer left it.
+          case "$RUN_ATTEMPT" in ''|*[!0-9]*) leave "CI's attempt isn't a number." ;; esac
+          for earlier in $(seq 1 $((RUN_ATTEMPT - 1))); do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/attempts/$earlier/jobs" --paginate --jq '.jobs[]' |
+              jq -se '([.[] | select(.name == "test")] | length > 0 and all(.[]; .conclusion == "success"))
+                and any(.[]; (.name | IN("Bug review", "Security review")) and .conclusion == "failure")' > /dev/null; then
+              leave "Attempt $earlier of CI's run already passed its tests and failed a review on this head, and woke the fixer then."
+            fi
+          done
+          # The first open pull request at the reviewed commit opened by the factory's app, known by
+          # its exact login and type, or by someone GitHub says may write to the repository: write,
+          # maintain or admin, not how they're associated with it.
+          pr=""
+          while IFS=$'\t' read -r number login type; do
+            case "$number" in ''|*[!0-9]*) continue ;; esac
+            if [ "$login" = "awml-factory[bot]" ] && [ "$type" = Bot ]; then pr="$number"; break; fi
+            if may_write "$login"; then pr="$number"; break; fi
+          done < <(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" |
+            jq -r --arg repository "$GITHUB_REPOSITORY" --arg branch "$BRANCH" --arg head "$HEAD_SHA" \
+              '.[] | select(.head.ref == $branch and .head.repo.full_name == $repository and .head.sha == $head)
+                | [.number, .user.login, .user.type] | @tsv')
+          case "$pr" in *[!0-9]*) leave "The pull request's number isn't a number." ;; esac
+          [ -n "$pr" ] || leave "No open pull request on $BRANCH is at the reviewed commit, so there's nothing to fix."
+          # A stranger's pull request from the branch, at the same head, gets a CI run of its own,
+          # whose pull_requests still lists this one. So the run must list this pull request, by
+          # GitHub's record of the run, and must have been started by the factory's app, by its exact
+          # login and type, or by someone GitHub says may write to the repository.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN" > "$RUNNER_TEMP/run.json"
+          jq -e --argjson pr "$pr" 'any(.pull_requests[]?; .number == $pr)' "$RUNNER_TEMP/run.json" > /dev/null ||
+            leave "CI's run isn't #$pr's own."
+          actor="$(jq -r '.triggering_actor.login // ""' "$RUNNER_TEMP/run.json")"
+          actor_type="$(jq -r '.triggering_actor.type // ""' "$RUNNER_TEMP/run.json")"
+          if ! { [ "$actor" = "awml-factory[bot]" ] && [ "$actor_type" = Bot ]; }; then
+            may_write "$actor" || leave "CI's run was started by someone who may not write here."
+          fi
+          # A review that failed without an Important finding refused the patch or ran out of time,
+          # so there's nothing for a session to fix: a person must look at its check. The names are
+          # the reviews', from a fixed list.
+          important="$(bash .github/review-findings.sh findings "$CI_RUN" | jq '[.[] | select(.severity == "Important")] | length')"
+          case "$important" in ''|*[!0-9]*) echo "The Important findings couldn't be counted: $important"; exit 1 ;; esac
+          failed="$(jq -r '[.[] | select((.name | IN("Bug review", "Security review")) and .conclusion == "failure") | .name] | unique | join(" and ")' "$RUNNER_TEMP/jobs.json")"
+          # The branch's commits and files since main, read with git: GitHub's compare lists at most
+          # 300 files. Git runs here on data alone, with hooks, fsmonitor and global config off.
+          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            safe_git fetch -q --no-tags origin "$HEAD_SHA"
+          base="$(safe_git merge-base HEAD "$HEAD_SHA")"
+          fixes="$(safe_git log -z --format=%B "$base..$HEAD_SHA" | jq -Rs 'split("\u0000") | map(select(test("(^|\n)Factory-Fix: "))) | length')"
+          case "$fixes" in ''|*[!0-9]*) echo "The fix commits couldn't be counted: $fixes"; exit 1 ;; esac
+          # npm reads a tree's .npmrc, a committed node_modules/ shadows packages, and npm runs a git
+          # dependency's prepare script even with scripts off, so a branch that changes any of them,
+          # or its package.json or lockfile, is never installed beside the Claude token: the fixer
+          # only ever installs main's dependencies.
+          # A session would load Claude Code's own files from the tree, so a branch that changes them is
+          # held back too, for its own reason. .github/ is read by nothing the fixer runs, and a fix
+          # to it is offered rather than pushed, so it isn't held back.
+          deps='(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
+          claudes='(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$'
+          safe_git diff --name-only --no-renames --no-ext-diff --no-textconv -z "$base" "$HEAD_SHA" > "$RUNNER_TEMP/changed"
+          if [ "$important" -eq 0 ]; then
+            outcome=noimportant
+          elif grep -zqE "$claudes" "$RUNNER_TEMP/changed"; then
+            outcome=claudefiles
+          elif grep -zqE "$deps" "$RUNNER_TEMP/changed"; then
+            outcome=npmfiles
+          elif [ "$fixes" -ge 2 ]; then outcome=giveup; else outcome=fix; fi
+          {
+            echo "outcome=$outcome"
+            echo "pr=$pr"
+            echo "head_sha=$HEAD_SHA"
+            echo "branch=$BRANCH"
+            echo "failed=$failed"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  # Claude fixes every finding of both reviews here, with a read-only token, and hands back a patch.
+  # It follows main's fix prompt, AGENTS.md and REVIEW.md, copied out before the head is checked out.
+  fix:
+    needs: decide
+    if: needs.decide.outputs.outcome == 'fix'
+    concurrency:
+      group: fix-session-${{ needs.decide.outputs.pr }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+    outputs:
+      changed: ${{ steps.patch.outputs.changed }}
+      digest: ${{ steps.pack.outputs.digest }}
+    env:
+      HOST_DIR: /var/lib/awml-host
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      # A session may rename any folder it can reach under the runner's home and build a fake tree in
+      # its place, which a denial, a bind mount of the old path, doesn't stop. /var/lib is root's, so
+      # nothing running as the runner's user can rename the host-only folder made here, which holds
+      # all the host reads after a session apart from the session's checked output and the trees it
+      # checks by device and inode, and which every session's sandbox denies.
+      - name: Make the host-only folder
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 "$HOST_DIR"
+
+      # The findings come from the reviews' checks on the reviewed commit, and the patch from
+      # GitHub, both as data the session can't change.
+      - name: Copy main's prompt, scripts, AGENTS.md and REVIEW.md out, and bring in the findings and the patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN: ${{ github.event.workflow_run.id }}
+          HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+        run: |
+          mkdir -p "$HOST_DIR/main" "$RUNNER_TEMP/input"
+          cp .github/fix-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/review-findings.sh .github/unclose.sh .github/check-lockfile.sh .github/check-out.sh "$HOST_DIR/main/"
+          cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
+          bash "$HOST_DIR/main/review-findings.sh" findings "$CI_RUN" > "$RUNNER_TEMP/input/findings.json"
+          gh api "repos/$GITHUB_REPOSITORY/compare/main...$HEAD_SHA" -H "Accept: application/vnd.github.diff" \
+            > "$RUNNER_TEMP/input/change.patch"
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The session runs the checks but can't install: under the scrub, Claude Code denies its
+      # commands writes to node_modules/.bin and package-lock.json, and its sandbox has no network.
+      # So the dependencies are installed here, with every package's scripts off, so no code of
+      # theirs runs beside the secret, and from npm's own registry, whatever an .npmrc says. Git's
+      # config is copied out, for the check after the session.
+      - name: Install the dependencies with their scripts off
+        env:
+          npm_config_userconfig: /dev/null
+          npm_config_globalconfig: /dev/null
+          npm_config_registry: https://registry.npmjs.org/
+          npm_config_ignore_scripts: "true"
+        run: |
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
+          bash "$HOST_DIR/main/check-lockfile.sh" .
+          npm ci --ignore-scripts --no-audit --no-fund
+          echo "::$stop::"
+          mkdir -p "$HOST_DIR/baseline"
+          cp .git/config "$HOST_DIR/baseline/git-config"
+          stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$HOST_DIR/baseline/workspace"
+
+      # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
+      # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
+      # them on this throwaway machine, and check bubblewrap works before Claude starts.
+      - name: Install Claude Code and bubblewrap
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --dev-bind / / --unshare-pid true
+          # The runner user could start a privileged container through Docker's socket, from inside
+          # the sandbox, so it's closed to them before any session starts.
+          if [ -e /var/run/docker.sock ]; then sudo chmod 600 /var/run/docker.sock; fi
+          (cd "$RUNNER_TEMP" && npm_config_userconfig=/dev/null npm_config_globalconfig=/dev/null npm install -g @anthropic-ai/claude-code@2.1.312)
+
+      # The findings came from sessions that read the patch, and the patch is the branch's, so text in
+      # either can steer this session. Its commands run in its sandbox, which reaches no network, sees
+      # none of Claude Code's own process and can't write git's files. Under the scrub, Claude Code
+      # forces --permission-mode default, so every tool it may use is named. It loads
+      # only the settings claude-settings.sh writes in a home of its own, and no MCP servers, and
+      # reads only the workspace and its inputs, never /proc.
+      - name: Fix the findings
+        id: session
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+          INPUT_DIR: ${{ runner.temp }}/input
+        run: |
+          {
+          # One group, which bash reads whole before claude starts, so nothing a command in
+          # the session writes to this script, which is denied to it, can run after it.
+          chmod -R a-w "$INPUT_DIR"
+          session="$RUNNER_TEMP/sessions/fix"
+          rm -rf "$session"
+          mkdir -p "$session/out" "$HOST_DIR/logs"
+          # The log goes to the host-only folder, which the session can't write, so it can't turn
+          # it into a link for the host's cat to follow. The inputs are denied too.
+          log="$HOST_DIR/logs/fix.log"
+          bash "$HOST_DIR/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR" --deny-write ./.git
+          prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$HOST_DIR/main/fix-prompt.md")"
+          status=0
+          HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
+            --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
+            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" \
+            --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(./**)" "Write(./**)" \
+              "Edit(/$session/out/**)" "Write(/$session/out/**)" \
+              "Bash(npm run:*)" "Bash(npm test:*)" \
+              "Bash(npx vitest:*)" "Bash(npx tsc:*)" "Bash(npx eslint:*)" \
+              "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(ls:*)" \
+            > "$log" 2>&1 || status=$?
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
+          cat "$log"
+          echo "::$stop::"
+          exit "$status"
+          }
+
+      # Git reads the tree the session wrote, so it runs nothing the session's commands could have
+      # set: the workspace and its .git must be the ones the session started in, git's config byte
+      # for byte as it was, kept where the session couldn't write, and no repository nested below
+      # the top; no global or system config is read, and no hook, fsmonitor, external diff or text
+      # conversion runs.
+      - name: Make the patch
+        id: patch
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+        run: |
+          if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$HOST_DIR/baseline/workspace"; then
+            echo "The workspace or its .git isn't the one the session started in, so no git runs on it."
+            exit 1
+          fi
+          if ! cmp -s .git/config "$HOST_DIR/baseline/git-config"; then
+            echo "Git's config changed during the session, so no git runs on the tree."
+            exit 1
+          fi
+          # node_modules counts too: a session may write there, apart from its .bin.
+          if [ -n "$(find . -mindepth 2 -name .git -print -quit)" ]; then
+            echo "The session left a repository nested in the tree, whose config git would read, so no git runs on it."
+            exit 1
+          fi
+          # Made afresh, so nothing a session put there goes into the artifact.
+          fixed="$HOST_DIR/fix"
+          rm -rf "$fixed"
+          mkdir "$fixed"
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= add -A
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= diff --cached --binary --no-ext-diff --no-textconv > "$fixed/fix.patch"
+          bash "$HOST_DIR/main/check-out.sh" "$RUNNER_TEMP/sessions/fix/out" "$RUNNER_TEMP/sessions"
+          out="$RUNNER_TEMP/sessions/fix/out/message.md"
+          # The message goes into the fix commit, so it closes no issue.
+          if [ -f "$out" ] && [ ! -L "$out" ]; then bash "$HOST_DIR/main/unclose.sh" < "$out" > "$fixed/message.md"; fi
+          if [ -s "$fixed/fix.patch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The artifact is public, so a fix that carries anything like the login token isn't kept. Its
+      # digest is the job's output, which the write job checks the artifact against.
+      - name: Keep the fix, with its digest
+        id: pack
+        run: |
+          # Only regular files are kept: a link a session planted would be uploaded as what it points at.
+          if [ -n "$(find "$HOST_DIR/fix" ! -type f ! -type d -print -quit)" ]; then
+            echo "The fix folder holds something other than files, so nothing is kept."
+            exit 1
+          fi
+          bash "$HOST_DIR/main/scan-tokens.sh" "$HOST_DIR/fix"
+          digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c 1-64; }
+          echo "digest=$(digest "$HOST_DIR/fix")" >> "$GITHUB_OUTPUT"
+
+      # Kept for 30 days, so a fix that's offered rather than pushed can be downloaded.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fix
+          path: ${{ env.HOST_DIR }}/fix
+          retention-days: 30
+
+  # Pushes the fix, offers it, or gives up, running nothing from the change. Only a person must act
+  # on what it posts, so a moved head or a closed pull request posts nothing.
+  write:
+    needs: [decide, fix]
+    concurrency:
+      group: fix-write-${{ needs.decide.outputs.pr }}
+      cancel-in-progress: false
+    if: ${{ !cancelled() && (needs.decide.outputs.outcome == 'fix' || needs.decide.outputs.outcome == 'giveup' || needs.decide.outputs.outcome == 'npmfiles' || needs.decide.outputs.outcome == 'claudefiles' || needs.decide.outputs.outcome == 'noimportant') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      PR_NUMBER: ${{ needs.decide.outputs.pr }}
+      HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+      BRANCH: ${{ needs.decide.outputs.branch }}
+      CI_RUN: ${{ github.event.workflow_run.id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.fix.result == 'success'
+        with:
+          name: fix
+          path: ${{ runner.temp }}/fix
+      - name: Check the fix is the fix job's
+        if: needs.fix.result == 'success'
+        env:
+          FIX_DIGEST: ${{ needs.fix.outputs.digest }}
+        run: |
+          digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c 1-64; }
+          if [ "$(digest "$RUNNER_TEMP/fix")" != "$FIX_DIGEST" ]; then
+            echo "The fix isn't the one the fix job made."
+            exit 1
+          fi
+
+      # Sorted by GitHub and git alone. Each comment is fixed text with links, quoting none of the
+      # findings or the fix.
+      - name: Sort by whether the head moved, and by the files the fix touches
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ needs.decide.outputs.outcome }}
+          FIXED: ${{ needs.fix.result }}
+          CHANGED: ${{ needs.fix.outputs.changed }}
+          FAILED_REVIEWS: ${{ needs.decide.outputs.failed }}
+        run: |
+          case "$PR_NUMBER" in ''|*[!0-9]*) echo "The pull request must be a number: $PR_NUMBER"; exit 1 ;; esac
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          ci_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$CI_RUN"
+          pull="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          if [ "$(jq -r .state <<< "$pull")" != open ] || [ "$(jq -r .head.sha <<< "$pull")" != "$HEAD_SHA" ]; then
+            echo "#$PR_NUMBER closed, or someone pushed since the review, so there's nothing to fix."
+            echo "result=quiet" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          give_up() {
+            {
+              echo "**$1 The review findings need a person.**"
+              echo
+              echo "- [CI's run]($ci_url) holds the failed review checks and their findings."
+              echo "- [The fixer's run]($run_url)"
+            } > "$RUNNER_TEMP/comment.md"
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/comment.md"
+            echo "result=done" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          [ "$OUTCOME" != giveup ] || give_up "This branch already carries two fix commits, so the fixer has stopped."
+          case "$FAILED_REVIEWS" in "Bug review"|"Security review"|"Bug review and Security review") ;; *) FAILED_REVIEWS="A review" ;; esac
+          [ "$OUTCOME" != noimportant ] || give_up "$FAILED_REVIEWS failed with no Important finding: it may have refused the patch or run out of time, so there's nothing for the fixer to fix."
+          [ "$OUTCOME" != claudefiles ] || give_up "This branch changes Claude Code's own files (\`.claude/\`, \`.mcp.json\` or a \`CLAUDE.md\`), which a session would load, so the fixer won't start one on it."
+          [ "$OUTCOME" != npmfiles ] || give_up "This branch changes its dependencies (\`package.json\`, \`package-lock.json\`, \`npm-shrinkwrap.json\` or \`yarn.lock\`), an \`.npmrc\`, a \`.yarnrc\` or \`node_modules/\`, so the fixer won't install it beside its login token."
+          # The fix job can fail after its session too, on a changed config, a nested repository or a
+          # token, so a failed job isn't put down to the session.
+          [ "$FIXED" = success ] || give_up "The fix job failed before the fix was kept. The run says why."
+          [ "$CHANGED" = true ] || give_up "The fixer's session made no fix."
+          git -c core.hooksPath=/dev/null apply --index "$RUNNER_TEMP/fix/fix.patch" ||
+            give_up "The fixer's fix doesn't apply to the reviewed commit."
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
+          # A symbolic link is read wherever it's followed, so the app never pushes one either.
+          links="$(git diff --cached --raw --no-renames | awk '$2 == "120000" { found = 1 } END { if (found) print "link" }')"
+          if [ -n "$links" ] || git diff --cached --name-only --no-renames -z | grep -zE "$guarded" > /dev/null; then
+            # The names are the fix's, so they're printed as JSON, where none can start a workflow
+            # command.
+            git diff --cached --name-only --no-renames -z | { grep -zE "$guarded" || true; } | jq -Rs 'split("\u0000") | map(select(. != ""))'
+            {
+              echo "**The fixer's fix changes files the app never pushes, so it didn't push it.** The app holds back:"
+              echo
+              echo "- \`.github/\`: the app may not change a workflow."
+              echo "- Claude Code's own files, \`.claude/\`, \`.mcp.json\` or a \`CLAUDE.md\`: no session loads Claude Code's settings, servers or instructions from a branch."
+              echo "- An \`.npmrc\`, a \`.yarnrc\`, an \`npm-shrinkwrap.json\`, a \`yarn.lock\` or \`node_modules/\`: an install of the branch would read them."
+              echo "- A symbolic link: a symbolic link is read wherever it's followed."
+              echo "- \`package.json\` or \`package-lock.json\`: the fixer installs only main's dependencies."
+              echo
+              echo "To look at the fix and apply it yourself, from a checkout of this branch:"
+              echo
+              echo '```'
+              echo "gh run download $GITHUB_RUN_ID --repo $GITHUB_REPOSITORY -n fix -D fix"
+              echo "git apply --index fix/fix.patch"
+              echo '```'
+              echo
+              echo "The run keeps the fix for 30 days. [The fixer's run]($run_url)"
+            } > "$RUNNER_TEMP/comment.md"
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/comment.md"
+            echo "result=done" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "result=push" >> "$GITHUB_OUTPUT"
+
+      # The commit is the app's, and its message carries the Factory-Fix line, by which the next run
+      # counts its tries and land knows the branch carries a fix.
+      - name: Commit the fix as the app's bot
+        id: commit
+        if: steps.guard.outputs.result == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
+          case "$id" in ''|*[!0-9]*) echo "The app's bot has no id: $id"; exit 1 ;; esac
+          {
+            echo "Fix the review findings"
+            echo
+            if [ -s "$RUNNER_TEMP/fix/message.md" ]; then head -c 5000 "$RUNNER_TEMP/fix/message.md"; echo; echo; fi
+            echo "Factory-Fix: $run_url"
+          } > "$RUNNER_TEMP/commit.md"
+          git config user.name "awml-factory[bot]"
+          git config user.email "$id+awml-factory[bot]@users.noreply.github.com"
+          git -c core.hooksPath=/dev/null commit -q -F "$RUNNER_TEMP/commit.md"
+
+      - name: Make the app's token
+        id: app
+        if: steps.guard.outputs.result == 'push'
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        with:
+          app-id: ${{ secrets.FACTORY_APP_ID }}
+          private-key: ${{ secrets.FACTORY_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      # Only if the branch is still at the reviewed commit, so GitHub refuses the push if anyone
+      # pushed since. CI then judges the fix.
+      - name: Push the fix
+        id: push
+        if: steps.guard.outputs.result == 'push'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          if ! git -c core.hooksPath=/dev/null \
+            -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            push --force-with-lease="refs/heads/$BRANCH:$HEAD_SHA" origin "HEAD:refs/heads/$BRANCH"; then
+            echo "Someone pushed to $BRANCH since the review, so the fix wasn't pushed."
+          fi
