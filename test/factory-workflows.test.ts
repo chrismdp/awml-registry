@@ -770,13 +770,15 @@ const neverPushPattern =
 const heldBackPattern = `${neverPushPattern}|(^|/)package(-lock)?\\.json$`;
 
 describe("the factory's path patterns", () => {
-  it("are one never-push pattern in the build and the fixer, and one held-back pattern in the fixer's decide and in resolve", () => {
+  it("are one never-push pattern in the build, and one held-back pattern in the fixer and in resolve", () => {
     const found: string[] = [];
     for (const file of ["build.yml", "fix.yml", "resolve.yml"]) {
       const text = readFileSync(join(github, "workflows", file), "utf8");
       for (const [, name, pattern] of text.matchAll(/\b(guarded|held)='([^']*)'/g)) {
         found.push(`${file} ${name}`);
-        const want = file === "resolve.yml" || name === "held" ? heldBackPattern : neverPushPattern;
+        // The fixer offers a fix to the dependencies rather than push it, since the next fix would
+        // install them; the build pushes them, having installed main's.
+        const want = file === "build.yml" ? neverPushPattern : heldBackPattern;
         expect(pattern, `${file} ${name}`).toBe(want);
       }
     }
@@ -1649,6 +1651,11 @@ describe("build.yml", () => {
     expect(allowed).not.toContain("Bash(npm ci:*)");
   });
 
+  it("tells the fixer not to change the dependencies", () => {
+    const prompt = squash(readFileSync(join(github, "fix-prompt.md"), "utf8"));
+    expect(prompt).toContain("Don't edit `package.json` or `package-lock.json`");
+  });
+
   it("tells the draft and the fixer which files the app never pushes", () => {
     for (const name of ["build-prompt.md", "fix-prompt.md"]) {
       const prompt = squash(readFileSync(join(github, name), "utf8"));
@@ -1825,6 +1832,15 @@ describe("build.yml", () => {
     expect(run.printed).toContain("Closes `#9`, fixes `owner/repo#3` and Resolves: `https://github.com/owner/repo/issues/4.`");
   });
 
+  // Land knows the factory's commits by the app's bot, so the build commits as awml-factory[bot] and
+  // refuses an app of any other name.
+  it("commits as awml-factory[bot], and refuses an app of another name", () => {
+    const commit = stepWithId(jobs.open, "commit").run ?? "";
+    expect(commit).toContain('[ "$APP_SLUG" = awml-factory ]');
+    expect(commit).toContain('git config user.name "awml-factory[bot]"');
+    expect(commit).toContain('git config user.email "$id+awml-factory[bot]@users.noreply.github.com"');
+  });
+
   it("gives the app's token only to the open job's push and pull request steps", () => {
     for (const [id, job] of Object.entries(jobs))
       for (const each of steps(job)) {
@@ -1931,6 +1947,14 @@ describe("land.yml", () => {
   const land = readWorkflow("land.yml");
   const jobs = land.jobs;
   const head = "a".repeat(40);
+
+  it("is drawn as it runs: its concurrency, and the commit read at its merge-base with main", () => {
+    const drawing = readFileSync(join(github, "drawings/land-a-pull-request.yaml"), "utf8");
+    expect(drawing).toContain("a newer CI result on the branch cancels an older reading, but never a land that has started");
+    expect(drawing).toContain("at its merge-base with main");
+    expect(drawing).not.toContain("keyed on the pull request and the run");
+    expect(drawing).not.toContain("at its parent on main");
+  });
 
   it("wakes when CI's run finishes on a factory branch", () => {
     expect(land.on).toEqual({ workflow_run: { workflows: ["CI"], types: ["completed"], branches: ["build/issue-*"] } });
@@ -2044,7 +2068,7 @@ describe("land.yml", () => {
   // The rule judges the head commit itself, read with git into a worktree at the commit of main
   // the branch starts from, never a patch from an artifact, with Classify's verdict and the Nits
   // read from the checks of CI's run.
-  const judge = (classifyConclusion: string, mainChangesCi = false) => {
+  const judge = (classifyConclusion: string, { mainChangesCi = false, branchChangesCi = false } = {}) => {
     const root = scratch();
     const origin = join(root, "origin");
     mkdirSync(origin);
@@ -2058,6 +2082,7 @@ describe("land.yml", () => {
     git(origin, "commit", "-qm", "main");
     git(origin, "switch", "-q", "-c", "build/issue-7");
     put(join(origin, "src/page.tsx"), "export default function Page() {}\n");
+    if (branchChangesCi) put(join(origin, ".github/workflows/ci.yml"), "name: CI\n# the branch's own reviews\n");
     git(origin, "add", "-A");
     git(origin, "-c", "user.name=awml-factory[bot]", "-c", "user.email=1+awml-factory[bot]@users.noreply.github.com", "commit", "-qm", "Build #7");
     const sha = git(origin, "rev-parse", "HEAD");
@@ -2103,13 +2128,20 @@ describe("land.yml", () => {
     expect(existsSync(join(work, "src/page.tsx")), "the branch's files reached main's working tree").toBe(false);
   });
 
-  // GitHub ran the pull request's own ci.yml, so if it isn't main's, the reviews and Classify the
-  // head passed weren't main's.
-  it.runIf(canRehearse)("asks when the head's ci.yml isn't main's", () => {
-    const { run } = judge("success", true);
+  // GitHub ran ci.yml from the pull request's merge with main, so only a branch that changed it ran
+  // reviews and a Classify of its own.
+  it.runIf(canRehearse)("asks when the branch changed ci.yml", () => {
+    const { run } = judge("success", { branchChangesCi: true });
     expect(run.failed, run.printed).toBe(false);
     expect(run.outputs.verdict).toBe("ask");
-    expect(run.printed).toContain("CI ran this pull request's own .github/workflows/ci.yml, which isn't main's.");
+    expect(run.printed).toContain("The branch changes .github/workflows/ci.yml, which runs its own reviews and Classify.");
+  });
+
+  it.runIf(canRehearse)("doesn't ask only because main changed ci.yml since the branch began", () => {
+    const { run } = judge("success", { mainChangesCi: true });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.verdict).toBe("show");
+    expect(run.printed).not.toContain("ci.yml");
   });
 
   it.runIf(canRehearse)("asks when Classify's job didn't succeed, whatever verdict it left", () => {
@@ -2468,6 +2500,12 @@ describe("fix.yml", () => {
       expect(run.outputs.result).toBe("done");
       expect(run.calls).toContain("The fix job failed before the fix was kept. The run says why.");
       expect(run.calls).not.toContain("session");
+    });
+
+    it.runIf(canRehearse).each(["package.json", "package-lock.json"])("offers a fix to %s rather than push it", (path) => {
+      const run = guard({}, path);
+      expect(run.outputs.result).toBe("done");
+      expect(run.calls).toContain("> gh run download 1000 --repo owner/repo -n fix -D fix");
     });
 
     it.runIf(canRehearse)("prints the paths it offers without letting one start a workflow command", () => {

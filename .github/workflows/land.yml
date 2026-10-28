@@ -147,19 +147,17 @@ jobs:
             -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
             fetch --no-tags origin "$HEAD_SHA"
           base="$(git merge-base HEAD "$HEAD_SHA")"
-          # GitHub ran the pull request's own ci.yml, so the reviews and Classify the head passed are
-          # main's only if that file is.
-          ci_head="$(git rev-parse -q --verify "$HEAD_SHA:.github/workflows/ci.yml" || echo none)"
-          ci_main="$(git rev-parse -q --verify "HEAD:.github/workflows/ci.yml" || echo none)"
           git worktree add -q --detach "$RUNNER_TEMP/judged" "$base"
           git -C "$RUNNER_TEMP/judged" read-tree "$HEAD_SHA"
           node --experimental-strip-types "$RUNNER_TEMP/build-rule.mts" --repo "$RUNNER_TEMP/judged" \
             --rules "$RUNNER_TEMP/build-rules.yml" --classified "$classified" --nits "$nits" \
             --base "$base" --head "$HEAD_SHA" --factory 'awml-factory[bot]' > "$RUNNER_TEMP/verdict.txt"
-          if [ "$ci_head" != "$ci_main" ]; then
+          # GitHub runs ci.yml from the pull request's merge with main, so only a branch that changed
+          # it ran reviews and a Classify of its own.
+          if ! git -c core.hooksPath=/dev/null diff --quiet --no-ext-diff "$base" "$HEAD_SHA" -- .github/workflows/ci.yml; then
             {
               echo ask
-              echo "CI ran this pull request's own .github/workflows/ci.yml, which isn't main's."
+              echo "The branch changes .github/workflows/ci.yml, which runs its own reviews and Classify."
               tail -n +2 "$RUNNER_TEMP/verdict.txt" | grep -vxF "No review rule matched this change." || true
             } > "$RUNNER_TEMP/verdict.ci"
             mv "$RUNNER_TEMP/verdict.ci" "$RUNNER_TEMP/verdict.txt"

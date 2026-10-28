@@ -370,13 +370,13 @@ jobs:
           [ "$CHANGED" = true ] || give_up "The fixer's session made no fix."
           git -c core.hooksPath=/dev/null apply --index "$RUNNER_TEMP/fix/fix.patch" ||
             give_up "The fixer's fix doesn't apply to the reviewed commit."
-          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)'
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)package(-lock)?\.json$'
           if git diff --cached --name-only --no-renames -z | grep -zqE "$guarded"; then
             # The names are the fix's, so they're printed as JSON, where none can start a workflow
             # command.
             git diff --cached --name-only --no-renames -z | grep -zE "$guarded" | jq -Rs 'split("\u0000") | map(select(. != ""))'
             {
-              echo "**The fixer's fix changes \`.github/\` or Claude Code's own files, so the app didn't push it.**"
+              echo "**The fixer's fix changes \`.github/\`, Claude Code's own files, an \`.npmrc\`, a \`.yarnrc\`, \`node_modules/\` or the dependencies, so the app didn't push it.**"
               echo
               echo "The app may not change a workflow, and no session loads Claude Code's settings, servers or instructions from a branch. To look at the fix and apply it yourself, from a checkout of this branch:"
               echo

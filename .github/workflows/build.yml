@@ -638,7 +638,14 @@ jobs:
           APP_SLUG: ${{ steps.app.outputs.app-slug }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          id="$(gh api "users/$APP_SLUG%5Bbot%5D" --jq .id)"
+          # Land knows the factory's commits by the app's bot, awml-factory[bot], as every workflow
+          # names it, so an app of any other name is refused.
+          if ! [ "$APP_SLUG" = awml-factory ]; then
+            echo "The factory's app must be awml-factory, not $APP_SLUG."
+            exit 1
+          fi
+          id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
+          case "$id" in ''|*[!0-9]*) echo "The app's bot has no id: $id"; exit 1 ;; esac
           message="$RUNNER_TEMP/commit.md"
           # Claude's message closes no issue: only the build's own Closes #n does.
           if [ -f "$RUNNER_TEMP/change/message.md" ]; then
@@ -646,8 +653,8 @@ jobs:
           fi
           [ -s "$message" ] || echo "Build #$ISSUE" > "$message"
           printf '\n\nCloses #%s\n' "$ISSUE" >> "$message"
-          git config user.name "$APP_SLUG[bot]"
-          git config user.email "$id+$APP_SLUG[bot]@users.noreply.github.com"
+          git config user.name "awml-factory[bot]"
+          git config user.email "$id+awml-factory[bot]@users.noreply.github.com"
           git -c core.hooksPath=/dev/null switch -c "build/issue-$ISSUE"
           git -c core.hooksPath=/dev/null commit -q -F "$message"
 
