@@ -851,7 +851,7 @@ describe("the factory's workflows", () => {
         expect(text.slice(at, at + mayWrite.length), `${file} ${id}`).toBe(mayWrite);
         expect(text.match(/\/permission/g)?.length, `${file} ${id}`).toBe(1);
       }
-    expect(found.sort()).toEqual(["build.yml draft", "build.yml start", "ci.yml review", "fix.yml decide", "resolve.yml find", "retry.yml retry"]);
+    expect(found.sort()).toEqual(["build.yml draft", "build.yml start", "ci.yml review", "fix.yml decide", "land.yml find", "resolve.yml find", "retry.yml retry"]);
   });
 
   it("take each artifact's digest the same way everywhere", () => {
@@ -2367,12 +2367,14 @@ describe("land.yml", () => {
       pullHead = head,
       checks = checkRuns(),
       labeller = { login: "maintainer", type: "User" },
+      issueLabels = ["build"],
       pullRepository = "owner/repo",
       attempt = "1",
       earlier = "success",
     }: {
       attempt?: string;
       earlier?: string;
+      issueLabels?: string[];
       event?: string;
       repository?: string;
       pullHead?: string;
@@ -2396,6 +2398,8 @@ describe("land.yml", () => {
       answers: `
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(head), appPull(pullHead, pullRepository)])}' ;;
   *"commits/${head}/check-runs"*) answer <<< '${JSON.stringify(checks)}' ;;
+${permissionStub}
+  *"repos/owner/repo/issues/7 "*) answer <<< '${JSON.stringify({ labels: issueLabels.map((name) => ({ name })) })}' ;;
   *"actions/runs/77/attempts/1/jobs"*) answer <<< '${JSON.stringify({
     jobs: [
       { name: "test", conclusion: "success" },
@@ -2446,6 +2450,18 @@ describe("land.yml", () => {
     expect(stepWithId(jobs.find, "ready").env?.RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
   });
 
+  // land tells or asks whoever last added the label only if they may write; anyone else, who may
+  // only triage, has the owner told or asked in their place.
+  it.runIf(canRehearse)("tells or asks the owner when the label was last added by someone who may not write", () => {
+    expect(ready({ labeller: { login: "triager", type: "User" } }).outputs.labeller).toBe("owner");
+    expect(ready({ labeller: { login: "lead", type: "User" } }).outputs.labeller).toBe("lead");
+  });
+
+  it.runIf(canRehearse)("reads whether the issue still carries the build label", () => {
+    expect(ready().outputs.labelled).toBe("true");
+    expect(ready({ issueLabels: ["bug"] }).outputs.labelled).toBe("false");
+  });
+
   it.runIf(canRehearse)("asks the owner when the app added the label", () => {
     expect(ready({ labeller: { login: "awml-factory[bot]", type: "Bot" } }).outputs.labeller).toBe("owner");
   });
@@ -2471,7 +2487,7 @@ describe("land.yml", () => {
   // The rule judges the head commit itself, read with git into a worktree at the commit of main
   // the branch starts from, never a patch from an artifact, with Classify's verdict and the Nits
   // read from the checks of CI's run.
-  const judge = (classifyConclusion: string, { mainChangesCi = false, branchChangesCi = false } = {}) => {
+  const judge = (classifyConclusion: string, { mainChangesCi = false, branchChangesCi = false, labelled = "true" } = {}) => {
     const root = scratch();
     const origin = join(root, "origin");
     mkdirSync(origin);
@@ -2511,7 +2527,7 @@ describe("land.yml", () => {
     const run = rehearse(stepWithId(jobs.find, "judge").run ?? "", {
       root,
       cwd: work,
-      env: { HEAD_SHA: sha, CI_RUN: "77" },
+      env: { HEAD_SHA: sha, CI_RUN: "77", LABELLED: labelled },
       answers: `
   *"actions/runs/77/jobs"*) answer <<< '${jobsList}' ;;
   *"check-runs/11/annotations"*) answer <<< '${JSON.stringify([{ annotation_level: "warning", title: "Nit: Clearer", message: "m", path: "src/page.tsx", start_line: 1 }])}' ;;
@@ -2546,6 +2562,16 @@ describe("land.yml", () => {
     expect(run.outputs.verdict).toBe("show");
     expect(run.printed).not.toContain("ci.yml");
     expect(stepWithId(jobs.find, "judge").run).not.toContain("ci.yml");
+  });
+
+  // A person who takes the label off means the factory shouldn't land it by itself.
+  it.runIf(canRehearse)("asks when the build label was taken off the issue", () => {
+    const { run } = judge("success", { labelled: "false" });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.verdict).toBe("ask");
+    expect(run.printed).toContain("The build label was taken off the issue, so a person decides.");
+    expect(stepWithId(jobs.find, "judge").env?.LABELLED).toBe("${{ steps.ready.outputs.labelled }}");
+    expect(readFileSync(join(github, "drawings/land-a-pull-request.yaml"), "utf8")).toContain("the build label was taken off the issue");
   });
 
   it.runIf(canRehearse)("asks when Classify was skipped", () => {
@@ -2684,7 +2710,11 @@ describe("fix.yml", () => {
     twoLines = false,
     runPulls = [12],
     actor = { login: "awml-factory[bot]", type: "Bot" },
+    attempt = "1",
+    earlierReview = "success",
   }: Partial<{
+    attempt: string;
+    earlierReview: string;
     runPulls: number[];
     actor: { login: string; type: string };
     event: string;
@@ -2724,7 +2754,7 @@ describe("fix.yml", () => {
     const run = rehearse(stepWithId(jobs.decide, "ready").run ?? "", {
       root,
       cwd: work,
-      env: { BRANCH: "build/issue-7", HEAD_SHA: sha, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77" },
+      env: { BRANCH: "build/issue-7", HEAD_SHA: sha, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77", RUN_ATTEMPT: attempt },
       answers: `
   *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({
     jobs: [
@@ -2736,6 +2766,7 @@ describe("fix.yml", () => {
   })}' ;;
   *"check-runs/11/annotations"*) answer <<< '${JSON.stringify(important && bug === "failure" ? [{ annotation_level: "failure", title: "Important: Wrong", message: "m", path: "src/a.ts", start_line: 1 }] : [])}' ;;
   *"check-runs/12/annotations"*) answer <<< '${JSON.stringify(important && security === "failure" ? [{ annotation_level: "failure", title: "Important: Hole", message: "m", path: "src/a.ts", start_line: 1 }] : [])}' ;;
+  *"actions/runs/77/attempts/1/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: "success" }, { name: "Bug review", conclusion: earlierReview }] })}' ;;
   *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })), triggering_actor: actor })}' ;;
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([
     strangerPull(pullHead ?? sha),
@@ -2812,6 +2843,14 @@ ${permissionStub}`,
     const run = decide({ runPulls: [99] });
     expect(run.failed, run.printed).toBe(false);
     expect(run.outputs.outcome).toBe("none");
+  });
+
+  // An earlier attempt of the same run, on the same head, whose review failed has already woken the
+  // fixer, so a re-run doesn't fix, or comment, again.
+  it.runIf(canRehearse)("leaves a re-run quietly when an earlier attempt already failed a review", () => {
+    expect(decide({ attempt: "2", earlierReview: "failure" }).outputs.outcome).toBe("none");
+    expect(decide({ attempt: "2", earlierReview: "success" }).outputs.outcome).toBe("fix");
+    expect(stepWithId(jobs.decide, "ready").env?.RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
   });
 
   it.runIf(canRehearse)("counts a fix commit once, however many fix lines it carries", () => {

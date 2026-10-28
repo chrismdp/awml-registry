@@ -72,6 +72,16 @@ jobs:
           RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           CI_RUN: ${{ github.event.workflow_run.id }}
         run: |
+          # Whether GitHub says someone may write to the repository: their role or its base permission is
+          # exactly admin, maintain or write, so a custom role counts only by what it grants.
+          may_write() {
+            [[ "$1" =~ ^[A-Za-z0-9-]{1,39}$ ]] || return 1
+            local role="" permission=""
+            IFS=$'\t' read -r role permission < <(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq '[.role_name // "", .permission // ""] | @tsv' || true) || true
+            case "$role" in admin|maintain|write) return 0 ;; esac
+            case "$permission" in admin|maintain|write) return 0 ;; esac
+            return 1
+          }
           leave() { echo "$1"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0; }
           [ "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ] && [ "$CI_EVENT" = pull_request ] ||
             leave "CI didn't run on a pull request from a branch of this repository."
@@ -109,16 +119,25 @@ jobs:
               | all($required[]; . as $name | $passed | index($name))' "$RUNNER_TEMP/checks.json" > /dev/null ||
             leave "CI's run didn't pass test, Bug review and Security review on $HEAD_SHA."
 
+          # The person told or asked is whoever last added the build label, if they may write to the
+          # repository; if not, or if the app added it, the owner.
           labeller="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$issue/events" |
             jq -rs '[.[][] | select(.event == "labeled" and .label.name == "build")] | last
               | if .actor.type == "User" then .actor.login else "" end')"
-          [[ "$labeller" =~ ^[A-Za-z0-9-]{1,39}$ ]] || labeller="$GITHUB_REPOSITORY_OWNER"
+          may_write "$labeller" || labeller="$GITHUB_REPOSITORY_OWNER"
+          # A person who took the label off decides: the rule then asks.
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY/issues/$issue" --jq '[.labels[].name] | index("build") != null')" = true ]; then
+            labelled=true
+          else
+            labelled=false
+          fi
           {
             echo "go=true"
             echo "pr=$pr"
             echo "issue=$issue"
             echo "head_sha=$HEAD_SHA"
             echo "labeller=$labeller"
+            echo "labelled=$labelled"
           } | tee -a "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -147,6 +166,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.ready.outputs.head_sha }}
           CI_RUN: ${{ github.event.workflow_run.id }}
+          LABELLED: ${{ steps.ready.outputs.labelled }}
         run: |
           cp scripts/build-rule.ts "$RUNNER_TEMP/build-rule.mts"
           cp .github/review-findings.sh .github/build-rules.yml "$RUNNER_TEMP/"
@@ -167,6 +187,14 @@ jobs:
           node --experimental-strip-types "$RUNNER_TEMP/build-rule.mts" --repo "$RUNNER_TEMP/judged" \
             --rules "$RUNNER_TEMP/build-rules.yml" --classified "$classified" --nits "$nits" \
             --base "$base" --head "$HEAD_SHA" --factory 'awml-factory[bot]' > "$RUNNER_TEMP/verdict.txt"
+          if [ "$LABELLED" != true ]; then
+            {
+              echo ask
+              echo "The build label was taken off the issue, so a person decides."
+              tail -n +2 "$RUNNER_TEMP/verdict.txt" | grep -vxF "No review rule matched this change." || true
+            } > "$RUNNER_TEMP/verdict.label"
+            mv "$RUNNER_TEMP/verdict.label" "$RUNNER_TEMP/verdict.txt"
+          fi
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
           cat "$RUNNER_TEMP/verdict.txt"

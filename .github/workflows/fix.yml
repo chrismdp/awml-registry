@@ -66,6 +66,7 @@ jobs:
           HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
           CI_EVENT: ${{ github.event.workflow_run.event }}
           CI_RUN: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
           # Whether GitHub says someone may write to the repository: their role or its base permission is
           # exactly admin, maintain or write, so a custom role counts only by what it grants.
@@ -88,6 +89,15 @@ jobs:
             leave "CI's tests didn't all pass, so this is retry's, or nothing's."
           jq -e 'any(.[]; (.name | IN("Bug review", "Security review")) and .conclusion == "failure")' "$RUNNER_TEMP/jobs.json" > /dev/null ||
             leave "Neither review failed."
+          # An earlier attempt of this run, on this head, whose review failed has already woken the
+          # fixer, so a re-run neither fixes nor comments again.
+          case "$RUN_ATTEMPT" in ''|*[!0-9]*) leave "CI's attempt isn't a number." ;; esac
+          for earlier in $(seq 1 $((RUN_ATTEMPT - 1))); do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/attempts/$earlier/jobs" --paginate --jq '.jobs[]' |
+              jq -se 'any(.[]; (.name | IN("Bug review", "Security review")) and .conclusion == "failure")' > /dev/null; then
+              leave "Attempt $earlier of CI's run already failed a review on this head, and woke the fixer then."
+            fi
+          done
           # The first open pull request at the reviewed commit opened by the factory's app, known by
           # its exact login and type, or by someone GitHub says may write to the repository: write,
           # maintain or admin, not how they're associated with it.
