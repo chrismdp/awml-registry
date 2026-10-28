@@ -7,14 +7,18 @@
 # the tests, Bug review and Security review run side by side as jobs of one run, and on a factory
 # branch, build/issue-*, Classify runs once both reviews have ended. Each job's result is its own
 # check on the commit, so the commit as pushed has one judge, and land.yml, fix.yml and retry.yml
-# read that judge's verdict from GitHub when this run finishes. A fork's pull request, or one a
-# stranger opened, gets the tests only: its author could steer the sessions, which hold the
-# maintainer's login token.
+# read that judge's verdict from GitHub when this run finishes. On a fork's pull request, or one a
+# stranger opened, the reviews fail without starting a session, since its author could steer the
+# sessions, which hold the maintainer's login token, and a person reviews it.
 #
 # On pull_request, GitHub runs the pull request's own copy of this file, not main's. So a person with
 # write access could change, in their own pull request, how it is reviewed and classified. That is
 # accepted: only the repository's own people and the factory's app get the reviews at all, they are
 # trusted, and the app can't push .github/, so nothing the factory pushes can change this file.
+#
+# The reviews run on every pull request, since GitHub counts a skipped required check as passed. On
+# a fork's, or one a stranger opened, their first step fails before anything else runs, so neither
+# review passes without having read the change.
 #
 # The review jobs and Classify check out main, never the branch, copy main's prompts, AGENTS.md,
 # REVIEW.md and scripts out, and bring in the pull request's patch as data, applied to the commit of
@@ -73,14 +77,9 @@ jobs:
   # that runs anything. The job's own check is the review: failed on an Important finding.
   review:
     name: ${{ matrix.review.name }}
-    # Anyone who can read the repository can open a pull request between two of its branches, so
-    # the opener must be the owner, a member, a collaborator or the factory's app, whose bot GitHub
-    # counts only as a contributor.
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      (contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) ||
-      github.event.pull_request.user.login == 'awml-factory[bot]')
+    # GitHub counts a skipped required check as passed, so the reviews run on every pull request,
+    # and the first step fails one they can't review.
+    if: github.event_name == 'pull_request'
     strategy:
       fail-fast: false
       matrix:
@@ -92,6 +91,30 @@ jobs:
     permissions:
       contents: read
     steps:
+      # A fork's pull request, or one opened by anyone but the repository's own people or the
+      # factory's app, could steer the sessions, which hold the maintainer's login token. Anyone who
+      # can read the repository can open a pull request between two of its branches, so the opener
+      # must be the owner, a member, a collaborator or the app, whose bot GitHub counts only as a
+      # contributor. This runs before anything is checked out, any secret is named or Claude Code
+      # is installed, and fails the review, so it can't pass by being skipped.
+      - name: Check this pull request is one the reviews may read
+        id: trust
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::This pull request comes from a fork, so it isn't reviewed here. A person must review it, and merge it from their own account."
+            exit 1
+          fi
+          case "$AUTHOR_ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR) exit 0 ;;
+          esac
+          if [ "$AUTHOR" = "awml-factory[bot]" ]; then exit 0; fi
+          echo "::error::This pull request was opened by someone other than the repository's own people or the factory's app, so it isn't reviewed here. A person must review it, and merge it from their own account."
+          exit 1
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: main
@@ -176,7 +199,11 @@ jobs:
   classify:
     name: Classify
     needs: review
-    if: ${{ !cancelled() && needs.review.result != 'skipped' && startsWith(github.head_ref, 'build/issue-') }}
+    if: >-
+      ${{ !cancelled() && needs.review.result != 'skipped' && startsWith(github.head_ref, 'build/issue-') &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) ||
+      github.event.pull_request.user.login == 'awml-factory[bot]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:

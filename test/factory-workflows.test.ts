@@ -1034,21 +1034,61 @@ describe("ci.yml", () => {
   // A push to main runs the tests only. A fork's pull request, or one a stranger opened between two
   // branches here, gets the tests only: its author could steer the sessions, which hold the
   // maintainer's login token.
-  it("reviews only a pull request from a branch of this repository, opened by its own people or the factory's app", () => {
-    expect(squash(jobs.review.if)).toBe(
-      squash(`github.event_name == 'pull_request' &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        (contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) ||
-        github.event.pull_request.user.login == 'awml-factory[bot]')`),
-    );
+  // GitHub counts a skipped required check as passed, so the reviews run on every pull request and
+  // fail, before anything else, on one from a fork or opened by anyone but the repository's own
+  // people or the factory's app: its author could steer the sessions, which hold the login token.
+  it("runs the reviews on every pull request, failing first on an untrusted one", () => {
+    expect(jobs.review.if).toBe("github.event_name == 'pull_request'");
     expect(needs(jobs.review)).toEqual([]);
+    const [gate, ...rest] = steps(jobs.review);
+    expect(gate.id).toBe("trust");
+    expect(gate.uses).toBeUndefined();
+    expect(JSON.stringify(gate)).not.toContain("secrets.");
+    expect(gate.env).toEqual({
+      HEAD_REPOSITORY: "${{ github.event.pull_request.head.repo.full_name }}",
+      AUTHOR_ASSOCIATION: "${{ github.event.pull_request.author_association }}",
+      AUTHOR: "${{ github.event.pull_request.user.login }}",
+    });
+    // The token reaches only the session, which a failed gate stops before it starts.
+    for (const each of rest) if (each.env && "CLAUDE_CODE_OAUTH_TOKEN" in each.env) expect(each.id).toBe("session");
+    for (const each of steps(jobs.review)) expect(each.if, each.name).toBeUndefined();
   });
 
+  const trust = (env: Record<string, string>) =>
+    rehearse(stepWithId(jobs.review, "trust").run ?? "", {
+      root: scratch(),
+      env: { HEAD_REPOSITORY: "owner/repo", AUTHOR_ASSOCIATION: "MEMBER", AUTHOR: "maintainer", ...env },
+    });
+
+  it.runIf(canRehearse).each([
+    ["a member's pull request from this repository", {}],
+    ["the owner's", { AUTHOR_ASSOCIATION: "OWNER" }],
+    ["a collaborator's", { AUTHOR_ASSOCIATION: "COLLABORATOR" }],
+    ["the factory's app's", { AUTHOR_ASSOCIATION: "CONTRIBUTOR", AUTHOR: "awml-factory[bot]" }],
+  ])("lets %s through to the review", (_, env) => {
+    const run = trust(env);
+    expect(run.failed, run.printed).toBe(false);
+  });
+
+  it.runIf(canRehearse).each([
+    ["a fork's pull request", { HEAD_REPOSITORY: "stranger/repo", AUTHOR_ASSOCIATION: "OWNER" }],
+    ["a stranger's pull request from a branch here", { AUTHOR_ASSOCIATION: "NONE", AUTHOR: "stranger" }],
+    ["a contributor's", { AUTHOR_ASSOCIATION: "CONTRIBUTOR", AUTHOR: "someone" }],
+  ])("fails the review on %s, saying why", (_, env) => {
+    const run = trust(env);
+    expect(run.failed).toBe(true);
+    expect(run.printed).toContain("isn't reviewed here");
+  });
+
+  // Classify isn't a required check, so it keeps its own conditions and is simply skipped.
   // Classify runs once both reviews have ended, whatever they found, on a factory branch only.
   it("classifies only a factory branch, once both reviews have ended", () => {
     expect(needs(jobs.classify)).toEqual(["review"]);
     expect(squash(jobs.classify.if)).toBe(
-      squash(`\${{ !cancelled() && needs.review.result != 'skipped' && startsWith(github.head_ref, 'build/issue-') }}`),
+      squash(`\${{ !cancelled() && needs.review.result != 'skipped' && startsWith(github.head_ref, 'build/issue-') &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) ||
+        github.event.pull_request.user.login == 'awml-factory[bot]') }}`),
     );
   });
 
@@ -2492,7 +2532,7 @@ describe("retry.yml", () => {
     renamed = undefined as string | undefined,
     builds = 1,
     pullRepository = "owner/repo",
-    earlierFailure = false,
+    earlierFailure = false as boolean | "review",
   } = {}) => {
     const root = scratch();
     const runs_ = Array.from({ length: builds }, (_, at) => ({
@@ -2517,7 +2557,12 @@ describe("retry.yml", () => {
   *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: test }, { name: "Bug review", conclusion: bug }] })}' ;;
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(head), appPull(pullHead, pullRepository)])}' ;;
   *"actions/workflows/ci.yml/runs"*) answer <<< '${JSON.stringify(ciRuns)}' ;;
-  *"actions/runs/70/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: "failure" }] })}' ;;
+  *"actions/runs/70/jobs"*) answer <<< '${JSON.stringify({
+    jobs: [
+      { name: "test", conclusion: earlierFailure === "review" ? "success" : "failure" },
+      { name: "Bug review", conclusion: "failure" },
+    ],
+  })}' ;;
   *"api graphql"*) answer <<< '${JSON.stringify({
     data: {
       repository: {
@@ -2573,6 +2618,16 @@ describe("retry.yml", () => {
 
   // The comment is posted once: only by the first CI run whose tests failed after the third build
   // started, found from GitHub's runs, never from a marker in an earlier comment.
+  // After the third build its CI passed the tests and failed a review, the fixer pushed, and the fix
+  // broke the tests: that's the first run since the third build whose tests failed, so a person is
+  // told, once.
+  it.runIf(canRehearse)("tells a person when a fix commit after the third build breaks the tests", () => {
+    const run = tries({ builds: 3, earlierFailure: "review" });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.calls).not.toContain("workflow run");
+    expect(run.calls.match(/issue comment 7 /g)).toHaveLength(1);
+  });
+
   it.runIf(canRehearse)("says a person must act only once", () => {
     const run = tries({ builds: 3, earlierFailure: true });
     expect(run.failed, run.printed).toBe(false);
