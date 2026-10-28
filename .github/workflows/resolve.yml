@@ -12,7 +12,8 @@
 # fsmonitor off, running nothing from the branch. A branch whose commits change .github/ or Claude
 # Code's own files isn't rebased at all, since the app doesn't push it, and nor is one that changes
 # its dependencies or npm's settings, since npm would install them beside the Claude token and runs
-# a git dependency's prepare script even with scripts off: its comment says so. The draft job resolves each real conflict in a
+# a git dependency's prepare script even with scripts off, or the engine's pin, since the sessions'
+# engine is built from main's: its comment says so. The draft job resolves each real conflict in a
 # Claude session of its own. The push job runs on a fresh runner, shares none of the draft's access
 # and runs nothing from the branch: it keeps the git-only guards, that the branch sits on main with
 # no conflict markers and changes nothing in .github/ or Claude Code's own files, and force-pushes
@@ -120,7 +121,7 @@ jobs:
             [[ "$branch" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || continue
 
             git "${safe[@]}" -c http.https://github.com/.extraheader="$auth" fetch -q --no-tags origin "$head_sha"
-            guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
+            guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$|^vendor/awml/'
             # Every commit's files, not the net change: each commit is installed as the rebase replays
             # it, so one that adds a dependency and a later one that takes it out still count. The names
             # go to a file that grep reads whole, with no pipe for it to cut short.
@@ -202,6 +203,18 @@ jobs:
       - name: Make the host-only folder
         run: sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 "$HOST_DIR"
 
+      # A session that checks or draws a workflow needs the AWML engine, which npm ci --ignore-scripts
+      # doesn't build. Main's copy of the build script builds it from main's pin, outside the sandbox
+      # and before any session, never the tree's own script: it fetches AWML's source and the
+      # pinned Go, and keeps the build only if each file has the SHA-256 the pin names.
+      - name: Build the AWML engine from main's pin
+        run: |
+          # Main's engine build script and pin, for the engine every session needs, built below.
+          mkdir -p "$HOST_DIR/engine/scripts" "$HOST_DIR/engine/vendor/awml"
+          cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"
+          cp vendor/awml/version.json vendor/awml/awml.js "$HOST_DIR/engine/vendor/awml/"
+          bash "$HOST_DIR/engine/scripts/engine-build.sh"
+
       # Main's prompt, scripts and AGENTS.md are copied out first. Each conflicting branch's head is
       # fetched into a local branch of the workspace, so its clone carries it and the check can read
       # it, and cloned with no hardlinks outside the workspace. The clone has no hooks, no fsmonitor
@@ -264,6 +277,7 @@ jobs:
             # changes its dependencies, so this installs main's lockfile.
             bash "$HOST_DIR/main/check-lockfile.sh" "$root/work"
             (cd "$root/work" && npm ci --ignore-scripts --no-audit --no-fund)
+            cp "$HOST_DIR/engine/vendor/awml/awml.wasm" "$HOST_DIR/engine/vendor/awml/wasm_exec.js" "$HOST_DIR/engine/vendor/awml/build.json" "$root/work/vendor/awml/"
             chmod -R a-w "$root/in"
             cp "$root/work/.git/config" "$HOST_DIR/baseline/git-config-$number"
             stat -c %d:%i "$root/work" "$root/work/.git" > "$HOST_DIR/baseline/clone-$number"
@@ -375,7 +389,7 @@ jobs:
             echo "The workspace's git config changed during the sessions, so nothing is read from it."
             exit 1
           fi
-          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$|^vendor/awml/'
           resolved="$HOST_DIR/resolved"
           mkdir -p "$resolved" "$HOST_DIR/check"
           while IFS=$'\t' read -r number head_sha; do
@@ -510,7 +524,7 @@ jobs:
         run: |
           refuse() { echo "$1"; { echo "result=refused"; echo "reason=$1"; } >> "$GITHUB_OUTPUT"; exit 0; }
           if [ "$GUARDED" = true ]; then
-            refuse "The branch's commits change .github/, Claude Code's own files, its dependencies (package.json or package-lock.json), an .npmrc, a .yarnrc or node_modules/, which the factory doesn't push or install, so it wasn't rebased."
+            refuse "The branch's commits change .github/, Claude Code's own files, its dependencies (package.json or package-lock.json), an .npmrc, a .yarnrc, node_modules/ or the engine's pin in vendor/awml/, which the factory doesn't push or install, so it wasn't rebased."
           fi
           mkdir -p "$RUNNER_TEMP/bundles"
           bundle="$RUNNER_TEMP/bundles/$PR_NUMBER.bundle"
@@ -525,11 +539,11 @@ jobs:
           if git "${safe[@]}" grep -qE '^(<<<<<<<|>>>>>>>)( |$)' refs/rebased --; then
             refuse "The rebased branch still holds conflict markers."
           fi
-          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$|^vendor/awml/'
           # The names go to a file that grep reads whole, with no pipe for it to cut short.
           git "${safe[@]}" diff --name-only --no-renames -z "$MAIN_SHA" refs/rebased > "$RUNNER_TEMP/names"
           if grep -qzE "$guarded" "$RUNNER_TEMP/names"; then
-            refuse "The rebased branch changes .github/, Claude Code's own files, its dependencies, an .npmrc, a .yarnrc or node_modules/, which the factory doesn't push."
+            refuse "The rebased branch changes .github/, Claude Code's own files, its dependencies, an .npmrc, a .yarnrc, node_modules/ or the engine's pin in vendor/awml/, which the factory doesn't push."
           fi
           { echo "result=push"; echo "new_sha=$(git rev-parse refs/rebased)"; } >> "$GITHUB_OUTPUT"
 

@@ -798,6 +798,43 @@ describe("the factory's workflows", () => {
     expect(named).toBeGreaterThan(0);
   });
 
+  // A session that checks or draws a workflow needs the AWML engine, which npm ci --ignore-scripts
+  // doesn't build. It's built before any session, outside the sandbox, by main's copy of the build
+  // script from main's pin, copied out before any branch is checked out, never by the branch's own
+  // script or package.json, and copied into each tree a session works in.
+  it("build the engine with main's script and pin before any session", () => {
+    const copied = [
+      'cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"',
+      'cp vendor/awml/version.json vendor/awml/awml.js "$HOST_DIR/engine/vendor/awml/"',
+    ];
+    const built = 'bash "$HOST_DIR/engine/scripts/engine-build.sh"';
+    for (const [file, id, into] of [
+      ["build.yml", "draft", "vendor/awml/"],
+      ["fix.yml", "fix", "vendor/awml/"],
+      ["resolve.yml", "draft", '"$root/work/vendor/awml/"'],
+    ]) {
+      const where = `${file} ${id}`;
+      const all = steps(readJobs(file)[id]);
+      const at = (test: (each: Step) => boolean) => all.findIndex(test);
+      const copy = at((each) => copied.every((line) => (each.run ?? "").includes(line)));
+      const build = at((each) => (each.run ?? "").includes(built));
+      const session = at((each) => /\bclaude -p\b|resolve-session\.sh" 1/.test(each.run ?? ""));
+      // Main's copy is taken while main is the tree: before the branch is checked out or cloned.
+      const branch = at((each) => (each.uses?.startsWith(cloneAction) && String(each.with?.ref ?? "").includes("head_sha")) || each.id === "prepare");
+      expect(copy, where).toBeGreaterThan(-1);
+      if (branch > -1) expect(copy, where).toBeLessThan(branch);
+      expect(build, where).toBeGreaterThanOrEqual(copy);
+      expect(build, where).toBeLessThan(session);
+      expect(Object.keys(all[build].env ?? {}), where).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+      const copyIn = at((each) => (each.run ?? "").includes(`"$HOST_DIR/engine/vendor/awml/awml.wasm" "$HOST_DIR/engine/vendor/awml/wasm_exec.js" "$HOST_DIR/engine/vendor/awml/build.json" ${into}`));
+      expect(copyIn, where).toBeGreaterThanOrEqual(build);
+      expect(copyIn, where).toBeLessThan(session);
+      for (const each of all) {
+        expect(each.run ?? "", where).not.toMatch(/npm run engine:build|bash scripts\/engine-build\.sh/);
+      }
+    }
+  });
+
   // Every npm the host runs beside the Claude token ignores the tree's, user and global config.
   it("run npm on the host only with its config files and scripts off", () => {
     for (const [file, id, job] of everyJob()) {
@@ -989,11 +1026,19 @@ describe("the factory's workflows", () => {
 const claudesPattern = "(^|/)\\.claude(/|$)|(^|/)\\.mcp\\.json$|(^|/)CLAUDE(\\.local)?\\.md$";
 const npmPattern =
   "(^|/)\\.npmrc$|(^|/)\\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\\.json$|(^|/)yarn\\.lock$";
-const dependencies = "(^|/)package(-lock)?\\.json$";
+// The engine's pin, vendor/awml/, is held back with the dependencies: the session's engine is built
+// from main's pin, so a branch that changes it would run against an engine it doesn't pin.
+const dependencies = "(^|/)package(-lock)?\\.json$|^vendor/awml/";
 const neverPushPattern = `^\\.github/|${claudesPattern}|${npmPattern}`;
 const heldBackPattern = `${neverPushPattern}|${dependencies}`;
 
 describe("the factory's path patterns", () => {
+  it("hold back the engine's pin at the top of the tree, and nothing else named like it", () => {
+    for (const path of ["vendor/awml/version.json", "vendor/awml/awml.js", "vendor/awml/awml.d.ts"])
+      expect(new RegExp(heldBackPattern).test(path), path).toBe(true);
+    expect(new RegExp(heldBackPattern).test("src/vendor/awml/version.json")).toBe(false);
+  });
+
   it("are one never-push pattern in the build, and one held-back pattern in the fixer and in resolve", () => {
     const found: string[] = [];
     for (const file of ["build.yml", "fix.yml", "resolve.yml"]) {
@@ -3023,6 +3068,10 @@ ${permissionStub}`,
 
   it.runIf(canRehearse)("fixes a branch that changes .github/", () => {
     expect(decide({ files: [".github/workflows/ci.yml"] }).outputs.outcome).toBe("fix");
+  });
+
+  it.runIf(canRehearse).each(["vendor/awml/version.json", "vendor/awml/awml.js"])("holds back a branch that changes the engine's pin, %s", (path) => {
+    expect(decide({ files: [path] }).outputs.outcome).toBe("npmfiles");
   });
 
   it.runIf(canRehearse)("reads every changed file with git, so a package.json past the 300th is still held back", () => {

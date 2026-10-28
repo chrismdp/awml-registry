@@ -201,6 +201,10 @@ jobs:
         run: |
           mkdir -p "$HOST_DIR/main" "$RUNNER_TEMP/input"
           cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh "$HOST_DIR/main/"
+          # Main's engine build script and pin, for the engine every session needs, built below.
+          mkdir -p "$HOST_DIR/engine/scripts" "$HOST_DIR/engine/vendor/awml"
+          cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"
+          cp vendor/awml/version.json vendor/awml/awml.js "$HOST_DIR/engine/vendor/awml/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
 
       # The label approves the issue as it reads then, and a try drafts from it only if it hasn't
@@ -323,6 +327,15 @@ jobs:
           mkdir -p "$HOST_DIR/baseline"
           cp .git/config "$HOST_DIR/baseline/git-config"
           stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$HOST_DIR/baseline/workspace"
+
+      # A session that checks or draws a workflow needs the AWML engine, which npm ci --ignore-scripts
+      # doesn't build. Main's copy of the build script builds it from main's pin, outside the sandbox
+      # and before any session, never the tree's own script: it fetches AWML's source and the
+      # pinned Go, and keeps the build only if each file has the SHA-256 the pin names.
+      - name: Build the AWML engine from main's pin
+        run: |
+          bash "$HOST_DIR/engine/scripts/engine-build.sh"
+          cp "$HOST_DIR/engine/vendor/awml/awml.wasm" "$HOST_DIR/engine/vendor/awml/wasm_exec.js" "$HOST_DIR/engine/vendor/awml/build.json" vendor/awml/
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
