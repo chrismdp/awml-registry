@@ -36,7 +36,8 @@ while IFS=$'\t' read -r number _; do
   fi
   marked=false
   while IFS= read -r path; do
-    if [ -f "$work/$path" ] && grep -qE '^(<<<<<<<|>>>>>>>)( |$)' "$work/$path"; then marked=true; fi
+    # A link is left alone: the host reads nothing through one, and the check step refuses it.
+    if [ -f "$work/$path" ] && [ ! -L "$work/$path" ] && grep -qE '^(<<<<<<<|>>>>>>>)( |$)' "$work/$path"; then marked=true; fi
   done < "$root/in/conflicted-files.txt"
   if [ "$marked" = true ]; then
     give_up "The session on #$number left conflict markers, so its rebase stops here."

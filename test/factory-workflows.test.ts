@@ -1054,6 +1054,48 @@ describe("claude-settings.sh", () => {
 
 // npm runs a git dependency's prepare script on the host even with scripts off, so before any host
 // npm ci the lockfile must name only packages from npm's registry, each with its integrity.
+// A session's output folder is read only if it's a plain folder where it should be, holding only
+// plain files and folders.
+describe("check-out.sh", () => {
+  const check = (spoil: (root: string, out: string) => void) => {
+    const root = scratch();
+    const out = join(root, "runner/sessions/build/out");
+    put(join(out, "message.md"), "Change it\n");
+    put(join(out, "notes/more.md"), "More\n");
+    spoil(root, out);
+    return rehearse(script("check-out.sh", [out, join(root, "runner/sessions")]), { root });
+  };
+
+  it.runIf(canRehearse)("passes a folder of plain files and folders", () => {
+    expect(check(() => {}).failed).toBe(false);
+  });
+
+  it.runIf(canRehearse).each([
+    ["a link to a file", (_: string, out: string) => symlinkSync("/proc/self/environ", join(out, "env.md"))],
+    ["a link to a folder", (root: string, out: string) => symlinkSync(join(root, "runner"), join(out, "notes/runner"))],
+    ["a fifo", (_: string, out: string) => execFileSync("mkfifo", [join(out, "pipe")])],
+    ["a folder that's a link", (root: string, out: string) => {
+      execFileSync("mv", [out, join(root, "elsewhere")]);
+      symlinkSync(join(root, "elsewhere"), out);
+    }],
+    ["a folder reached through a link", (root: string) => {
+      const sessions = join(root, "runner/sessions/build");
+      execFileSync("mv", [sessions, join(root, "runner/sessions/other")]);
+      symlinkSync(join(root, "runner/sessions/other"), sessions);
+    }],
+    ["no folder", (_: string, out: string) => rmSync(out, { recursive: true })],
+  ])("refuses %s", (_, spoil) => {
+    expect(check(spoil).failed).toBe(true);
+  });
+
+  it.runIf(canRehearse)("refuses a folder outside its root", () => {
+    const root = scratch();
+    put(join(root, "out/message.md"), "Change it\n");
+    mkdirSync(join(root, "runner/sessions"), { recursive: true });
+    expect(rehearse(script("check-out.sh", [join(root, "out"), join(root, "runner/sessions")]), { root }).failed).toBe(true);
+  });
+});
+
 describe("check-lockfile.sh", () => {
   const check = (lock: unknown) => {
     const root = scratch();
@@ -1305,6 +1347,7 @@ describe("ci.yml", () => {
     put(join(input, "change.patch"), "diff --git a/a b/a\n");
     put(join(root, "runner/main/review-bugs-prompt.md"), "Read INPUT_DIR/change.patch. Write OUT_DIR/bugs.json.\n");
     put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
+    put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
     const { run, started } = sessions(review.run ?? "", root, {
       INPUT_DIR: input,
       PROMPT: "review-bugs-prompt.md",
@@ -1424,6 +1467,7 @@ describe("ci.yml", () => {
     put(join(input, "change.patch"), "diff --git a/a b/a\n");
     put(join(root, "runner/main/classify-prompt.md"), "Read INPUT_DIR/change.patch. Write OUT_DIR/classification.json.\n");
     put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
+    put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
     const { run, started } = sessions(stepWithId(jobs.classify, "session").run ?? "", root, {
       INPUT_DIR: input,
       CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
@@ -1521,6 +1565,7 @@ describe("ci.yml", () => {
       const root = scratch();
       put(join(root, "runner/main/post-findings.sh"), readFileSync(join(github, "post-findings.sh"), "utf8"));
       put(join(root, "runner/main/scan-tokens.sh"), readFileSync(join(github, "scan-tokens.sh"), "utf8"));
+      put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
       put(join(root, "runner/sessions/review/out/f.json"), "[]");
       const run = rehearse(stepWithId(jobs.review, "post").run ?? "", {
         root,
@@ -1566,6 +1611,7 @@ describe("ci.yml", () => {
       mkdirSync(out, { recursive: true });
       if (file) put(join(out, "classification.json"), file);
       put(join(root, "runner/main/scan-tokens.sh"), readFileSync(join(github, "scan-tokens.sh"), "utf8"));
+      put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
       const run = rehearse(verdict.run ?? "", { root, env: { GITHUB_STEP_SUMMARY: join(root, "summary.md") } });
       expect(run.failed, run.printed).toBe(false);
       expect(run.printed).toContain(want);
@@ -1933,6 +1979,7 @@ ${permissionStub}`,
     put(join(input, "issue.md"), "# #7\n");
     put(join(root, "runner/main/build-prompt.md"), "Read INPUT_DIR/issue.md. Write OUT_DIR/message.md.\n");
     put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
+    put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
     const { run, started } = sessions(draft.run ?? "", root, {
       INPUT_DIR: input,
       CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
@@ -2007,6 +2054,7 @@ ${permissionStub}`,
     for (const [file, id, folder] of [["build.yml", "draft", "change"], ["fix.yml", "fix", "fix"]]) {
       const root = scratch();
       put(join(root, "runner/main/scan-tokens.sh"), readFileSync(join(github, "scan-tokens.sh"), "utf8"));
+      put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
       put(join(root, `runner/${folder}/change.patch`), "diff\n");
       symlinkSync("/etc/hostname", join(root, `runner/${folder}/planted`));
       const run = rehearse(stepWithId(readJobs(file)[id], "pack").run ?? "", { root });
@@ -2148,6 +2196,8 @@ ${permissionStub}`,
       put(join(root, "runner/baseline/git-config"), readFileSync(join(repo, ".git/config"), "utf8"));
       put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", repo, join(repo, ".git")], { encoding: "utf8" }));
       put(join(repo, "README.md"), "Changed\n");
+      put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
+      put(join(root, "runner/sessions/build/out/message.md"), "Change it\n");
       spoil(repo, root);
       return { root, run: rehearse(stepWithId(jobs.draft, "patch").run ?? "", { root, cwd: repo, env: { GITHUB_WORKSPACE: repo } }) };
     };
@@ -2164,6 +2214,16 @@ ${permissionStub}`,
         execFileSync("cp", ["-r", join(root, "old-git"), join(repo, ".git")]);
       });
       expect(run.failed).toBe(true);
+    });
+
+    // The session could have left a link in its output folder for the host's copy to follow.
+    it.runIf(canRehearse)("refuses an output folder holding a link", () => {
+      const { root, run } = patch((_, root) => {
+        rmSync(join(root, "runner/sessions/build/out/message.md"));
+        symlinkSync("/proc/self/environ", join(root, "runner/sessions/build/out/message.md"));
+      });
+      expect(run.failed).toBe(true);
+      expect(existsSync(join(root, "runner/change/message.md"))).toBe(false);
     });
 
     it.runIf(canRehearse)("refuses a repository nested below the top", () => {
@@ -2930,6 +2990,7 @@ ${permissionStub}`,
     put(join(input, "findings.json"), "[]");
     put(join(root, "runner/main/fix-prompt.md"), "Read INPUT_DIR/findings.json. Write OUT_DIR/message.md.\n");
     put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
+    put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
     const { run, started } = sessions(draft.run ?? "", root, {
       INPUT_DIR: input,
       CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
@@ -3545,6 +3606,7 @@ ${permissionStub}
     for (const n of gaveUp) put(join(root, `runner/baseline/gave-up-${n}`), "");
     put(join(root, "runner/main/resolve-prompt.md"), readFileSync(join(github, "resolve-prompt.md"), "utf8"));
     put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
+    put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
     return root;
   };
 
@@ -3682,6 +3744,7 @@ ${permissionStub}
       put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", ws, join(ws, ".git")], { encoding: "utf8" }));
       put(join(root, "runner/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", work, join(work, ".git")], { encoding: "utf8" }));
       put(join(root, "runner/main/scan-tokens.sh"), readFileSync(join(github, "scan-tokens.sh"), "utf8"));
+      put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
       spoil(root, ws);
       const run = rehearse(stepWithId(jobs.draft, "check").run ?? "", { root, env: { MAIN_SHA: main, GITHUB_WORKSPACE: ws } });
       return { root, run };
@@ -3725,6 +3788,19 @@ ${permissionStub}
           const real = join(root, "elsewhere");
           execFileSync("mv", [out, real]);
           symlinkSync(real, out);
+        },
+      );
+      expect(run.failed, run.printed).toBe(false);
+      expect(existsSync(join(root, "runner/resolved/5.bundle"))).toBe(false);
+      expect(existsSync(join(root, "runner/resolved/5.md"))).toBe(false);
+    });
+
+    it.runIf(canRehearse)("reads nothing from an out folder holding a link", () => {
+      const { root, run } = rebased(
+        () => {},
+        (root) => {
+          rmSync(join(root, "runner/pr/5/out/message.md"));
+          symlinkSync("/proc/self/environ", join(root, "runner/pr/5/out/message.md"));
         },
       );
       expect(run.failed, run.printed).toBe(false);
@@ -3865,6 +3941,244 @@ ${permissionStub}
       expect(run.calls).toContain(want);
       expect(run.calls).toContain("Kept both &lt;b>sides&lt;/b>, as @​someone wanted.");
       if (pushed === "success") expect(run.calls).toContain(`git push --force origin ${"a".repeat(40)}:clash`);
+    }
+  });
+});
+
+// A session's commands can replace any file they may write with a symbolic link, to the host's own
+// environment or to a file the session can't read, and a host step that read the file afterwards
+// would print or keep what the link leads to. So a host step reads, after a session, only what sits
+// in a folder the session's sandbox denies it, or the session's own output folder once it holds
+// nothing but plain files and folders where it should be.
+describe("host reads after a session", () => {
+  const ci = readJobs("ci.yml");
+  const build = readJobs("build.yml");
+  const fix = readJobs("fix.yml");
+  const resolve = readJobs("resolve.yml");
+  const secret = "host-secret-from-the-environment";
+
+  // Stands in for claude as a session that writes the files named in OUT_FILES to the folder it may
+  // write, then has its commands replace every file under RUNNER_TEMP that its sandbox lets them
+  // write with a link to the environment of whatever reads it next.
+  const poisonStub = `#!/bin/bash
+mapfile -t denied < <(jq -r '.sandbox.filesystem.denyWrite[]' "$HOME/.claude/settings.json")
+while [ $# -gt 0 ]; do
+  if [ "$1" = --add-dir ] && [ -w "$2" ]; then
+    for name in \${OUT_FILES:-}; do printf '%s\\n' "$OUT_TEXT" > "$2/$name"; done
+  fi
+  shift
+done
+find "$RUNNER_TEMP" -type f -print0 | while IFS= read -r -d '' file; do
+  for path in "\${denied[@]}"; do
+    case "$path" in ./*) path="$PWD/\${path#./}" ;; esac
+    case "$file/" in "$path"/*) continue 2 ;; esac
+  done
+  ln -sfn /proc/self/environ "$file"
+done
+`;
+
+  const main = (root: string, ...names: string[]) => {
+    for (const name of ["claude-settings.sh", "check-out.sh", "scan-tokens.sh", ...names])
+      put(join(root, "runner/main", name), readFileSync(join(github, name), "utf8"));
+  };
+
+  // Runs a job's steps from its session on, as GitHub does, each only while the ones before passed
+  // unless it runs whatever happened, with the stub in claude's place and the secret in every step's
+  // environment.
+  const poisoned = (root: string, job: Job, ids: string[], { cwd = root, env = {} }: { cwd?: string; env?: Record<string, string> }) => {
+    put(join(root, "bin/claude"), poisonStub);
+    chmodSync(join(root, "bin/claude"), 0o755);
+    mkdirSync(join(root, "runner/_runner_file_commands"));
+    const ran: Rehearsal[] = [];
+    let failed = false;
+    for (const id of ids) {
+      const each = stepWithId(job, id);
+      if (failed && !/always\(\)|!cancelled\(\)/.test(each.if ?? "")) continue;
+      const run = rehearse(each.run ?? "", {
+        root,
+        cwd,
+        env: {
+          SECRET_MARK: secret,
+          CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+          // Where the runner keeps them, so their folder, which the sandbox denies, isn't the
+          // rehearsal's whole root.
+          GITHUB_OUTPUT: join(root, "runner/_runner_file_commands/output"),
+          GITHUB_STEP_SUMMARY: join(root, "runner/_runner_file_commands/summary"),
+          ...env,
+        },
+      });
+      ran.push(run);
+      failed ||= run.failed;
+    }
+    return ran;
+  };
+
+  // No secret was printed, kept or sent, and no file a host step read or left, outside the session's
+  // own folders, is a link.
+  const leakedNothing = (root: string, ran: Rehearsal[], hostOnly: string[]) => {
+    for (const run of ran) {
+      expect(run.printed).not.toContain(secret);
+      expect(run.calls).not.toContain(secret);
+    }
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const path = join(dir, entry.name);
+        if (entry.isSymbolicLink()) return [];
+        return entry.isDirectory() ? walk(path) : [path];
+      });
+    for (const file of walk(root)) expect(readFileSync(file, "latin1"), file).not.toContain(secret);
+    for (const dir of hostOnly) {
+      const at = join(root, "runner", dir);
+      if (!existsSync(at)) continue;
+      const links = spawnSync("find", [at, "-type", "l"], { encoding: "utf8" }).stdout;
+      expect(links, dir).toBe("");
+    }
+  };
+
+  // The stub reached the files it may write, so the test tests something.
+  const linked = (path: string) => spawnSync("test", ["-L", path]).status === 0;
+
+  it.runIf(canRehearse)("posts nothing from a review whose session linked every file it could", () => {
+    const root = scratch();
+    const input = join(root, "runner/input");
+    put(join(input, "REVIEW.md"), "What failure looks like.\n");
+    put(join(input, "change.patch"), "diff --git a/a b/a\n");
+    put(join(root, "runner/main/review-bugs-prompt.md"), "Write OUT_DIR/bugs.json.\n");
+    main(root, "post-findings.sh");
+    const ran = poisoned(root, ci.review, ["session", "post"], {
+      env: { INPUT_DIR: input, PROMPT: "review-bugs-prompt.md", FINDINGS: "bugs.json", UNREAD: "0", REVIEW_NAME: "Bug review", OUT_FILES: "bugs.json", OUT_TEXT: "[]" },
+    });
+    expect(linked(join(root, "runner/sessions/review/out/bugs.json"))).toBe(true);
+    expect(ran.map((run) => run.failed)).toEqual([false, true]);
+    leakedNothing(root, ran, ["main", "host", "input"]);
+  });
+
+  it.runIf(canRehearse)("says ask when Classify's session linked every file it could", () => {
+    const root = scratch();
+    const input = join(root, "runner/input");
+    put(join(input, "change.patch"), "diff --git a/a b/a\n");
+    put(join(root, "runner/main/classify-prompt.md"), "Write OUT_DIR/classification.json.\n");
+    main(root);
+    const verdict = JSON.stringify({ verdict: "ship", reasons: ["Fine."] });
+    const ran = poisoned(root, ci.classify, ["session", "verdict"], { env: { INPUT_DIR: input, OUT_FILES: "classification.json", OUT_TEXT: verdict } });
+    expect(linked(join(root, "runner/sessions/classify/out/classification.json"))).toBe(true);
+    expect(ran[1].printed).toContain("::notice title=Verdict%3A ask::Classify left no readable verdict.");
+    leakedNothing(root, ran, ["main", "host", "input"]);
+  });
+
+  // A workspace with a change in it, as a session leaves it, with its baseline kept.
+  const workspace = (root: string) => {
+    const repo = join(root, "work");
+    mkdirSync(repo);
+    git(repo, "init", "-q");
+    put(join(repo, "README.md"), "A registry\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-qm", "main");
+    put(join(root, "runner/baseline/git-config"), readFileSync(join(repo, ".git/config"), "utf8"));
+    put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", repo, join(repo, ".git")], { encoding: "utf8" }));
+    put(join(repo, "README.md"), "Changed\n");
+    return repo;
+  };
+
+  it.runIf(canRehearse).each([
+    ["the build's draft", build.draft, "build", "build-prompt.md", "change"],
+    ["the fix", fix.fix, "fix", "fix-prompt.md", "fix"],
+  ] as const)("keeps nothing from %s when its session linked every file it could", (_, job, name, prompt, kept) => {
+    const root = scratch();
+    const input = join(root, "runner/input");
+    put(join(input, "issue.md"), "# #7\n");
+    put(join(root, "runner/main", prompt), "Write OUT_DIR/message.md.\n");
+    main(root, "unclose.sh");
+    const repo = workspace(root);
+    const ran = poisoned(root, job, ["session", "patch", "pack"], {
+      cwd: repo,
+      env: { INPUT_DIR: input, GITHUB_WORKSPACE: repo, OUT_FILES: "message.md pull-request.md pictures.json", OUT_TEXT: "Change it" },
+    });
+    expect(linked(join(root, `runner/sessions/${name}/out/message.md`))).toBe(true);
+    expect(ran.map((run) => run.failed)).toEqual([false, true]);
+    leakedNothing(root, ran, ["main", "host", "input", "baseline", kept]);
+  });
+
+  it.runIf(canRehearse)("continues no rebase through a link a round's session left", () => {
+    const root = scratch();
+    const clone = join(root, "runner/pr/5/work");
+    mkdirSync(clone, { recursive: true });
+    git(clone, "init", "-q");
+    put(join(clone, "a.txt"), "one\n");
+    git(clone, "add", "-A");
+    git(clone, "commit", "-qm", "base");
+    git(clone, "switch", "-q", "-c", "branch");
+    put(join(clone, "a.txt"), "branch\n");
+    git(clone, "commit", "-qam", "branch");
+    git(clone, "switch", "-q", "main");
+    put(join(clone, "a.txt"), "main\n");
+    git(clone, "commit", "-qam", "main moves");
+    const base = git(clone, "rev-parse", "HEAD");
+    git(clone, "switch", "-q", "branch");
+    spawnSync("git", ["-C", clone, "-c", "user.name=A", "-c", "user.email=a@example.com", "rebase", "-q", base], { encoding: "utf8" });
+    put(join(root, "runner/pulls.tsv"), `5\t${"a".repeat(40)}\n`);
+    put(join(root, "runner/pr/5/in/conflicted-files.txt"), "a.txt\n");
+    put(join(root, "runner/pr/5/out/message.md"), "Kept both sides.\n");
+    put(join(root, "runner/baseline/git-config-5"), readFileSync(join(clone, ".git/config"), "utf8"));
+    put(join(root, "runner/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", clone, join(clone, ".git")], { encoding: "utf8" }));
+    main(root, "resolve-prompt.md", "resolve-session.sh", "resolve-continue.sh");
+    const ran = poisoned(root, resolve.draft, ["session1", "continue1"], {
+      env: { GITHUB_WORKSPACE: join(root, "ws"), GIT_COMMITTER_NAME: "A", GIT_COMMITTER_EMAIL: "a@example.com" },
+    });
+    expect(linked(join(root, "runner/pr/5/out/message.md"))).toBe(true);
+    expect(linked(join(clone, "a.txt"))).toBe(true);
+    expect(ran.map((run) => run.failed)).toEqual([false, false]);
+    leakedNothing(root, ran, ["main", "host", "baseline", "pr/5/in"]);
+  });
+
+  // The folders under RUNNER_TEMP that each session's sandbox denies it: claude-settings.sh's own,
+  // and those the step names.
+  const deniedTops = (text: string): Set<string> => {
+    const settings = readFileSync(join(github, "claude-settings.sh"), "utf8");
+    const own = /for dir in ([a-z ]+); do denied\+=\("\$RUNNER_TEMP\/\$dir"\)/.exec(settings)?.[1].split(" ") ?? [];
+    const named = [...text.matchAll(/--deny-write "\$RUNNER_TEMP\/([A-Za-z0-9._-]+)"/g)].map((match) => match[1]);
+    const shared = /for shared in ([a-z.\s]+); do denied\+=/.exec(text)?.[1].split(/\s+/) ?? [];
+    const input = text.includes('--deny-write "$INPUT_DIR"') ? ["input"] : [];
+    return new Set([...own, ...named, ...shared, ...input]);
+  };
+
+  it.each([
+    ["ci.yml", "review", ["post"]],
+    ["ci.yml", "classify", ["verdict"]],
+    ["build.yml", "draft", ["patch", "pack"]],
+    ["fix.yml", "fix", ["patch", "pack"]],
+    ["resolve.yml", "draft", ["continue1", "continue2", "continue3", "check"]],
+  ] as const)("%s's %s reads after its session only from denied folders or its checked output", (file, id, later) => {
+    const job = readJobs(file)[id];
+    let session = steps(job).filter((each) => /claude -p|resolve-session\.sh/.test(each.run ?? "")).map((each) => each.run ?? "").join("\n");
+    if (session.includes("resolve-session.sh")) session += readFileSync(join(github, "resolve-session.sh"), "utf8");
+    const denied = deniedTops(session);
+    for (const want of ["main", "baseline", "host"]) expect(denied, want).toContain(want);
+    // Each session's log goes to the host-only folder.
+    expect(session).toMatch(/log="\$RUNNER_TEMP\/host\//);
+    expect(session).toMatch(/> "\$log" 2>&1/);
+    expect(session).not.toMatch(/cat "\$(session|round_dir)\//);
+    for (const each of later) {
+      let text = stepWithId(job, each).run ?? "";
+      if (text.includes("resolve-continue.sh")) text += readFileSync(join(github, "resolve-continue.sh"), "utf8");
+      const lines = text.split("\n").filter((line) => !/^\s*(#|echo )/.test(line));
+      const checked = lines.findIndex((line) => line.includes("check-out.sh"));
+      for (const [at, line] of lines.entries()) {
+        for (const match of line.matchAll(/\$RUNNER_TEMP\/([A-Za-z0-9._-]+)/g)) {
+          const top = match[1];
+          if (top === "sessions" || top === "pr") continue;
+          expect(denied, `${each}: ${line.trim()}`).toContain(top);
+        }
+        // The session's output folder is read only once it's checked; in resolve, a pull request's
+        // folder is read only for its denied inputs, its clone, which only git and a link-blind grep
+        // read, and its checked output.
+        // A line that only names the folder reads nothing.
+        const names = /^\s*[a-z]+="[^"]*"$/.test(line);
+        if (/\$RUNNER_TEMP\/sessions\/[a-z]+\/out|"\$(out|file)(\/|")/.test(line) && !names && !line.includes("check-out.sh"))
+          expect(checked >= 0 && checked < at, `${each}: ${line.trim()}`).toBe(true);
+        if (/\$RUNNER_TEMP\/pr\//.test(line)) expect(line, each).toMatch(/\$RUNNER_TEMP\/pr\/\$number\/(out|work)"|\$RUNNER_TEMP\/pr\/\$number"/);
+      }
     }
   });
 });

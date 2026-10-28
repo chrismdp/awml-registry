@@ -184,7 +184,7 @@ jobs:
       - name: Copy main's prompt, scripts, AGENTS.md and REVIEW.md out
         run: |
           mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
-          cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh "$RUNNER_TEMP/main/"
+          cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh "$RUNNER_TEMP/main/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
 
       # The label approves the issue as it reads then, and a try drafts from it only if it hasn't
@@ -338,8 +338,11 @@ jobs:
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/build"
           rm -rf "$session"
-          mkdir -p "$session/out"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write ./.git --deny-write "$RUNNER_TEMP/baseline" \
+          mkdir -p "$session/out" "$RUNNER_TEMP/host"
+          # The log goes to the host-only folder, which the session can't write, so it can't turn
+          # it into a link for the host's cat to follow. The inputs are denied too.
+          log="$RUNNER_TEMP/host/build.log"
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR" --deny-write ./.git --deny-write "$RUNNER_TEMP/baseline" \
             --deny-write "$RUNNER_TEMP/change"
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/build-prompt.md")"
           status=0
@@ -351,10 +354,10 @@ jobs:
               "Bash(npm run:*)" "Bash(npm test:*)" \
               "Bash(npx vitest:*)" "Bash(npx tsc:*)" "Bash(npx eslint:*)" \
               "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(ls:*)" \
-            > "$session/log" 2>&1 || status=$?
+            > "$log" 2>&1 || status=$?
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
-          cat "$session/log"
+          cat "$log"
           echo "::$stop::"
           exit "$status"
           }
@@ -386,6 +389,7 @@ jobs:
             exit 1
           fi
           out="$RUNNER_TEMP/sessions/build/out"
+          bash "$RUNNER_TEMP/main/check-out.sh" "$out" "$RUNNER_TEMP/sessions"
           # Made afresh, so nothing a session put there goes into the artifact.
           change="$RUNNER_TEMP/change"
           rm -rf "$change"

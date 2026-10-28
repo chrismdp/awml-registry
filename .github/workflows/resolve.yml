@@ -206,7 +206,7 @@ jobs:
           echo "::stop-commands::$stop"
           trap 'echo "::$stop::"' EXIT
           mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/check" "$RUNNER_TEMP/resolved"
-          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh AGENTS.md "$RUNNER_TEMP/main/"
+          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh .github/check-out.sh AGENTS.md "$RUNNER_TEMP/main/"
           id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
           case "$id" in ''|*[!0-9]*) echo "The app's bot has no id: $id"; exit 1 ;; esac
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
@@ -344,14 +344,8 @@ jobs:
             case "$number" in ''|*[!0-9]*) continue ;; esac
             [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
             out="$RUNNER_TEMP/pr/$number/out"
-            linked=false
-            part="$out"
-            while [ "$part" != / ] && [ -n "$part" ]; do
-              if [ -L "$part" ]; then linked=true; fi
-              part="$(dirname "$part")"
-            done
-            if [ "$linked" = true ]; then
-              echo "The out folder of #$number is reached through a symbolic link, so nothing is read from it."
+            if ! bash "$RUNNER_TEMP/main/check-out.sh" "$out" "$RUNNER_TEMP/pr"; then
+              echo "The out folder of #$number isn't plain files and folders where it should be, so nothing is read from it."
               continue
             fi
             work="$RUNNER_TEMP/pr/$number/work"

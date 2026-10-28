@@ -197,7 +197,7 @@ jobs:
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
         run: |
           mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
-          cp .github/fix-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/review-findings.sh .github/unclose.sh .github/check-lockfile.sh "$RUNNER_TEMP/main/"
+          cp .github/fix-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/review-findings.sh .github/unclose.sh .github/check-lockfile.sh .github/check-out.sh "$RUNNER_TEMP/main/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
           bash "$RUNNER_TEMP/main/review-findings.sh" findings "$CI_RUN" > "$RUNNER_TEMP/input/findings.json"
           gh api "repos/$GITHUB_REPOSITORY/compare/main...$HEAD_SHA" -H "Accept: application/vnd.github.diff" \
@@ -263,8 +263,11 @@ jobs:
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/fix"
           rm -rf "$session"
-          mkdir -p "$session/out"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write ./.git --deny-write "$RUNNER_TEMP/baseline" \
+          mkdir -p "$session/out" "$RUNNER_TEMP/host"
+          # The log goes to the host-only folder, which the session can't write, so it can't turn
+          # it into a link for the host's cat to follow. The inputs are denied too.
+          log="$RUNNER_TEMP/host/fix.log"
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR" --deny-write ./.git --deny-write "$RUNNER_TEMP/baseline" \
             --deny-write "$RUNNER_TEMP/fix"
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/fix-prompt.md")"
           status=0
@@ -276,10 +279,10 @@ jobs:
               "Bash(npm run:*)" "Bash(npm test:*)" \
               "Bash(npx vitest:*)" "Bash(npx tsc:*)" "Bash(npx eslint:*)" \
               "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(ls:*)" \
-            > "$session/log" 2>&1 || status=$?
+            > "$log" 2>&1 || status=$?
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
-          cat "$session/log"
+          cat "$log"
           echo "::$stop::"
           exit "$status"
           }
@@ -314,6 +317,7 @@ jobs:
           mkdir "$fixed"
           git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= add -A
           git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= diff --cached --binary --no-ext-diff --no-textconv > "$fixed/fix.patch"
+          bash "$RUNNER_TEMP/main/check-out.sh" "$RUNNER_TEMP/sessions/fix/out" "$RUNNER_TEMP/sessions"
           out="$RUNNER_TEMP/sessions/fix/out/message.md"
           # The message goes into the fix commit, so it closes no issue.
           if [ -f "$out" ] && [ ! -L "$out" ]; then bash "$RUNNER_TEMP/main/unclose.sh" < "$out" > "$fixed/message.md"; fi

@@ -143,7 +143,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
           cp .github/review-bugs-prompt.md .github/review-security-prompt.md .github/claude-settings.sh \
-            .github/scan-tokens.sh .github/post-findings.sh .github/bring-patch.sh "$RUNNER_TEMP/main/"
+            .github/scan-tokens.sh .github/post-findings.sh .github/bring-patch.sh .github/check-out.sh "$RUNNER_TEMP/main/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
 
       - name: Bring in the pull request's patch against main
@@ -188,18 +188,21 @@ jobs:
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/review"
           rm -rf "$session"
-          mkdir -p "$session/out"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0"
+          mkdir -p "$session/out" "$RUNNER_TEMP/host"
+          # The log goes to the host-only folder, which the session can't write, so it can't turn
+          # it into a link for the host's cat to follow. The inputs are denied too.
+          log="$RUNNER_TEMP/host/$(basename "$session").log"
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR"
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/$PROMPT")"
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 100 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
             --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" "Bash" \
             --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(/$session/out/$FINDINGS)" \
-            > "$session/log" 2>&1 || status=$?
+            > "$log" 2>&1 || status=$?
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
-          cat "$session/log"
+          cat "$log"
           echo "::$stop::"
           exit "$status"
           }
@@ -215,6 +218,7 @@ jobs:
         run: |
           unread="$UNREAD"
           [ "$REVIEW_NAME" = "Bug review" ] || unread=0
+          bash "$RUNNER_TEMP/main/check-out.sh" "$RUNNER_TEMP/sessions/review/out" "$RUNNER_TEMP/sessions"
           bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/sessions/review/out"
           bash "$RUNNER_TEMP/main/post-findings.sh" "$RUNNER_TEMP/sessions/review/out/$FINDINGS" "$unread"
 
@@ -252,7 +256,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
           cp .github/classify-prompt.md .github/claude-settings.sh .github/scan-tokens.sh \
-            .github/review-findings.sh .github/bring-patch.sh "$RUNNER_TEMP/main/"
+            .github/review-findings.sh .github/bring-patch.sh .github/check-out.sh "$RUNNER_TEMP/main/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
 
       - name: Bring in the patch and both reviews' findings
@@ -295,18 +299,21 @@ jobs:
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/classify"
           rm -rf "$session"
-          mkdir -p "$session/out"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0"
+          mkdir -p "$session/out" "$RUNNER_TEMP/host"
+          # The log goes to the host-only folder, which the session can't write, so it can't turn
+          # it into a link for the host's cat to follow. The inputs are denied too.
+          log="$RUNNER_TEMP/host/$(basename "$session").log"
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR"
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/classify-prompt.md")"
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 100 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
             --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" "Bash" \
             --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(/$session/out/classification.json)" \
-            > "$session/log" 2>&1 || status=$?
+            > "$log" 2>&1 || status=$?
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
-          cat "$session/log"
+          cat "$log"
           echo "::$stop::"
           exit "$status"
           }
@@ -320,7 +327,8 @@ jobs:
           file="$RUNNER_TEMP/sessions/classify/out/classification.json"
           verdict=ask
           reasons="Classify left no readable verdict."
-          if [ -f "$file" ] && bash "$RUNNER_TEMP/main/scan-tokens.sh" "$file" &&
+          if bash "$RUNNER_TEMP/main/check-out.sh" "$RUNNER_TEMP/sessions/classify/out" "$RUNNER_TEMP/sessions" &&
+            [ -f "$file" ] && bash "$RUNNER_TEMP/main/scan-tokens.sh" "$file" &&
             jq -e '(.verdict | IN("ship", "show", "ask")) and
               (.reasons | type == "array" and length >= 1 and length <= 5 and all(.[]; type == "string"))' \
               "$file" > /dev/null 2>&1; then
