@@ -1,6 +1,7 @@
 import { notFound, permanentRedirect } from "next/navigation";
 import { mistakesIn, type CheckedFile, type CheckRow } from "@/components/Checks";
 import type { VersionViewProps } from "@/components/VersionView";
+import type { Db } from "@/db/client";
 import { engine, type ListedCheck } from "@/engine";
 import { asRead } from "@/server/as-read";
 import { refPath, refsAsSeen } from "@/server/refs";
@@ -10,6 +11,7 @@ import { layOut } from "@/server/drawing";
 import { partLinks } from "@/server/part-links";
 import { organisationsOf } from "@/server/organisations";
 import { forksOf, readVersion, referrersOf, systemsWith, VIEWS, type FileName, type View } from "@/server/registry";
+import type { Viewer } from "@/server/viewer";
 
 // One version for its page, `n` or "latest", with the view asked for: a view
 // drawn, every file as text for "yaml", or what checking them found for
@@ -51,13 +53,25 @@ export async function loadVersion(
   // AWML's functions before its run returns. If it ever needs either, pass it
   // to getCloudflareContext().ctx.waitUntil.
   engine.start().catch(() => {});
-  const { db, viewer } = await pageContext();
-  const v = await readVersion(db, viewer, owner, slug, n === "latest" ? "latest" : n);
+  const context = await pageContext();
+  const v = await readVersion(context.db, context.viewer, owner, slug, n === "latest" ? "latest" : n);
   if (!v) {
     const rest = underOwner(slug, n, asked) + (implementation ? `/${encodeURIComponent(implementation)}` : "");
-    await followOldName(db, owner, rest);
+    await followOldName(context.db, owner, rest);
     notFound();
   }
+  return versionProps(context, v, n, asked, implementation);
+}
+
+// A version as `viewer` may see its page, once it has been read for them: a
+// workflow's embed (#75) gives it nobody, as someone signed out.
+export async function versionProps(
+  { db, viewer }: { db: Db; viewer: Viewer },
+  v: NonNullable<Awaited<ReturnType<typeof readVersion>>>,
+  n: string,
+  asked?: PageView,
+  implementation?: string,
+): Promise<VersionViewProps> {
   const address = workflowPath(v.owner, v.slug, n === "latest" ? "latest" : v.number);
   const workflow = v.files.workflow;
   const views: View[] = workflow ? [...VIEWS] : VIEWS.filter((view) => v.files[view] !== undefined);

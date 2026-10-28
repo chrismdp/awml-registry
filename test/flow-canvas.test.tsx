@@ -2,13 +2,14 @@
 // (src/components/flow/FlowCanvas.tsx), as React Flow renders them: a linked part (#55) is a
 // focusable link or a menu button named by where it leads, with its tooltip, a part it may not
 // follow is still named, the part the address names is outlined, and a workflow's box on a
-// system's map (#61) is a link to its page.
+// system's map (#61) is a link to its page. A part the reader dropped shows it is pinned (#78).
 import { ReactFlow } from "@xyflow/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { headHeight, type Point, type Rect } from "@/components/flow/drawing";
-import { layeredNodes, lineRoute, NODE_TYPES } from "@/components/flow/FlowCanvas";
+import { headHeight, squareRoute, type Point, type Rect } from "@/components/flow/drawing";
+import { lineRoute, NODE_TYPES, nodesOf } from "@/components/flow/FlowCanvas";
 import { roundedPath } from "@/components/flow/Graphic";
+import { atServer } from "@/components/flow/physics";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
 import { readGraph } from "@/components/flow/graph";
 import { hrefOf } from "@/components/links";
@@ -29,13 +30,21 @@ const text = JSON.stringify({
   places: [],
 });
 
-// The nodes React Flow draws for a drawing, as it renders them.
+// The nodes React Flow draws for a drawing, as it renders them, where the server put them.
 async function rendered(
   source: string,
-  { links = [], hrefs = {}, target, menuFor }: { links?: PartLink[]; hrefs?: Record<string, string>; target?: string; menuFor?: string },
+  {
+    links = [],
+    hrefs = {},
+    target,
+    menuFor,
+    pinned = [],
+  }: { links?: PartLink[]; hrefs?: Record<string, string>; target?: string; menuFor?: string; pinned?: string[] },
 ) {
   const { full } = laidOut(await layOut(source));
-  const nodes = layeredNodes(full, { id: "t", links: new Map(links.map((l) => [l.part, l])), hrefs, notes: new Map(), target, menuFor, onNote: () => {} });
+  const { bodies, hulls } = atServer(full);
+  for (const b of bodies) if (pinned.includes(b.id)) b.pinned = true;
+  const nodes = nodesOf(full, bodies, hulls, { id: "t", links: new Map(links.map((l) => [l.part, l])), hrefs, notes: new Map(), target, menuFor, onNote: () => {} });
   return renderToStaticMarkup(<ReactFlow nodes={nodes} edges={[]} nodeTypes={NODE_TYPES} width={800} height={600} />);
 }
 
@@ -177,12 +186,30 @@ describe("a line, once a part is dragged (#67)", () => {
       // Drawn with the server's rounded corners, every stretch between them level or plumb.
       expect(roundedPath(route.points)).toMatch(/^M [-\d.]+ [-\d.]+( L [-\d.]+ [-\d.]+ Q [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+)* L [-\d.]+ [-\d.]+$/);
     }
+    // Between two boxes with too little room above and below for a line to turn, but room
+    // beside, side to side, so it never runs along a box's edge (#78); with room above, top to bottom.
+    const a = { x: 0, y: 0, width: 100, height: 50 };
+    const close = squareRoute(a, { x: 140, y: 54, width: 100, height: 50 }).points;
+    expect([close[0].x, close.at(-1)!.x]).toEqual([100, 140]);
+    const roomy = squareRoute(a, { x: 140, y: 80, width: 100, height: 50 }).points;
+    expect([roomy[0].y, roomy.at(-1)!.y]).toEqual([50, 80]);
     // Into the top of a part below it, so its arrowhead points down into it, as the server's do.
     const below = lineRoute(line, by(s, 200, 0), t, s, t);
     if (t.y > s.y + s.height) {
       expect(below.points.at(-1)!.y).toBe(t.y);
       expect(below.points.at(-2)!.x).toBe(below.points.at(-1)!.x);
     }
+  });
+});
+
+describe("a part the reader dropped (#78)", () => {
+  it("shows a small pin, a button that lets it go, and no other part does", async () => {
+    const html = await rendered(text, { pinned: ["plan"] });
+    const pin = /<button type="button" class="flow-pin-mark nodrag nopan" style="[^"]*" aria-label="([^"]*)" title="([^"]*)">/.exec(node(html, "plan").inside);
+    expect(pin?.[1]).toBe("Unpin Plan the week&#x27;s dinners");
+    expect(pin?.[2]).toBe("Pinned where you dropped it. Press the pin, or double-click the part, to let it go.");
+    expect(node(html, "list").inside).not.toContain("flow-pin-mark");
+    expect(await rendered(text, {})).not.toContain("flow-pin-mark");
   });
 });
 

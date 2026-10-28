@@ -88,6 +88,8 @@
 .flow-arrow.thick path { fill: #3e424b; }
 .flow-arrow.broken path { fill: var(--broken); }
 .flow-arrow.cross path { fill: none; stroke: #5d6472; stroke-width: 1.6px; stroke-linecap: round; }
+/* Once React Flow draws them, each label sits in a layer above every line. */
+.flow-label-svg { position: absolute; left: 0; top: 0; }
 .flow-line-label rect { fill: var(--paper); stroke: var(--rule); stroke-width: 1px; }
 .flow-line-label text { fill: var(--ink-soft); }
 .flow-line-label.dotted text { fill: var(--ink-faint); }
@@ -106,6 +108,17 @@
 .flow-note-mark:hover .flow-note-icon circle, .flow-note-mark:focus-visible .flow-note-icon circle { fill: var(--ink); stroke: var(--ink); }
 .flow-note-mark:hover .flow-note-icon path, .flow-note-mark:focus-visible .flow-note-icon path { stroke: var(--paper); }
 .flow-note-mark:focus-visible { outline: 3px solid var(--link); outline-offset: 1px; }
+/* A part the reader dropped is pinned where they left it (#78): a small pin on
+   its top-left corner, which lets it go when pressed. */
+.flow-pin-mark { position: absolute; padding: 0; border: none; background: none; cursor: pointer; line-height: 0; border-radius: 999px; }
+.flow-pin-mark svg { overflow: visible; }
+.flow-pin-icon circle { fill: var(--paper); stroke: var(--edge); stroke-width: 1px; }
+.flow-pin-head { fill: var(--ink-soft); }
+.flow-pin-needle { stroke: var(--ink-soft); stroke-width: 1.4px; stroke-linecap: round; }
+.flow-pin-mark:hover .flow-pin-icon circle, .flow-pin-mark:focus-visible .flow-pin-icon circle { fill: var(--ink); stroke: var(--ink); }
+.flow-pin-mark:hover .flow-pin-head, .flow-pin-mark:focus-visible .flow-pin-head { fill: var(--paper); }
+.flow-pin-mark:hover .flow-pin-needle, .flow-pin-mark:focus-visible .flow-pin-needle { stroke: var(--paper); }
+.flow-pin-mark:focus-visible { outline: 3px solid var(--link); outline-offset: 1px; }
 .flow-note-tip { max-width: 300px; padding: 10px 14px; border-radius: 14px; background: var(--ink); color: var(--paper); font-family: var(--sans); font-size: 13px; line-height: 1.45; box-shadow: 0 6px 20px rgba(22, 23, 27, 0.2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .flow-note-tip p { margin: 0; }
 .flow-note-tip p + p { margin-top: 6px; }
@@ -120,7 +133,7 @@ html:has(.flow-note-dialog[open]) { overflow: hidden; }
 .flow-note-box p:not(.flow-note-on) { margin: 0; font-size: 16px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .flow-note-box p + p { margin-top: 10px; }
 
-/* The switches and zoom: pills in the drawing's corners, as the page's tabs are.
+/* The switch and zoom: pills in the drawing's corners, as the page's tabs are.
    They need the page's scripts, so a browser without them doesn't show them. */
 .flow-controls { position: absolute; z-index: 5; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: calc(100% - 24px); font-family: var(--sans); }
 .flow-switches { top: 12px; right: 12px; }
@@ -131,9 +144,7 @@ html:has(.flow-note-dialog[open]) { overflow: hidden; }
   min-height: 36px; padding: 6px 14px; border: none; border-radius: 999px; background: transparent; color: var(--ink-soft);
   font: 600 14px/1 var(--sans); cursor: pointer; white-space: nowrap;
 }
-.flow-pills button[aria-checked="true"] { background: var(--ink); color: var(--paper); }
-.flow-pills button:hover:not([aria-checked="true"]):not(:disabled) { color: var(--ink); background: var(--wash); }
-.flow-pills button:disabled { cursor: default; }
+.flow-pills button:hover { color: var(--ink); background: var(--wash); }
 .flow-toggle { background: var(--paper); box-shadow: 0 0 0 1px rgba(22, 23, 27, 0.08), 0 1px 3px rgba(22, 23, 27, 0.06); min-height: 42px; padding: 6px 16px 6px 12px; display: inline-flex; align-items: center; gap: 8px; }
 .flow-toggle::before { content: ""; width: 28px; height: 16px; border-radius: 999px; background: var(--edge) radial-gradient(circle at 8px 8px, var(--paper) 5px, transparent 5.5px); }
 .flow-toggle[aria-pressed="true"]::before { background: var(--ink) radial-gradient(circle at 20px 8px, var(--paper) 5px, transparent 5.5px); }
@@ -146,3 +157,15 @@ html:has(.flow-note-dialog[open]) { overflow: hidden; }
   .flow-zoom-controls { bottom: 10px; right: 10px; }
   .flow-pills button, .flow-toggle { font-size: 13px; padding: 6px 11px; }
 }
+
+/* A compact frame, such as a drawing embedded on another site (#75): smaller
+   switches, nearer the corners, and the server's SVG in the room
+   viewport.ts's COMPACT_INSET leaves, so a small frame keeps more of itself
+   for the drawing. */
+.flow-frame.compact .flow-static { inset: 52px 12px 52px 12px; width: calc(100% - 24px); height: calc(100% - 104px); }
+.flow-frame.compact .flow-controls { gap: 6px; }
+.flow-frame.compact .flow-switches { top: 8px; right: 8px; }
+.flow-frame.compact .flow-zoom-controls { bottom: 8px; right: 8px; }
+.flow-frame.compact .flow-pills button { min-height: 30px; padding: 4px 11px; font-size: 13px; }
+.flow-frame.compact .flow-zoom button { min-width: 32px; padding: 4px 8px; }
+.flow-frame.compact .flow-toggle { min-height: 36px; padding: 4px 12px 4px 10px; font-size: 13px; }

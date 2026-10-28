@@ -16,16 +16,19 @@ export const MAX_ZOOM = 1.1;
 // switches, below it for the zoom buttons. flow.css gives the server's SVG
 // the same room, so the two fit a drawing alike.
 export const INSET = { top: 72, right: 20, bottom: 64, left: 20 };
+// The room a compact frame leaves, such as an embed's (#75), whose controls
+// are smaller, so a small frame keeps more of itself for the drawing.
+export const COMPACT_INSET = { top: 52, right: 12, bottom: 52, left: 12 };
 
 // The whole drawing, centred in the room the frame leaves it, at the largest
 // size that fits, never above MAX_ZOOM.
-export function fit(frame: Size, drawing: Box): Viewport {
-  const room = { width: frame.width - INSET.left - INSET.right, height: frame.height - INSET.top - INSET.bottom };
+export function fit(frame: Size, drawing: Box, inset = INSET): Viewport {
+  const room = { width: frame.width - inset.left - inset.right, height: frame.height - inset.top - inset.bottom };
   const zoom = Math.max(0.01, Math.min(room.width / drawing.width, room.height / drawing.height, MAX_ZOOM));
   return {
     zoom,
-    x: INSET.left + (room.width - drawing.width * zoom) / 2 - drawing.x * zoom,
-    y: INSET.top + (room.height - drawing.height * zoom) / 2 - drawing.y * zoom,
+    x: inset.left + (room.width - drawing.width * zoom) / 2 - drawing.x * zoom,
+    y: inset.top + (room.height - drawing.height * zoom) / 2 - drawing.y * zoom,
   };
 }
 

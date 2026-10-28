@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,11 +30,25 @@ function newRepo() {
   return repo;
 }
 
-function stage(repo: string, path: string, contents: string) {
+function stage(repo: string, path: string, contents: string | Buffer) {
   mkdirSync(dirname(join(repo, path)), { recursive: true });
   writeFileSync(join(repo, path), contents);
   git(repo, "add", "--", path);
 }
+
+// The first bytes of each kind of image and font the rule lets through, then a NUL byte, which
+// makes git find the file binary.
+const signatures: Record<string, Buffer> = {
+  png: Buffer.from("89504e470d0a1a0a00", "hex"),
+  gif: Buffer.from("GIF89a\u0000", "latin1"),
+  jpg: Buffer.from("ffd8ffe000", "hex"),
+  webp: Buffer.from("RIFF\u0000\u0000\u0000\u0000WEBPVP8 ", "latin1"),
+  ico: Buffer.from("0000010001", "hex"),
+  ttf: Buffer.from("0001000000", "hex"),
+  otf: Buffer.from("OTTO\u0000", "latin1"),
+  woff: Buffer.from("wOFF\u0000", "latin1"),
+  woff2: Buffer.from("wOF2\u0000", "latin1"),
+};
 
 function commit(repo: string) {
   git(repo, "commit", "-qm", "fixture");
@@ -87,30 +101,76 @@ describe("judging a staged change", () => {
     expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
   });
 
-  // The pull request quotes the note as Claude wrote it, so the reason only points to it.
-  it("sends a change to review when Claude's note asks for it", () => {
+  // The reviews' findings and the classifier's verdict are files the build's review job wrote. A
+  // finding about code the change didn't write is shown, but leaves the change straightforward.
+  it.each([
+    ["an Important finding", `[{"severity": "Important"}]`, true, "The reviews left 1 finding open."],
+    ["a Nit and an Important finding", `[{"severity": "Nit"}, {"severity": "Important"}]`, true, "The reviews left 2 findings open."],
+    ["only a pre-existing finding", `[{"severity": "Pre-existing"}]`, false, "No review rule matched this change."],
+    ["no findings", "[]", false, "No review rule matched this change."],
+  ])("weighs %s", (_, findings, review, reason) => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
-    const note = join(tempDir(), "review.md");
-    writeFileSync(note, "- I chose the slower option.\n- The issue did not settle it.\n");
+    const path = join(tempDir(), "findings.json");
+    writeFileSync(path, findings);
 
-    expectVerdict(evaluate(repo, plain, note), true, "Claude asked for a review: see Claude's note.");
+    expectVerdict(evaluate(repo, plain, { findings: path }), review, reason);
   });
 
-  it("sends a change to review when Claude's note is empty", () => {
+  it("sends a change to review when the classifier asks", () => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
-    const note = join(tempDir(), "review.md");
-    writeFileSync(note, "\n");
+    const path = join(tempDir(), "classification.json");
+    writeFileSync(path, `{"needs_review": true, "reasons": ["It changes who may see a private workflow."]}`);
 
-    expectVerdict(evaluate(repo, plain, note), true, "Claude asked for the maintainer's review.");
+    expectVerdict(evaluate(repo, plain, { classification: path }), true, "The classifier asked for a review.");
   });
 
-  it("takes a missing note as no note", () => {
+  // The classifier can add a review, never skip one.
+  it("keeps a review the rules require when the classifier finds the change low risk", () => {
+    const repo = newRepo();
+    stage(repo, "docs/SPEC.md", "changed\n");
+    const path = join(tempDir(), "classification.json");
+    writeFileSync(path, `{"needs_review": false, "reasons": ["It is a small fix."]}`);
+
+    expectVerdict(
+      evaluate(repo, { reviewPaths: ["docs/SPEC.md"], maxChangedLines: 400 }, { classification: path }),
+      true,
+      "`docs/SPEC.md` is a path that always needs review.",
+    );
+  });
+
+  it("adds nothing when the classifier finds the change low risk", () => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
+    const path = join(tempDir(), "classification.json");
+    writeFileSync(path, `{"needs_review": false, "reasons": ["It is a small fix."]}`);
 
-    expectVerdict(evaluate(repo, plain, join(tempDir(), "review.md")), false, "No review rule matched this change.");
+    expectVerdict(evaluate(repo, plain, { classification: path }), false, "No review rule matched this change.");
+  });
+
+  it.each([
+    ["an unknown severity", { findings: `[{"severity": "Minor"}]` }],
+    ["findings that aren't a list", { findings: `{"severity": "Nit"}` }],
+    ["a finding that isn't an object", { findings: `["Nit"]` }],
+    ["findings that aren't JSON", { findings: "Nit" }],
+    ["a missing findings file", { findings: undefined }],
+    ["a verdict without needs_review", { classification: `{"reasons": []}` }],
+    ["a needs_review that isn't true or false", { classification: `{"needs_review": "yes"}` }],
+    ["a missing classification file", { classification: undefined }],
+  ])("refuses %s", (_, files: { findings?: string; classification?: string }) => {
+    const repo = newRepo();
+    stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
+    const dir = tempDir();
+    const records: { findings?: string; classification?: string } = {};
+    for (const name of ["findings", "classification"] as const) {
+      if (!(name in files)) continue;
+      records[name] = join(dir, `${name}.json`);
+      const text = files[name];
+      if (text !== undefined) writeFileSync(records[name], text);
+    }
+
+    expect(() => evaluate(repo, plain, records)).toThrow();
   });
 
   it.each([
@@ -123,7 +183,7 @@ describe("judging a staged change", () => {
 
     const got = evaluate(repo, { reviewPaths: ["docs/SPEC.md", ".github/"], maxChangedLines: 400 });
     expect(got.review, got.reasons.join("; ")).toBe(review);
-    if (review) expect(got.reasons).toContain(`${path} is a path that always needs review.`);
+    if (review) expect(got.reasons).toContain(`\`${path}\` is a path that always needs review.`);
   });
 
   it.each(["test/thing.test.ts", "test/page.test.tsx", "eslint-rules/rule.test.mjs"])(
@@ -134,7 +194,7 @@ describe("judging a staged change", () => {
       commit(repo);
       git(repo, "rm", "-q", "--", path);
 
-      expectVerdict(evaluate(repo, plain), true, `${path} deletes a test file.`);
+      expectVerdict(evaluate(repo, plain), true, `\`${path}\` deletes a test file.`);
     },
   );
 
@@ -149,7 +209,7 @@ describe("judging a staged change", () => {
     commit(repo);
     stage(repo, "test/thing.test.ts", after);
 
-    expectVerdict(evaluate(repo, plain), true, "test/thing.test.ts removes a test.");
+    expectVerdict(evaluate(repo, plain), true, "`test/thing.test.ts` removes a test.");
   });
 
   it("lets a change add a test without review", () => {
@@ -168,5 +228,114 @@ describe("judging a staged change", () => {
     stage(repo, "large.txt", numberedLines("new", 201));
 
     expectVerdict(evaluate(repo, plain), true, "The patch changes 402 lines, more than the limit of 400.");
+  });
+
+  // A change's own .gitattributes can tell git a file is binary, which would hide its lines from the
+  // count and its removed tests from the rule. So the rule reads no attributes from the change, and
+  // a change to any .gitattributes always needs review.
+  it.each([".gitattributes", "src/.gitattributes"])("sends a change to %s to review", (path) => {
+    const repo = newRepo();
+    stage(repo, path, "*.ts text\n");
+
+    expectVerdict(evaluate(repo, plain), true, `\`${path}\` sets how git reads files, so it always needs review.`);
+  });
+
+  it("counts the lines of files the change's attributes call binary", () => {
+    const repo = newRepo();
+    stage(repo, "large.txt", numberedLines("old", 201));
+    commit(repo);
+    stage(repo, "large.txt", numberedLines("new", 201));
+    stage(repo, ".gitattributes", "* -diff\n");
+
+    const got = evaluate(repo, plain);
+    expect(got.review).toBe(true);
+    expect(got.reasons).toContain("The patch changes 403 lines, more than the limit of 400.");
+  });
+
+  it("finds a removed test that the change's attributes call binary", () => {
+    const repo = newRepo();
+    stage(repo, "test/thing.test.ts", 'it("stays", () => {});\nit("goes", () => {});\n');
+    commit(repo);
+    stage(repo, "test/thing.test.ts", 'it("stays", () => {});\n');
+    stage(repo, ".gitattributes", "*.ts binary\n");
+
+    expectVerdict(evaluate(repo, plain), true, "`test/thing.test.ts` removes a test.");
+  });
+
+  // A file git still finds binary, by a NUL byte in it, can't be counted or read, so it needs review,
+  // unless it's an image or a font.
+  it("sends a change to a binary file other than an image or a font to review", () => {
+    const repo = newRepo();
+    stage(repo, "src/server/hidden.ts", "export const a = 1;\u0000\n");
+    stage(repo, "public/logo.png", Buffer.concat([signatures.png, Buffer.from("pixels")]));
+    stage(repo, "src/fonts/Inter.woff2", Buffer.concat([signatures.woff2, Buffer.from("glyphs")]));
+
+    const got = evaluate(repo, plain);
+    expect(got.review).toBe(true);
+    expect(got.reasons).toEqual(["`src/server/hidden.ts` is binary, so the rule can't count or read it."]);
+  });
+
+  it.each(Object.keys(signatures))("lets a .%s file through without review when it starts as one does", (kind) => {
+    const repo = newRepo();
+    stage(repo, `public/thing.${kind}`, Buffer.concat([signatures[kind], Buffer.from("contents")]));
+
+    expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
+  });
+
+  // Any binary file can be named as an image or a font, so one that doesn't start as its name says
+  // can't be read either.
+  it.each([
+    ["a script named as a picture", "public/logo.png", Buffer.from("#!/bin/sh\u0000echo hi\n", "latin1")],
+    ["a picture of another kind", "public/photo.jpg", Buffer.concat([signatures.png, Buffer.from("pixels")])],
+    ["a font of another kind", "src/fonts/Inter.ttf", Buffer.concat([signatures.woff2, Buffer.from("glyphs")])],
+  ])("sends %s to review", (_, path, contents) => {
+    const repo = newRepo();
+    stage(repo, path, contents);
+
+    expectVerdict(
+      evaluate(repo, plain),
+      true,
+      `\`${path}\` is binary, and doesn't start as its name says, so the rule can't read it.`,
+    );
+  });
+
+  it("lets a change delete an image without review", () => {
+    const repo = newRepo();
+    stage(repo, "public/logo.png", Buffer.from("not really a picture\u0000", "latin1"));
+    commit(repo);
+    git(repo, "rm", "-q", "--", "public/logo.png");
+
+    expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
+  });
+
+  // A symbolic link's target is read wherever the link is followed, so a new or changed one always
+  // needs review.
+  it.each([
+    ["adds", null],
+    ["changes", "../README.md"],
+  ])("sends a change that %s a symbolic link to review", (_, before) => {
+    const repo = newRepo();
+    stage(repo, "README.md", "A registry\n");
+    if (before) {
+      symlinkSync(before, join(repo, "docs-link"));
+      git(repo, "add", "--", "docs-link");
+      commit(repo);
+      rmSync(join(repo, "docs-link"));
+    }
+    symlinkSync("/proc/self/environ", join(repo, "docs-link"));
+    git(repo, "add", "--", "docs-link");
+
+    expectVerdict(evaluate(repo, plain), true, "`docs-link` is a symbolic link, so it always needs review.");
+  });
+
+  // A path's name reaches the pull request's description, so it's shown in a code span with nothing
+  // in it that could end the span or the line.
+  it("shows a path so its name can't break out of its reason", () => {
+    const repo = newRepo();
+    stage(repo, "docs/a`b\n## Approved <!--.md", "changed\n");
+
+    const got = evaluate(repo, { reviewPaths: ["docs/"], maxChangedLines: 400 });
+    expect(got.reasons).toEqual(["`docs/a\\u0060b\\n## Approved <!--.md` is a path that always needs review."]);
+    for (const reason of got.reasons) expect(reason).not.toContain("\n");
   });
 });

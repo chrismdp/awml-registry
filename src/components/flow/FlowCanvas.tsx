@@ -2,6 +2,7 @@
 
 import "@xyflow/react/dist/base.css";
 import {
+  EdgeLabelRenderer,
   Handle,
   NodeToolbar,
   Position,
@@ -24,17 +25,17 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import type { PartLink } from "@/server/part-links";
 import { labelAt, squareRoute, type Drawing, type DrawnLine, type DrawnPart, type DrawnScope, type Note, type Point, type Rect } from "./drawing";
 import { LabelGraphic, LineGraphic, NoteIcon, NOTE_R, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
-import type { Body, Physics } from "./physics";
+import { startPhysics, type Body, type Physics } from "./physics";
 import { hrefOf, Press } from "../links";
 import { notesBy, wholeNotes } from "./StaticDrawing";
 
 // React Flow drawing what the server laid out, so a dragged part takes its
 // lines with it (issue #62). It starts exactly where the server's SVG was
 // (Drawing.tsx), each piece drawn by the same markup (Graphic.tsx), and
-// tells the page once it shows, for the page to hide the SVG. Physics lays
-// the same drawing out again with d3-force. Nothing dragged is kept.
-
-export type Mode = "layered" | "physics";
+// tells the page once it shows, for the page to hide the SVG. The physics
+// (physics.ts) then lets the drawing settle from there, and moves it as a
+// part is dragged; a part dropped stays where it was dropped (#78). Nothing
+// dragged is kept.
 
 // What the page's controls and keyboard ask of the drawing.
 export type FlowApi = {
@@ -55,9 +56,12 @@ type Shared = {
   // The part whose menu is open.
   menuFor?: string;
   onNote: (title: string, notes: Note[]) => void;
+  // Lets a pinned part go.
+  onUnpin?: (id: string) => void;
 };
-type PartData = Shared & { part: DrawnPart };
-type ScopeData = Shared & { scope: DrawnScope; hull?: boolean };
+// `pinned`: dropped by the reader, and kept where they left it.
+type PartData = Shared & { part: DrawnPart; pinned?: boolean };
+type ScopeData = Shared & { scope: DrawnScope; hull?: boolean; pinned?: boolean };
 type NotesData = Shared & { whole: Note[] };
 type LineData = { id: string; line: DrawnLine; from?: Point; to?: Point };
 type PartNode = Node<PartData, "part">;
@@ -69,7 +73,6 @@ type FlowEdge = Edge<LineData, "line">;
 export type FlowCanvasProps = {
   drawing: Drawing;
   id: string;
-  mode: Mode;
   links: PartLink[];
   hrefs: Record<string, string>;
   // Where the server's SVG shows the drawing, for React Flow to start from.
@@ -95,7 +98,7 @@ export default function FlowCanvas(p: FlowCanvasProps) {
 }
 
 function Canvas(p: FlowCanvasProps) {
-  const { drawing, mode, onReady, onApi, fitOf } = p;
+  const { drawing, onReady, onApi, fitOf } = p;
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges] = useState<FlowEdge[]>([]);
   const physics = useRef<Physics>(undefined);
@@ -103,6 +106,20 @@ function Canvas(p: FlowCanvasProps) {
   const flow = useReactFlow<FlowNode, FlowEdge>();
   const initialised = useNodesInitialized();
   const ready = useRef(false);
+
+  // A part dropped is pinned where it was dropped, and shows it; a
+  // double-click on it, or a press on its pin, lets it go (#78).
+  const pin = useCallback(
+    (id: string, pinned: boolean) => setNodes((old) => old.map((n) => (n.id === id ? ({ ...n, data: { ...n.data, pinned } } as FlowNode) : n))),
+    [setNodes],
+  );
+  const unpin = useCallback(
+    (id: string) => {
+      physics.current?.release(id);
+      pin(id, false);
+    },
+    [pin],
+  );
   const shared = useMemo(
     () => ({
       id: p.id,
@@ -112,15 +129,24 @@ function Canvas(p: FlowCanvasProps) {
       target: p.target,
       menuFor: p.menuFor,
       onNote: p.onNote,
+      onUnpin: unpin,
     }),
-    [p.id, p.links, p.hrefs, drawing.notes, p.target, p.menuFor, p.onNote],
+    [p.id, p.links, p.hrefs, drawing.notes, p.target, p.menuFor, p.onNote, unpin],
   );
+  const latest = useRef(shared);
+  useEffect(() => {
+    latest.current = shared;
+  });
 
-  // The page shows React Flow, and hides its SVG, once every part is drawn.
+  // The page shows React Flow, and hides its SVG, once every part is drawn,
+  // and the drawing then settles from there.
   useEffect(() => {
     if (!initialised || ready.current || !nodes.length) return;
     ready.current = true;
-    requestAnimationFrame(() => onReady());
+    requestAnimationFrame(() => {
+      onReady();
+      physics.current?.open();
+    });
   }, [initialised, nodes.length, onReady]);
 
   // Whether the reader has left the drawing fitted, so a resize fits it again.
@@ -171,51 +197,61 @@ function Canvas(p: FlowCanvasProps) {
     return () => resized.disconnect();
   }, [flow, fitOf, frameOf]);
 
-  // The drawing, laid out by the server or by the physics. A new drawing, from
-  // the Flow only switch, is fitted to the frame.
+  // The drawing, starting where the server laid it out, which the physics then
+  // moves. As it settles, a drawing left fitted is fitted to where it comes to
+  // rest, the view easing there with it, unless the reader drags a part or
+  // moves the view first. A new drawing, from the Flow only switch, starts
+  // where the server laid it out, and is fitted to the frame as it settles.
   const first = useRef(true);
+  const opening = useRef<{ from: Viewport; to: Viewport } | "done">(undefined);
   useEffect(() => {
     let stopped = false;
-    const refit = !first.current;
+    let drawn = false;
+    opening.current = undefined;
+    if (!first.current) fitted.current = true;
     first.current = false;
-    if (refit) fitted.current = true;
-    if (mode === "layered") {
-      setNodes(layeredNodes(drawing, shared));
-      setEdges(linesOf(drawing, p.id));
-      if (refit) requestAnimationFrame(() => !stopped && flow.setViewport(fitOf(drawing.box), { duration: 200 }));
-    } else {
-      // Fitted to where the physics first puts the nodes, which React Flow
-      // may not have yet when the physics has started.
-      let first: Rect | undefined;
-      import("./physics").then(async ({ startPhysics }) => {
-        const sim = await startPhysics(
-          drawing,
-          (bodies, hulls) => {
-            if (stopped) return;
-            const next = physicsNodes(drawing, bodies, hulls, shared);
-            if (!first) {
-              first = boundsOf(next);
-              setNodes(next);
-            } else {
-              const at = new Map(next.map((n) => [n.id, n]));
-              setNodes((old) => old.map((n) => (at.has(n.id) ? { ...n, position: at.get(n.id)!.position, width: at.get(n.id)!.width, height: at.get(n.id)!.height } : n)));
-            }
-          },
-          () => {},
-        );
-        if (stopped) return sim.stop();
-        physics.current = sim;
-        setEdges(linesOf(drawing, p.id));
-        requestAnimationFrame(() => !stopped && first && flow.setViewport(fitOf(first), { duration: 200 }));
-      });
-    }
+    const sim = startPhysics(
+      drawing,
+      (bodies, hulls, opened) => {
+        if (stopped) return;
+        const next = nodesOf(drawing, bodies, hulls, latest.current);
+        if (!drawn) {
+          drawn = true;
+          setNodes(next);
+        } else {
+          const at = new Map(next.map((n) => [n.id, n]));
+          setNodes((old) =>
+            old.map((n) => {
+              const m = at.get(n.id);
+              return m ? { ...n, position: m.position, width: m.width, height: m.height } : n;
+            }),
+          );
+        }
+        const was = opening.current;
+        if (opened === 0 || was === "done") return;
+        if (fitted.current) {
+          const view = was ?? { from: flow.getViewport(), to: fitOf(boundsOf(nodesOf(drawing, sim.rest.bodies, sim.rest.hulls, latest.current))) };
+          opening.current = view;
+          flow.setViewport({
+            x: view.from.x + (view.to.x - view.from.x) * opened,
+            y: view.from.y + (view.to.y - view.from.y) * opened,
+            zoom: view.from.zoom + (view.to.zoom - view.from.zoom) * opened,
+          });
+        }
+        if (opened >= 1) opening.current = "done";
+      },
+      () => {},
+    );
+    physics.current = sim;
+    setEdges(linesOf(drawing, p.id));
+    if (ready.current) sim.open();
     return () => {
       stopped = true;
-      physics.current?.stop();
+      sim.stop();
       physics.current = undefined;
     };
     // `shared` changing (a fragment, say) restyles the nodes below, without laying out again.
-  }, [drawing, mode, p.id, setNodes, flow, fitOf]);
+  }, [drawing, p.id, setNodes, flow, fitOf]);
 
   // The outlined part, the open menu and the links change only what nodes
   // carry and what they are called.
@@ -264,6 +300,7 @@ function Canvas(p: FlowCanvasProps) {
       }}
       onNodeDragStart={(_, n) => {
         press.current.reset();
+        opening.current = "done";
         physics.current?.hold(n.id, centre(n));
       }}
       onNodeDrag={(_, n) => {
@@ -271,8 +308,12 @@ function Canvas(p: FlowCanvasProps) {
         physics.current?.hold(n.id, centre(n));
       }}
       onNodeDragStop={(_, n) => {
-        physics.current?.release(n.id);
+        physics.current?.drop(n.id);
+        pin(n.id, true);
         setTimeout(() => press.current.reset());
+      }}
+      onNodeDoubleClick={(_, n) => {
+        if (n.type !== "notes" && n.data.pinned) unpin(n.id);
       }}
     />
   );
@@ -352,49 +393,13 @@ function notesNode(d: Drawing, shared: Shared, at: Point | undefined): NotesNode
   ];
 }
 
-// The nodes where the server put them, each part inside its scope's box. A
-// scope round parts is the background they sit on, so dragging or pinching
-// it pans and zooms, on a phone too, rather than moving it.
-export function layeredNodes(d: Drawing, shared: Shared): FlowNode[] {
-  const scopes = new Map(d.scopes.map((s) => [s.id, s]));
-  const relative = (x: number, y: number, parent?: string) => {
-    const s = parent ? scopes.get(parent) : undefined;
-    return s ? { x: x - s.x, y: y - s.y } : { x, y };
-  };
-  return [
-    ...[...d.scopes]
-      .sort((a, b) => a.depth - b.depth)
-      .map(
-        (s): ScopeNode => ({
-          id: s.id,
-          type: "scope",
-          position: relative(s.x, s.y, s.scope),
-          width: s.width,
-          height: s.height,
-          ...(s.scope ? { parentId: s.scope, expandParent: true } : {}),
-          ...(s.holds ? { draggable: false, selectable: false, focusable: false } : {}),
-          data: { ...shared, scope: s },
-        }),
-      ),
-    ...d.parts.map(
-      (part): PartNode => ({
-        id: part.id,
-        type: "part",
-        position: relative(part.x, part.y, part.scope),
-        width: part.width,
-        height: part.height,
-        ...(part.scope ? { parentId: part.scope, expandParent: true } : {}),
-        data: { ...shared, part },
-      }),
-    ),
-    ...notesNode(d, shared, d.notesAt),
-  ].map((n) => labelled(n, shared));
-}
-
 // The nodes where the physics has them, with each scope that holds parts
 // drawn behind the lines as the soft box the physics keeps round wherever
-// they are (physics.ts), nested scopes inside.
-function physicsNodes(d: Drawing, bodies: Body[], boxes: Map<string, Rect>, shared: Shared): FlowNode[] {
+// they are (physics.ts), nested scopes inside. Such a scope is the
+// background its parts sit on, so dragging or pinching it pans and zooms, on
+// a phone too, rather than moving it. Before the physics has moved anything,
+// they are where the server's SVG has them (atServer).
+export function nodesOf(d: Drawing, bodies: Body[], boxes: Map<string, Rect>, shared: Shared): FlowNode[] {
   const parts = new Map(d.parts.map((part) => [part.id, part]));
   const scopes = new Map(d.scopes.map((s) => [s.id, s]));
   const hulls = d.scopes.flatMap((s): ScopeNode[] => {
@@ -417,13 +422,17 @@ function physicsNodes(d: Drawing, bodies: Body[], boxes: Map<string, Rect>, shar
   });
   const moved = bodies.map((b): FlowNode => {
     const at = { position: { x: b.x! - b.width / 2, y: b.y! - b.height / 2 }, width: b.width, height: b.height };
+    const pinned = b.pinned ? { pinned: true } : {};
     const part = parts.get(b.id);
-    if (part) return { id: b.id, type: "part", ...at, data: { ...shared, part } };
-    return { id: b.id, type: "scope", ...at, data: { ...shared, scope: scopes.get(b.id)! } };
+    if (part) return { id: b.id, type: "part", ...at, data: { ...shared, part, ...pinned } };
+    return { id: b.id, type: "scope", ...at, data: { ...shared, scope: scopes.get(b.id)!, ...pinned } };
   });
-  // The notes of the whole drawing keep to its top-left corner.
-  const all = [...boxes.values(), ...bodies.map((b) => ({ x: b.x! - b.width / 2, y: b.y! - b.height / 2 }))];
-  const corner = all.length ? { x: Math.min(...all.map((r) => r.x)) + 24, y: Math.min(...all.map((r) => r.y)) - 32 } : undefined;
+  // The notes of the whole drawing keep to its top-left corner, where the
+  // server put them, as it moves.
+  const topLeft = (rects: { x: number; y: number }[]) => ({ x: Math.min(...rects.map((r) => r.x)), y: Math.min(...rects.map((r) => r.y)) });
+  const was = topLeft([...d.parts, ...d.scopes]);
+  const is = topLeft([...boxes.values(), ...moved.map((n) => n.position)]);
+  const corner = d.notesAt && (Number.isFinite(is.x - was.x) ? { x: d.notesAt.x + is.x - was.x, y: d.notesAt.y + is.y - was.y } : d.notesAt);
   return [...hulls, ...moved, ...notesNode(d, shared, corner)].map((n) => labelled(n, shared));
 }
 
@@ -483,9 +492,38 @@ export function NoteTip({ notes }: { notes: Note[] }) {
   );
 }
 
+// The mark of a part the reader dropped, pinned where they left it (#78): a
+// small pin on its top-left corner, and a button that lets it go, as a
+// double-click on the part does.
+export const PIN_R = 9;
+export function PinButton({ id, title, onUnpin }: { id: string; title: string; onUnpin: Shared["onUnpin"] }) {
+  return (
+    <button
+      type="button"
+      className="flow-pin-mark nodrag nopan"
+      style={{ left: 2 - PIN_R, top: 2 - PIN_R }}
+      aria-label={`Unpin ${title}`}
+      title="Pinned where you dropped it. Press the pin, or double-click the part, to let it go."
+      onClick={(e) => {
+        e.stopPropagation();
+        onUnpin?.(id);
+      }}
+    >
+      <svg width={2 * PIN_R} height={2 * PIN_R} viewBox={`${-PIN_R} ${-PIN_R} ${2 * PIN_R} ${2 * PIN_R}`} aria-hidden>
+        <g className="flow-pin-icon">
+          <circle r={PIN_R - 0.5} />
+          <path className="flow-pin-head" d="M -2.6 -5.2 H 2.6 L 1.8 -1.8 L 4 0.6 H -4 L -1.8 -1.8 Z" />
+          <path className="flow-pin-needle" d="M 0 0.6 V 5.4" />
+        </g>
+      </svg>
+    </button>
+  );
+}
+
 function PartNodeView({ data }: NodeProps<PartNode>) {
   const { part } = data;
   const notes = data.notes.get(part.id);
+  const label = part.lines.join(" ");
   return (
     <div className={`flow-node${data.target === part.id ? " part-target" : ""}${data.links.get(part.id)?.to.length ? " part-linked" : ""}`} style={{ width: part.width, height: part.height }}>
       <svg className="flow-node-svg" width={part.width} height={part.height}>
@@ -494,7 +532,8 @@ function PartNodeView({ data }: NodeProps<PartNode>) {
       </svg>
       <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
       <Handle type="source" position={Position.Bottom} isConnectable={false} className="flow-handle" />
-      {notes && <NoteButton title={part.lines.join(" ")} notes={notes} at={{ x: part.width - 3, y: part.height - 3 }} onNote={data.onNote} />}
+      {data.pinned && <PinButton id={part.id} title={label} onUnpin={data.onUnpin} />}
+      {notes && <NoteButton title={label} notes={notes} at={{ x: part.width - 3, y: part.height - 3 }} onNote={data.onNote} />}
     </div>
   );
 }
@@ -509,6 +548,7 @@ function ScopeNodeView({ data, width = 0, height = 0 }: NodeProps<ScopeNode>) {
       </svg>
       <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
       <Handle type="source" position={Position.Bottom} isConnectable={false} className="flow-handle" />
+      {data.pinned && !data.hull && <PinButton id={scope.id} title={scope.lines.join(" ") || scope.name} onUnpin={data.onUnpin} />}
       {notes && !data.hull && <NoteButton title={scope.name} notes={notes} at={{ x: width - 3, y: height - 3 }} onNote={data.onNote} />}
     </div>
   );
@@ -524,12 +564,12 @@ const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y -
 
 // How a line runs between the boxes of its ends, `s` and `t`: along the
 // server's route while neither end has moved from where the server put it,
-// `from` and `to` (or both have moved together, as when their scope does),
-// and otherwise square, as the server's routes are (#67): out of the side of
-// one that faces the other, across halfway between them, and into the other,
-// its label as near halfway along as it can be without covering any box in
-// `clear`. So a line stays square when a part is dragged, in Layered and in
-// Physics, and the lines of the parts not dragged keep the server's routes.
+// `from` and `to` (or both have moved together), and otherwise square, as the
+// server's routes are (#67): out of the side of one that faces the other,
+// across halfway between them, and into the other, its label as near halfway
+// along as it can be without covering any box in `clear`. So the drawing
+// first shows each line as the server's SVG does, and a line stays square as
+// the physics moves its ends.
 export function lineRoute(
   line: DrawnLine,
   s: Rect,
@@ -551,7 +591,9 @@ export function lineRoute(
 }
 
 // A line, routed by lineRoute, so it follows a dragged part; its label, once
-// it leaves the server's route, clear of every part and box.
+// it leaves the server's route, clear of every part and box. Each label is
+// drawn above every line, as the server's SVG draws them, so no other line
+// crosses over it (#78).
 function LineView({ source, target, data }: EdgeProps<FlowEdge>) {
   const s = useInternalNode(source);
   const t = useInternalNode(target);
@@ -563,7 +605,13 @@ function LineView({ source, target, data }: EdgeProps<FlowEdge>) {
   return (
     <>
       <LineGraphic id={data.id} line={line} d={roundedPath(route.points)} />
-      {line.label && <LabelGraphic label={line.label} at={route.label} style={line.style} />}
+      {line.label && (
+        <EdgeLabelRenderer>
+          <svg className="flow-node-svg flow-label-svg" width={1} height={1} aria-hidden>
+            <LabelGraphic label={line.label} at={route.label} style={line.style} />
+          </svg>
+        </EdgeLabelRenderer>
+      )}
     </>
   );
 }

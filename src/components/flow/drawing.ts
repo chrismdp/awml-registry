@@ -215,8 +215,14 @@ export function depths(g: Graph) {
 // out of the side of `s` that faces `t`, across halfway between them, and into
 // `t`, with its label halfway along. Boxes far enough across from each other
 // to share a stretch are joined by one straight line within it, with no jog.
+// One above the other is joined top to bottom, unless there is less than TURN
+// between them that way and at least that side by side: then side to side, so
+// a line never runs along the edge of a box it joins (#78).
+const TURN = 24;
 export function squareRoute(s: Rect, t: Rect): { points: Point[]; label: Point } {
-  const plumb = t.y >= s.y + s.height || t.y + t.height <= s.y;
+  const above = Math.max(t.y - (s.y + s.height), s.y - (t.y + t.height));
+  const beside = Math.max(t.x - (s.x + s.width), s.x - (t.x + t.width));
+  const plumb = above >= 0 && (above >= TURN || beside < TURN);
   // One above the other, from the bottom of the upper to the top of the lower,
   // or else side by side, from the side of one facing the other: `along` the
   // way between them, `across` the other way.
