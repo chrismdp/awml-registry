@@ -69,6 +69,7 @@ jobs:
           HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
           CI_EVENT: ${{ github.event.workflow_run.event }}
           CHECK_SUITE: ${{ github.event.workflow_run.check_suite_id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
           leave() { echo "$1"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0; }
           [ "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ] && [ "$CI_EVENT" = pull_request ] ||
@@ -76,6 +77,9 @@ jobs:
           case "$BRANCH" in build/issue-*) issue="${BRANCH#build/issue-}" ;; *) leave "This isn't a build's branch." ;; esac
           case "$issue" in ''|*[!0-9]*) leave "This isn't a build's branch." ;; esac
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || leave "CI's commit isn't a commit id."
+          # A re-run of CI is for a commit its first attempt already landed, or asked about, so only
+          # a first attempt acts.
+          [ "$RUN_ATTEMPT" = 1 ] || leave "This is attempt $RUN_ATTEMPT of CI's run, so its first attempt has already acted."
           case "$CHECK_SUITE" in ''|*[!0-9]*) leave "CI's check suite isn't a number." ;; esac
 
           pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" |

@@ -59,6 +59,16 @@ jobs:
           CI_EVENT: ${{ github.event.workflow_run.event }}
           CI_RUN: ${{ github.event.workflow_run.id }}
         run: |
+          # Whether GitHub says someone may write to the repository: their role or its base permission is
+          # exactly admin, maintain or write, so a custom role counts only by what it grants.
+          may_write() {
+            [[ "$1" =~ ^[A-Za-z0-9-]{1,39}$ ]] || return 1
+            local role="" permission=""
+            IFS=$'\t' read -r role permission < <(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq '[.role_name // "", .permission // ""] | @tsv' || true) || true
+            case "$role" in admin|maintain|write) return 0 ;; esac
+            case "$permission" in admin|maintain|write) return 0 ;; esac
+            return 1
+          }
           leave() { echo "$1"; exit 0; }
           # Whether an earlier CI pull_request run on the branch, from this repository, created since
           # the given time, had failed tests, and so said what this run would say.
@@ -122,9 +132,7 @@ jobs:
           actor="$(jq -r '.triggering_actor.login // ""' "$RUNNER_TEMP/run.json")"
           actor_type="$(jq -r '.triggering_actor.type // ""' "$RUNNER_TEMP/run.json")"
           if ! { [ "$actor" = "awml-factory[bot]" ] && [ "$actor_type" = Bot ]; }; then
-            [[ "$actor" =~ ^[A-Za-z0-9-]{1,39}$ ]] || leave "CI's run was started by no one who may write here."
-            role="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$actor/permission" --jq .role_name || true)"
-            case "$role" in admin|maintain|write) ;; *) leave "CI's run was started by someone who may not write here." ;; esac
+            may_write "$actor" || leave "CI's run was started by someone who may not write here."
           fi
 
           # A commit since main that isn't the factory's, by the build rule's test of its author's

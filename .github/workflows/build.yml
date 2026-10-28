@@ -171,6 +171,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Whether GitHub says someone may write to the repository: their role or its base permission is
+          # exactly admin, maintain or write, so a custom role counts only by what it grants.
+          may_write() {
+            [[ "$1" =~ ^[A-Za-z0-9-]{1,39}$ ]] || return 1
+            local role="" permission=""
+            IFS=$'\t' read -r role permission < <(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq '[.role_name // "", .permission // ""] | @tsv' || true) || true
+            case "$role" in admin|maintain|write) return 0 ;; esac
+            case "$permission" in admin|maintain|write) return 0 ;; esac
+            return 1
+          }
           case "$ISSUE" in ''|*[!0-9]*) echo "The issue must be a number: $ISSUE"; exit 1 ;; esac
           input="$RUNNER_TEMP/input"
           mkdir -p "$input"
@@ -200,9 +210,7 @@ jobs:
           # maintain or admin, not by how they're associated with it: a member may only triage.
           jq -r '[.data.repository.issue.comments.nodes[].author.login // empty] | unique | .[]' "$RUNNER_TEMP/issue.json" |
             while IFS= read -r login; do
-              [[ "$login" =~ ^[A-Za-z0-9-]{1,39}$ ]] || continue
-              role="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$login/permission" --jq .role_name || true)"
-              case "$role" in admin|maintain|write) echo "$login" ;; esac
+              if may_write "$login"; then echo "$login"; fi
             done | jq -Rsc 'split("\n") | map(select(. != ""))' > "$RUNNER_TEMP/writers.json"
           jq -r --slurpfile writers "$RUNNER_TEMP/writers.json" '.data.repository.issue as $issue
             | "# #\($issue.number): \($issue.title)\n\n\($issue.bodyHTML)\n",

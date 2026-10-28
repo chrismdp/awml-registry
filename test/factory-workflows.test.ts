@@ -218,13 +218,15 @@ const digestLine =
   'digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c 1-64; }';
 
 const scratches: string[] = [];
+// Some rehearsals make thousands of files, so clearing them all up can outlast vitest's default
+// ten seconds for a hook when the whole suite runs at once.
 afterAll(() => {
   for (const dir of scratches) {
     // Some rehearsals leave folders that can't be written to, as the workflows leave them.
     spawnSync("chmod", ["-R", "u+w", dir]);
     rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 120_000);
 
 function scratch(): string {
   const dir = mkdtempSync(join(tmpdir(), "factory-workflows-"));
@@ -397,10 +399,31 @@ const strangerPull = (head: string) => ({
 });
 
 // GitHub's answer to who may write: the repository's own people by their role, anyone else read.
-const roles: Record<string, string> = { owner: "admin", lead: "maintain", maintainer: "write", triager: "triage", stranger: "read" };
+// A custom role is named freely, so it counts only by the base permission GitHub gives it.
+const roles: Record<string, [string, string]> = {
+  owner: ["admin", "admin"],
+  lead: ["maintain", "write"],
+  maintainer: ["write", "write"],
+  deployer: ["deployer", "write"],
+  triager: ["triage", "read"],
+  stranger: ["read", "read"],
+  nowriter: ["no-write", "read"],
+  spaced: ["no write", "read"],
+  writerish: ["writer", "read"],
+};
 const permissionStub = Object.entries(roles)
-  .map(([login, role]) => `  *"collaborators/${login}/permission"*) answer <<< '${JSON.stringify({ role_name: role })}' ;;`)
+  .map(([login, [role, permission]]) => `  *"collaborators/${login}/permission"*) answer <<< '${JSON.stringify({ role_name: role, permission })}' ;;`)
   .join("\n");
+
+// The one check of whether someone may write to the repository, written the same everywhere.
+const mayWrite = `may_write() {
+  [[ "$1" =~ ^[A-Za-z0-9-]{1,39}$ ]] || return 1
+  local role="" permission=""
+  IFS=$'\\t' read -r role permission < <(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq '[.role_name // "", .permission // ""] | @tsv' || true) || true
+  case "$role" in admin|maintain|write) return 0 ;; esac
+  case "$permission" in admin|maintain|write) return 0 ;; esac
+  return 1
+}`;
 
 // A path that would end its line and start a workflow command of its own if printed as it is.
 const forgedPath = "a\n::notice title=Verdict::ship\nb";
@@ -815,6 +838,22 @@ describe("the factory's workflows", () => {
     expect(whole.stdout).toBe("matched\n");
   });
 
+  // Whether someone may write is one check, compared exactly, everywhere it's asked.
+  it("ask whether someone may write with the same check everywhere", () => {
+    const found: string[] = [];
+    for (const [file, id, job] of everyJob())
+      for (const each of steps(job)) {
+        const text = each.run ?? "";
+        if (!text.includes("/permission")) continue;
+        found.push(`${file} ${id}`);
+        const at = text.indexOf("may_write() {");
+        expect(at, `${file} ${id}`).toBeGreaterThan(-1);
+        expect(text.slice(at, at + mayWrite.length), `${file} ${id}`).toBe(mayWrite);
+        expect(text.match(/\/permission/g)?.length, `${file} ${id}`).toBe(1);
+      }
+    expect(found.sort()).toEqual(["build.yml draft", "ci.yml review", "fix.yml decide", "resolve.yml find", "retry.yml retry"]);
+  });
+
   it("take each artifact's digest the same way everywhere", () => {
     for (const [file, id, job] of everyJob())
       for (const each of steps(job))
@@ -1177,6 +1216,7 @@ describe("ci.yml", () => {
     ["a writer's pull request from this repository", {}],
     ["an admin's", { AUTHOR: "owner" }],
     ["a maintainer's", { AUTHOR: "lead" }],
+    ["a custom role's with write", { AUTHOR: "deployer" }],
     ["the factory's app's", { AUTHOR: "awml-factory[bot]", AUTHOR_TYPE: "Bot" }],
   ])("lets %s through to the review", (_, env) => {
     const run = trust(env);
@@ -1187,6 +1227,9 @@ describe("ci.yml", () => {
     ["a fork's pull request", { HEAD_REPOSITORY: "stranger/repo", AUTHOR: "owner" }],
     ["a reader's pull request from a branch here", { AUTHOR: "stranger" }],
     ["a triager's", { AUTHOR: "triager" }],
+    ["a custom role's named no-write", { AUTHOR: "nowriter" }],
+    ["a custom role's named with a space before write", { AUTHOR: "spaced" }],
+    ["a custom role's named like write", { AUTHOR: "writerish" }],
     ["a user who only shares the app's name", { AUTHOR: "awml-factory[bot]", AUTHOR_TYPE: "User" }],
     ["a login that isn't one", { AUTHOR: "../x" }],
   ])("fails the review on %s, saying why", (_, env) => {
@@ -1202,7 +1245,6 @@ describe("ci.yml", () => {
     expect(needs(jobs.classify)).toEqual(["review"]);
     expect(squash(jobs.classify.if)).toBe(
       squash(`\${{ needs.review.result == 'success' && startsWith(github.head_ref, 'build/issue-') &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
         github.event.pull_request.user.login == 'awml-factory[bot]' && github.event.pull_request.user.type == 'Bot' }}`),
     );
   });
@@ -2222,7 +2264,9 @@ describe("land.yml", () => {
       checks = checkRuns(),
       labeller = { login: "maintainer", type: "User" },
       pullRepository = "owner/repo",
+      attempt = "1",
     }: {
+      attempt?: string;
       event?: string;
       repository?: string;
       pullHead?: string;
@@ -2240,6 +2284,7 @@ describe("land.yml", () => {
         HEAD_REPOSITORY: repository,
         CI_EVENT: event,
         CHECK_SUITE: "300",
+        RUN_ATTEMPT: attempt,
       },
       answers: `
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(head), appPull(pullHead, pullRepository)])}' ;;
@@ -2271,6 +2316,14 @@ describe("land.yml", () => {
     const run = ready();
     expect(run.outputs.pr).toBe("12");
     expect(stepWithId(jobs.find, "ready").run).toContain('.user.login == "awml-factory[bot]" and .user.type == "Bot"');
+  });
+
+  // A re-run of CI would land, or ask, again for the same commit, so only a first attempt does.
+  it.runIf(canRehearse)("leaves a re-run of CI quietly", () => {
+    const run = ready({ attempt: "2" });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.go).toBe("false");
+    expect(stepWithId(jobs.find, "ready").env?.RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
   });
 
   it.runIf(canRehearse)("asks the owner when the app added the label", () => {
@@ -2609,7 +2662,7 @@ ${permissionStub}`,
   it.runIf(canRehearse)("fixes the pull request of someone who may write, never a stranger's or a triager's from the same branch", () => {
     expect(decide().outputs.pr).toBe("12");
     const ready = stepWithId(jobs.decide, "ready").run ?? "";
-    expect(ready).toContain('collaborators/$login/permission');
+    expect(ready).toContain('if may_write "$login"; then pr="$number"; break; fi');
     expect(ready).not.toContain("author_association");
   });
 
