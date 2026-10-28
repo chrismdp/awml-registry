@@ -17,6 +17,10 @@ review_paths:
   # Dependencies, the engine and how the registry is deployed.
   - package.json
   - package-lock.json
+  - .npmrc
+  - .yarnrc
+  - .yarnrc.yml
+  - node_modules/
   - vendor/
   - Dockerfile
   - wrangler.jsonc

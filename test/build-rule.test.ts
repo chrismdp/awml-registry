@@ -82,6 +82,13 @@ describe("the build rules file", () => {
     expect(() => readConfig("max_changed_lines: -1\n")).toThrow(/negative/);
   });
 
+  // npm's own settings and a committed node_modules/ steer npm wherever it runs, so a change to them
+  // always needs review.
+  it("asks about a change to npm's settings or a committed node_modules/", () => {
+    const rules = loadConfig(join(__dirname, "../.github/build-rules.yml"));
+    for (const path of [".npmrc", ".yarnrc", ".yarnrc.yml", "node_modules/"]) expect(rules.reviewPaths).toContain(path);
+  });
+
   it("reads the repository's own rules as a YAML parser does", () => {
     const text = readFileSync(join(__dirname, "../.github/build-rules.yml"), "utf8");
     const parsed = parse(text);

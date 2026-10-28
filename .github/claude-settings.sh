@@ -13,7 +13,9 @@
 # a list no setting can loosen, to the launch folder's .github, scripts, node_modules/.bin,
 # package.json, package-lock.json, .npmrc, .claude and git's hooks and config, and to the runner's
 # file-command folder and event file; but it reckons the runner's folders from HOME, which here is
-# the session's own, so they're named here from the job's.
+# the session's own, so they're named here from the job's, with the runner's actions and tools, the
+# git and shell settings of the job's home, every folder on PATH and every bin folder in the tool
+# cache.
 #
 # The keys are Claude Code's, from its sandboxing documentation: the sandbox on, and Claude Code
 # refusing to start without it; no retry of a command outside it, and no command excluded from it;
@@ -46,8 +48,27 @@ for runner_path in "${RUNNER_TEMP:+$RUNNER_TEMP/_runner_file_commands}" "${RUNNE
   "${HOME:+$HOME/actions-runner}" "${HOME:+$HOME/runners}"; do
   [ -z "$runner_path" ] || denied+=("$runner_path")
 done
+if [ -n "${RUNNER_TEMP:-}" ]; then
+  for dir in "$(dirname "$RUNNER_TEMP")/_actions" "$(dirname "$RUNNER_TEMP")/_tool"; do
+    if [ -d "$dir" ]; then denied+=("$dir"); fi
+  done
+fi
+if [ -n "${HOME:-}" ]; then
+  for file in .gitconfig .config .bashrc .bash_profile .profile .local .npmrc .ssh; do
+    denied+=("$HOME/$file")
+  done
+fi
+# Every folder on PATH, and every bin folder in the tool cache, named one by one, so a command can't
+# put a program where a later step would find it, whatever the scrub's own list holds.
+IFS=: read -r -a path_dirs <<< "${PATH:-}"
+for dir in "${path_dirs[@]}"; do
+  case "$dir" in /*) denied+=("${dir%/}") ;; esac
+done
+if [ -n "${RUNNER_TOOL_CACHE:-}" ] && [ -d "$RUNNER_TOOL_CACHE" ]; then
+  while IFS= read -r -d '' dir; do denied+=("$dir"); done < <(find "$RUNNER_TOOL_CACHE" -maxdepth 4 -type d -name bin -print0)
+fi
 mkdir -p "$home/.claude"
-list() { if [ $# -gt 0 ]; then printf '%s\n' "$@"; fi | jq -Rsc 'split("\n") | map(select(. != ""))'; }
+list() { if [ $# -gt 0 ]; then printf '%s\n' "$@"; fi | jq -Rsc 'split("\n") | map(select(. != "")) | reduce .[] as $p ([]; if index([$p]) then . else . + [$p] end)'; }
 jq -n \
   --argjson write "$(list "${writable[@]}")" \
   --argjson deny "$(list "${denied[@]}")" \

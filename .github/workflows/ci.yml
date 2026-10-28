@@ -119,7 +119,7 @@ jobs:
           sudo apt-get install -y bubblewrap socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --dev-bind / / --unshare-pid true
-          npm install -g @anthropic-ai/claude-code@2.1.312
+          (cd "$RUNNER_TEMP" && npm_config_userconfig=/dev/null npm_config_globalconfig=/dev/null npm install -g @anthropic-ai/claude-code@2.1.312)
 
       # The session keeps the login token from its commands (chrismdp/awml#121), loads only the
       # settings claude-settings.sh writes in its own empty home and no MCP servers, and reads only
@@ -210,7 +210,7 @@ jobs:
           sudo apt-get install -y bubblewrap socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --dev-bind / / --unshare-pid true
-          npm install -g @anthropic-ai/claude-code@2.1.312
+          (cd "$RUNNER_TEMP" && npm_config_userconfig=/dev/null npm_config_globalconfig=/dev/null npm install -g @anthropic-ai/claude-code@2.1.312)
 
       # The classifier starts as each review did: in an empty home of its own, reading inputs it
       # can't change, editing only its verdict, in a folder of its own.

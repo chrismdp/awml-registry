@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  symlinkSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -93,9 +94,8 @@ function stepWithId(job: Job | undefined, id: string): Step {
 }
 
 // The workflows that start Claude, and how many steps in each do: CI's reviews, one a job, and
-// Classify; the build's draft; the fixer's fix; and the rebase's three rounds of resolving real
-// conflicts.
-const claudeSteps: Record<string, number> = { "ci.yml": 2, "build.yml": 1, "fix.yml": 1, "resolve.yml": 3 };
+// Classify; the build's draft; the fixer's fix; and the rebase's resolution of real conflicts.
+const claudeSteps: Record<string, number> = { "ci.yml": 2, "build.yml": 1, "fix.yml": 1, "resolve.yml": 1 };
 
 const workflowFiles = readdirSync(join(__dirname, "../.github/workflows")).filter((file) =>
   file.endsWith(".yml"),
@@ -356,13 +356,31 @@ function commandsIn(printed: string): string[] {
 // A path that would end its line and start a workflow command of its own if printed as it is.
 const forgedPath = "a\n::notice title=Verdict::ship\nb";
 
-// A step's script with each round script of resolve.yml it runs written out in its place, so the
-// checks of Claude's steps and of git after them read what the step really runs.
 function runOf(each: Step): string {
-  return (each.run ?? "").replace(/bash "\$RUNNER_TEMP\/main\/(resolve-(?:session|continue)\.sh)"[^\n]*/g, (_, name: string) =>
-    readFileSync(join(github, name), "utf8"),
-  );
+  return each.run ?? "";
 }
+
+// The npm settings every npm run on the host takes in a job that holds the Claude token, so a tree's
+// .npmrc, user or global config can't point npm at another registry or a script shell, and no
+// package's script runs.
+const hostNpm = {
+  npm_config_userconfig: "/dev/null",
+  npm_config_globalconfig: "/dev/null",
+  npm_config_registry: "https://registry.npmjs.org/",
+  npm_config_ignore_scripts: "true",
+};
+
+// The files the app never pushes, and whose change on a branch keeps npm from running on it.
+const neverPushed = [
+  ".github/workflows/ci.yml",
+  ".claude/settings.json",
+  ".mcp.json",
+  "src/CLAUDE.md",
+  ".npmrc",
+  "src/.npmrc",
+  ".yarnrc.yml",
+  "node_modules/left-pad/index.js",
+];
 
 function holdsClaude(job: Job): boolean {
   return steps(job).some((each) => each.env !== undefined && "CLAUDE_CODE_OAUTH_TOKEN" in each.env);
@@ -541,6 +559,13 @@ describe("the factory's workflows", () => {
         for (const line of runOf(each).replace(/"Bash\([^"]*\)"/g, "").split("\n")) {
           if (!/(^|[\s;(|&])git\s/.test(line) || /^(#|echo )/.test(line.trim())) continue;
           const where = `${file} ${id} "${each.name}"`;
+          if (/\bsafe_git\b/.test(line)) {
+            expect(runOf(each), where).toContain(
+              'safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }',
+            );
+            if (/ diff /.test(line)) expect(line, where).toContain("--no-ext-diff --no-textconv");
+            continue;
+          }
           expect(line, where).toMatch(/git (-C "\$clone" )?-c core\.hooksPath=\/dev\/null -c core\.fsmonitor=false -c diff\.external= /);
           if (/ diff /.test(line)) expect(line, where).toContain("--no-ext-diff --no-textconv");
         }
@@ -589,7 +614,8 @@ describe("the factory's workflows", () => {
       for (const line of runs(job).split("\n"))
         if (line.includes("@anthropic-ai/claude-code")) installs.push(`${file} ${id}: ${line.trim()}`);
     expect(installs.length).toBe(5);
-    for (const install of installs) expect(install).toMatch(/: npm install -g @anthropic-ai\/claude-code@2\.1\.312$/);
+    for (const install of installs)
+      expect(install).toMatch(/: \(cd "\$RUNNER_TEMP" && npm_config_userconfig=\/dev\/null npm_config_globalconfig=\/dev\/null npm install -g @anthropic-ai\/claude-code@2\.1\.312\)$/);
   });
 
   // A session that runs the checks finds the dependencies already installed, with their scripts
@@ -601,8 +627,34 @@ describe("the factory's workflows", () => {
       const session = all.findIndex((each) => /\bclaude -p\b/.test(runOf(each)));
       expect(install, `${file} ${id}`).toBeGreaterThan(-1);
       expect(install, `${file} ${id}`).toBeLessThan(session);
-      expect(all[install].env?.npm_config_registry, `${file} ${id}`).toBe("https://registry.npmjs.org/");
+      expect(all[install].env, `${file} ${id}`).toMatchObject(hostNpm);
       expect(all[install].env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    }
+  });
+
+  // Every npm the host runs beside the Claude token ignores the tree's, user and global config.
+  it("run npm on the host only with its config files and scripts off", () => {
+    for (const [file, id, job] of everyJob()) {
+      if (!holdsClaude(job)) continue;
+      for (const each of steps(job)) {
+        const commands = runOf(each).replace(/"Bash\([^"]*\)"/g, "");
+        if (!/\bnpm ci\b/.test(commands)) continue;
+        expect(each.env, `${file} ${id} "${each.name}"`).toMatchObject(hostNpm);
+      }
+    }
+  });
+
+  // A session's commands can write almost anywhere under the runner's home and temporary folder,
+  // so the baseline git's config and the workspace's identity are kept where they can't.
+  it("keep the baseline of git's config, and the workspace's identity, where the session can't write", () => {
+    for (const file of ["build.yml", "fix.yml"]) {
+      const job = Object.values(readJobs(file)).find(holdsClaude);
+      const all = steps(job);
+      const first = all.findIndex((each) => /\bclaude -p\b/.test(runOf(each)));
+      const before = all.slice(0, first).map(runOf).join("\n");
+      expect(before, file).toContain('cp .git/config "$RUNNER_TEMP/baseline/git-config"');
+      expect(before, file).toContain('stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$RUNNER_TEMP/baseline/workspace"');
+      expect(runOf(all[first]), file).toContain('--deny-write "$RUNNER_TEMP/baseline"');
     }
   });
 
@@ -610,6 +662,8 @@ describe("the factory's workflows", () => {
   // the config is copied out before the session and must be byte for byte the same after it.
   it("check git's config is unchanged before any git runs after a session", () => {
     for (const [file, id, job] of everyJob()) {
+      // resolve's host git after a session reads bundles into fresh repositories, tested there.
+      if (file === "resolve.yml") continue;
       const all = steps(job);
       const first = all.findIndex((each) => /\bclaude -p\b/.test(runOf(each)));
       if (first < 0) continue;
@@ -626,6 +680,9 @@ describe("the factory's workflows", () => {
       expect(text.indexOf("cmp -s"), `${file} ${id}`).toBeLessThan(text.search(/(^|\s)git\s/m));
       expect(firstGit?.env?.GIT_CONFIG_GLOBAL, `${file} ${id}`).toBe("/dev/null");
       expect(firstGit?.env?.GIT_CONFIG_NOSYSTEM, `${file} ${id}`).toBe("1");
+      expect(firstGit ? runOf(firstGit) : "", `${file} ${id}`).toContain(
+        'stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$RUNNER_TEMP/baseline/workspace"',
+      );
     }
   });
 
@@ -705,17 +762,32 @@ describe("claude-settings.sh", () => {
         allowNestedUserNamespaces: false,
         filesystem: {
           allowWrite: ["/tmp/npm-cache"],
-          denyWrite: [
+          denyWrite: expect.arrayContaining([
             "./.git",
             join(root, "runner/_runner_file_commands"),
             "/opt/hostedtoolcache",
             "/home/runner/actions-runner",
             "/home/runner/runners",
-          ],
+          ]),
         },
         network: { allowedDomains: ["registry.npmjs.org"], strictAllowlist: true },
       },
     });
+  });
+
+  it.runIf(canRehearse)("denies writes to every PATH entry and every bin folder in the tool cache", () => {
+    const root = scratch();
+    const tools = join(root, "toolcache");
+    mkdirSync(join(tools, "node/22.0.0/x64/bin"), { recursive: true });
+    const home = join(root, "home");
+    const run = rehearse(script("claude-settings.sh", [home]), {
+      root,
+      env: { RUNNER_TOOL_CACHE: tools, PATH: `${join(root, "bin")}:/usr/local/bin::/usr/bin:${process.env.PATH}` },
+    });
+    expect(run.failed, run.printed).toBe(false);
+    const denied = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")).sandbox.filesystem.denyWrite;
+    for (const want of [tools, join(tools, "node/22.0.0/x64/bin"), "/usr/local/bin", "/usr/bin", join(root, "bin")]) expect(denied).toContain(want);
+    expect(denied).not.toContain("");
   });
 
   it.runIf(canRehearse)("allows no host at all when none is named", () => {
@@ -724,7 +796,7 @@ describe("claude-settings.sh", () => {
     expect(rehearse(script("claude-settings.sh", [home]), { root, env: { RUNNER_TEMP: "", HOME: "" } }).failed).toBe(false);
     const settings = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
     expect(settings.sandbox.network).toEqual({ allowedDomains: [], strictAllowlist: true });
-    expect(settings.sandbox.filesystem).toEqual({ allowWrite: [], denyWrite: [] });
+    expect(settings.sandbox.filesystem.allowWrite).toEqual([]);
   });
 
   it.runIf(canRehearse)("refuses a home that already holds settings", () => {
@@ -750,8 +822,6 @@ describe("claude-settings.sh", () => {
       "ci.yml classify: ",
       "ci.yml review: ",
       "fix.yml fix: ",
-      "resolve.yml draft: ",
-      "resolve.yml draft: ",
       "resolve.yml draft: ",
     ]);
   });
@@ -1398,7 +1468,7 @@ describe("build.yml", () => {
       expect(run.calls).not.toContain("issue comment");
     });
 
-    it.runIf(canRehearse).each([".github/workflows/ci.yml", ".claude/settings.json", ".mcp.json", "src/CLAUDE.md"])(
+    it.runIf(canRehearse).each(neverPushed)(
       "offers a change to %s in a new comment, with the commands to download and apply it",
       (path) => {
         const run = guard(path);
@@ -1433,9 +1503,48 @@ describe("build.yml", () => {
 
   // GitHub closes each issue a merged commit's message or a pull request's description names after
   // a closing keyword, so Claude's text closes none, and only the build's own Closes #n remains.
-  it("neutralises closing keywords in Claude's commit message", () => {
+  it("neutralises closing keywords in Claude's commit message and the pull request's title", () => {
     const commit = stepWithId(jobs.open, "commit").run ?? "";
     expect(commit).toMatch(/unclose\.sh" < "\$RUNNER_TEMP\/change\/message\.md"/);
+    expect(stepWithId(jobs.open, "describe").run).toMatch(/head -n 1 "\$RUNNER_TEMP\/change\/message\.md" \| bash "\$RUNNER_TEMP\/unclose\.sh"/);
+  });
+
+  // After the session, git runs only on the workspace it started in, and only on a tree with no
+  // repository nested inside it, whose own config git would read.
+  describe("the patch step", () => {
+    const patch = (spoil: (repo: string, root: string) => void) => {
+      const root = scratch();
+      const repo = join(root, "work");
+      mkdirSync(repo);
+      git(repo, "init", "-q");
+      put(join(repo, "README.md"), "A registry\n");
+      git(repo, "add", "-A");
+      git(repo, "commit", "-qm", "main");
+      put(join(root, "runner/baseline/git-config"), readFileSync(join(repo, ".git/config"), "utf8"));
+      put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", repo, join(repo, ".git")], { encoding: "utf8" }));
+      put(join(repo, "README.md"), "Changed\n");
+      spoil(repo, root);
+      return { root, run: rehearse(stepWithId(jobs.draft, "patch").run ?? "", { root, cwd: repo, env: { GITHUB_WORKSPACE: repo } }) };
+    };
+
+    it.runIf(canRehearse)("makes the patch from an untouched workspace", () => {
+      const { root, run } = patch(() => {});
+      expect(run.failed, run.printed).toBe(false);
+      expect(left(root, "change/change.patch")).toContain("+Changed");
+    });
+
+    it.runIf(canRehearse)("refuses a workspace whose .git was replaced", () => {
+      const { run } = patch((repo, root) => {
+        execFileSync("mv", [join(repo, ".git"), join(root, "old-git")]);
+        execFileSync("cp", ["-r", join(root, "old-git"), join(repo, ".git")]);
+      });
+      expect(run.failed).toBe(true);
+    });
+
+    it.runIf(canRehearse)("refuses a repository nested below the top", () => {
+      const { run } = patch((repo) => git(join(repo), "init", "-q", "src/inner"));
+      expect(run.failed).toBe(true);
+    });
   });
 
   it.runIf(canRehearse)("unclose.sh puts each closing reference in a code span", () => {
@@ -1777,7 +1886,8 @@ describe("fix.yml", () => {
     security = "success",
     fixes = 0,
     pullRepository = "owner/repo",
-  }: Partial<{ event: string; repository: string; pullHead: string; test: string; bug: string; security: string; fixes: number; pullRepository: string }> = {}) => {
+    files = ["src/page.tsx"],
+  }: Partial<{ event: string; repository: string; pullHead: string; test: string; bug: string; security: string; fixes: number; pullRepository: string; files: string[] }> = {}) => {
     const root = scratch();
     const commits = [{ commit: { message: "Build #7\n\nCloses #7" } }];
     for (let at = 0; at < fixes; at++) commits.push({ commit: { message: `Fix the review findings\n\nFactory-Fix: https://github.com/owner/repo/actions/runs/${at}` } });
@@ -1787,7 +1897,7 @@ describe("fix.yml", () => {
       answers: `
   *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: test }, { name: "Bug review", conclusion: bug }, { name: "Security review", conclusion: security }, { name: "Classify", conclusion: "success" }] })}' ;;
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([{ number: 12, head: { sha: pullHead, ref: "build/issue-7", repo: { full_name: pullRepository } }, base: { ref: "main" } }])}' ;;
-  *"compare/main...${head}"*) answer <<< '${JSON.stringify({ commits })}' ;;`,
+  *"compare/main...${head}"*) answer <<< '${JSON.stringify({ commits, files: files.map((filename) => ({ filename })) })}' ;;`,
     });
   };
 
@@ -1803,6 +1913,16 @@ describe("fix.yml", () => {
   it.runIf(canRehearse)("gives up after two fix commits", () => {
     expect(decide({ fixes: 2 }).outputs.outcome).toBe("giveup");
   });
+
+  // npm would read the branch's .npmrc or a committed node_modules/ beside the Claude token, so a
+  // branch that changes them is never installed: a person must fix it.
+  it.runIf(canRehearse).each([".npmrc", "web/.npmrc", ".yarnrc", "node_modules/left-pad/index.js"])(
+    "refuses a branch that changes %s",
+    (path) => {
+      expect(decide({ files: [path] }).outputs.outcome).toBe("npmfiles");
+      expect(decide({ files: ["src/page.tsx"] }).outputs.outcome).toBe("fix");
+    },
+  );
 
   // The tests own a run where both they and a review failed, so retry acts then. Someone else's
   // push since the review, or a closed pull request, leaves nothing to fix.
@@ -1904,6 +2024,12 @@ describe("fix.yml", () => {
       expect(run.calls).toContain("https://github.com/owner/repo/actions/runs/77");
     });
 
+    it.runIf(canRehearse)("says in a new comment that npm's files keep the fixer from the branch", () => {
+      const run = guard({ OUTCOME: "npmfiles" });
+      expect(run.outputs.result).toBe("done");
+      expect(run.calls).toMatch(/> .*\.npmrc/);
+    });
+
     it.runIf(canRehearse)("gives up in a new comment when the session made no fix", () => {
       for (const env of [{ FIXED: "failure" }, { CHANGED: "false" }] as Record<string, string>[]) {
         const run = guard(env);
@@ -1918,7 +2044,7 @@ describe("fix.yml", () => {
       expect(commandsIn(run.printed)).toEqual([]);
     });
 
-    it.runIf(canRehearse).each([".github/workflows/ci.yml", ".claude/settings.json", "CLAUDE.md"])(
+    it.runIf(canRehearse).each(neverPushed)(
       "offers a fix to %s with the commands to download and apply it",
       (path) => {
         const run = guard({}, path);
@@ -2170,117 +2296,155 @@ describe("resolve.yml", () => {
     expect(run.outputs.digest).toBe(digestOf(join(root, "runner/rebased")));
   });
 
-  // A session only edits the conflicted files. The job continues each rebase between sessions, in a
-  // step without the Claude token, and starts a session again where the next commit conflicts, up
-  // to three rounds.
-  it("alternates three rounds of sessions with git steps that hold no token", () => {
+  // Each real conflict gets a clone of its own, made outside the workspace before any session
+  // starts, so the scrub's fixed list, which is reckoned from the workspace, doesn't stop the
+  // rebase writing scripts/ or package.json. The session runs the whole rebase there and bundles
+  // it; the step that holds the token runs no git; a later step without it reads each bundle into
+  // a fresh repository.
+  it("prepares, resolves and checks in three steps, only the middle one holding the token", () => {
     const ids = steps(jobs.draft).map((each) => each.id).filter(Boolean);
-    expect(ids).toEqual(["session1", "continue1", "session2", "continue2", "session3", "continue3", "bundle", "pack"]);
-    for (const round of [1, 2, 3]) {
-      expect(stepWithId(jobs.draft, `session${round}`).run).toBe(`bash "$RUNNER_TEMP/main/resolve-session.sh" ${round}\n`);
-      const resume = stepWithId(jobs.draft, `continue${round}`);
-      expect(resume.run).toBe(`bash "$RUNNER_TEMP/main/resolve-continue.sh"\n`);
-      expect(resume.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
-      expect(resume.env).toMatchObject({ GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
-    }
-    expect(runs(jobs.draft)).toContain('bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/resolved"');
-    expect(jobs.draft.outputs?.digest).toBe("${{ steps.pack.outputs.digest }}");
-    expect(runs(jobs.draft)).toContain(".github/resolve-session.sh .github/resolve-continue.sh");
+    expect(ids).toEqual(["prepare", "resolve", "check"]);
+    for (const id of ["prepare", "check"]) expect(stepWithId(jobs.draft, id).env?.CLAUDE_CODE_OAUTH_TOKEN, id).toBeUndefined();
+    expect(jobs.draft.outputs?.digest).toBe("${{ steps.check.outputs.digest }}");
   });
 
-  it("runs no git in a session's step, and lets the session run none", () => {
-    const session = readFileSync(join(github, "resolve-session.sh"), "utf8");
-    const commands = session.replace(/"Bash\([^"]*\)"/g, "").split("\n").filter((line) => !/^\s*(#|echo )/.test(line));
+  it("clones each branch outside the workspace, with no hooks, no editor and the app's identity", () => {
+    const prepare = stepWithId(jobs.draft, "prepare");
+    const text = prepare.run ?? "";
+    for (const want of [
+      'safe_git fetch -q --no-tags origin "$head_sha:refs/heads/factory-rebase-$number"',
+      `safe_git clone -q --no-hardlinks --no-${CLONE} "$GITHUB_WORKSPACE" "$root/work"`,
+      'safe_git -C "$root/work" config core.hooksPath /dev/null',
+      'safe_git -C "$root/work" config core.fsmonitor false',
+      'safe_git -C "$root/work" config core.editor true',
+      'safe_git -C "$root/work" config user.name "awml-factory[bot]"',
+      '(cd "$root/work" && npm ci --ignore-scripts --no-audit --no-fund)',
+      'stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$RUNNER_TEMP/baseline/workspace"',
+    ])
+      expect(text).toContain(want);
+    expect(prepare.env).toMatchObject(hostNpm);
+    expect(text).toContain("select(.clean == false and .guarded == false)");
+  });
+
+  it("runs no git in the step that holds the token", () => {
+    const resolveStep = stepWithId(jobs.draft, "resolve").run ?? "";
+    const commands = resolveStep.replace(/"Bash\([^"]*\)"/g, "").split("\n").filter((line) => !/^\s*(#|echo )/.test(line));
     for (const line of commands) expect(line).not.toMatch(/(^|[\s;(|&])git\s/);
-    expect(session).not.toMatch(/"Bash\(git (add|rebase|switch|commit|reset)/);
-    expect(session).toContain('claude-settings.sh" "$round_dir/home" --deny-write ./.git');
+    expect(resolveStep).toContain('cd "$root/work"');
+    expect(resolveStep).toContain('"Bash(git bundle create:*)"');
   });
 
-  // Starts a session only for a clone whose rebase stopped at a conflict, each round in a home of
-  // its own.
-  it.runIf(canRehearse)("starts a session only where a rebase waits on a conflict", () => {
+  // Each session's sandbox may write its own clone and out folder, and nothing of another pull
+  // request's, the inputs, main's scripts, the check folders or the workspace.
+  it.runIf(canRehearse)("denies each session writes to every other pull request's folder and the shared ones", () => {
     const root = scratch();
-    put(join(root, "runner/conflicted.txt"), `1 ${"a".repeat(40)}\n2 ${"b".repeat(40)}\n3 ${"c".repeat(40)}\n`);
-    mkdirSync(join(root, "runner/clone-1/.git/rebase-merge"), { recursive: true });
-    mkdirSync(join(root, "runner/clone-2/.git"), { recursive: true });
-    mkdirSync(join(root, "runner/clone-3/.git/rebase-merge"), { recursive: true });
-    put(join(root, "runner/gave-up-3"), "");
-    for (const n of [1, 2, 3]) put(join(root, `runner/input-${n}/conflicted-files.txt`), "a.txt\n");
-    put(join(root, "runner/main/resolve-prompt.md"), "Read INPUT_DIR/conflicted-files.txt. Write OUT_DIR/message.md.\n");
+    put(join(root, "runner/pulls.tsv"), `1\t${"a".repeat(40)}\n2\t${"b".repeat(40)}\n`);
+    for (const n of [1, 2]) {
+      mkdirSync(join(root, `runner/pr/${n}/work`), { recursive: true });
+      mkdirSync(join(root, `runner/pr/${n}/out`), { recursive: true });
+      mkdirSync(join(root, `runner/pr/${n}/in`), { recursive: true });
+    }
+    put(join(root, "runner/main/resolve-prompt.md"), readFileSync(join(github, "resolve-prompt.md"), "utf8"));
     put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
-    const { run, started } = sessions(script("resolve-session.sh", ["2"]), root, {
+    const workspace = join(root, "workspace");
+    const { run, started } = sessions(stepWithId(jobs.draft, "resolve").run ?? "", root, {
       CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-      REVIEW_DIR: join(root, "runner/input-1"),
+      MAIN_SHA: "c".repeat(40),
+      GITHUB_WORKSPACE: workspace,
+      REVIEW_DIR: join(root, "runner/pr/1/in"),
     });
     expect(run.failed, run.printed).toBe(false);
-    expect(started).toHaveLength(1);
-    expect(started[0].home).toBe(join(root, "runner/sessions/resolve-1/round-2/home"));
-    expect(flagValues(started[0].args, "--permission-mode")).toEqual(["default"]);
+    expect(started).toHaveLength(2);
+    const denied = JSON.parse(readFileSync(join(started[0].home, ".claude/settings.json"), "utf8")).sandbox.filesystem.denyWrite;
+    for (const want of ["pr/2", "pr/1/in", "main", "check", "resolved", "baseline", "pulls.tsv"]) expect(denied).toContain(join(root, "runner", want));
+    expect(denied).toContain(workspace);
+    expect(denied).not.toContain(join(root, "runner/pr/1"));
+    const prompt = started[0].args[started[0].args.indexOf("-p") + 1];
+    expect(prompt).toContain(`git bundle create ${join(root, "runner/pr/1/out")}/rebased.bundle ${"c".repeat(40)}..HEAD`);
   });
 
-  describe("resolve-continue.sh", () => {
-    // A branch of two commits, each clashing with main, rebased until it stops at the first.
-    const midRebase = () => {
+  describe("the check step", () => {
+    // A workspace whose main moved after a branch, and the session's clone, rebased there.
+    const rebased = (resolve: (work: string) => void, spoil: (root: string, ws: string) => void = () => {}) => {
       const root = scratch();
-      const clone = join(root, "runner/clone-5");
-      mkdirSync(clone, { recursive: true });
-      git(clone, "init", "-q");
-      put(join(clone, "a.txt"), "one\n");
-      put(join(clone, "b.txt"), "one\n");
-      git(clone, "add", "-A");
-      git(clone, "commit", "-qm", "base");
-      git(clone, "switch", "-q", "-c", "branch");
-      put(join(clone, "a.txt"), "branch\n");
-      git(clone, "commit", "-qam", "first");
-      put(join(clone, "b.txt"), "branch\n");
-      git(clone, "commit", "-qam", "second");
-      git(clone, "switch", "-q", "main");
-      put(join(clone, "a.txt"), "main\n");
-      put(join(clone, "b.txt"), "main\n");
-      git(clone, "commit", "-qam", "main moves");
-      const main = git(clone, "rev-parse", "HEAD");
-      git(clone, "switch", "-q", "branch");
-      spawnSync("git", ["-C", clone, "-c", "user.name=A", "-c", "user.email=a@example.com", "rebase", "-q", main], { encoding: "utf8" });
-      put(join(root, "runner/conflicted.txt"), `5 ${"a".repeat(40)}\n`);
-      put(join(root, "runner/input-5/conflicted-files.txt"), "a.txt\n");
-      put(join(root, "runner/git-config-5"), readFileSync(join(clone, ".git/config"), "utf8"));
-      return { root, clone };
+      const ws = join(root, "ws");
+      mkdirSync(ws);
+      git(ws, "init", "-q");
+      put(join(ws, "a.txt"), "one\n");
+      git(ws, "add", "-A");
+      git(ws, "commit", "-qm", "base");
+      git(ws, "switch", "-q", "-c", "branch");
+      put(join(ws, "a.txt"), "branch\n");
+      git(ws, "commit", "-qam", "branch");
+      const head = git(ws, "rev-parse", "HEAD");
+      git(ws, "branch", "factory-rebase-5", head);
+      git(ws, "switch", "-q", "main");
+      put(join(ws, "b.txt"), "main\n");
+      git(ws, "add", "-A");
+      git(ws, "commit", "-qm", "main moves");
+      const main = git(ws, "rev-parse", "HEAD");
+      const work = join(root, "runner/pr/5/work");
+      git(root, "clone", "-q", ws, work);
+      git(work, "switch", "-q", "--detach", main);
+      put(join(work, "a.txt"), "branch\n");
+      resolve(work);
+      git(work, "add", "-A");
+      git(work, "commit", "-qm", "branch, rebased");
+      mkdirSync(join(root, "runner/pr/5/out"), { recursive: true });
+      git(work, "bundle", "create", "-q", join(root, "runner/pr/5/out/rebased.bundle"), `${main}..HEAD`);
+      put(join(root, "runner/pr/5/out/message.md"), "Kept both sides.\n");
+      put(join(root, "runner/pulls.tsv"), `5\t${head}\n`);
+      put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", ws, join(ws, ".git")], { encoding: "utf8" }));
+      put(join(root, "runner/main/scan-tokens.sh"), readFileSync(join(github, "scan-tokens.sh"), "utf8"));
+      spoil(root, ws);
+      const run = rehearse(stepWithId(jobs.draft, "check").run ?? "", { root, env: { MAIN_SHA: main, GITHUB_WORKSPACE: ws } });
+      return { root, run };
     };
-    const resume = (root: string) =>
-      rehearse(script("resolve-continue.sh"), {
-        root,
-        env: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_COMMITTER_NAME: "A", GIT_COMMITTER_EMAIL: "a@example.com" },
-      });
 
-    it.runIf(canRehearse)("adds the resolved files and continues, stopping again at the next conflict", () => {
-      const { root, clone } = midRebase();
-      put(join(clone, "a.txt"), "both\n");
-      const run = resume(root);
+    it.runIf(canRehearse)("keeps a rebase that sits on main, with its note, and gives their digest", () => {
+      const { root, run } = rebased(() => {});
       expect(run.failed, run.printed).toBe(false);
-      expect(existsSync(join(clone, ".git/rebase-merge"))).toBe(true);
-      expect(left(root, "input-5/conflicted-files.txt")).toBe("b.txt\n");
-      put(join(clone, "b.txt"), "both\n");
-      expect(resume(root).failed).toBe(false);
-      expect(existsSync(join(clone, ".git/rebase-merge"))).toBe(false);
-      expect(readFileSync(join(clone, "a.txt"), "utf8")).toBe("both\n");
+      expect(existsSync(join(root, "runner/resolved/5.bundle"))).toBe(true);
+      expect(left(root, "resolved/5.md")).toBe("Kept both sides.\n");
+      expect(run.outputs.digest).toBe(digestOf(join(root, "runner/resolved")));
     });
 
-    it.runIf(canRehearse)("gives up on a clone whose conflicts still hold markers", () => {
-      const { root } = midRebase();
-      const run = resume(root);
+    it.runIf(canRehearse).each([
+      ["conflict markers", (work: string) => put(join(work, "a.txt"), "<<<<<<< HEAD\nbranch\n=======\nmain\n>>>>>>> main\n")],
+      ["a token the resolution adds", (work: string) => put(join(work, "c.txt"), `key sk-ant-oat01-${"x".repeat(20)}\n`)],
+      ["a change to .github/", (work: string) => put(join(work, ".github/workflows/x.yml"), "on: push\n")],
+      ["a change to an .npmrc", (work: string) => put(join(work, ".npmrc"), "registry=https://example.com/\n")],
+    ])("keeps no bundle with %s", (_, resolve) => {
+      const { root, run } = rebased(resolve);
       expect(run.failed, run.printed).toBe(false);
-      expect(existsSync(join(root, "runner/gave-up-5"))).toBe(true);
+      expect(existsSync(join(root, "runner/resolved/5.bundle"))).toBe(false);
     });
 
-    it.runIf(canRehearse)("runs no git in a clone whose git config the session changed", () => {
-      const { root, clone } = midRebase();
-      put(join(clone, "a.txt"), "both\n");
-      writeFileSync(join(clone, ".git/config"), readFileSync(join(clone, ".git/config"), "utf8") + "[diff]\n\texternal = touch /tmp/owned\n");
-      const run = resume(root);
+    it.runIf(canRehearse)("reads nothing from an out folder reached through a symbolic link", () => {
+      const { root, run } = rebased(
+        () => {},
+        (root) => {
+          const out = join(root, "runner/pr/5/out");
+          const real = join(root, "elsewhere");
+          execFileSync("mv", [out, real]);
+          symlinkSync(real, out);
+        },
+      );
       expect(run.failed, run.printed).toBe(false);
-      expect(existsSync(join(root, "runner/gave-up-5"))).toBe(true);
-      expect(existsSync(join(clone, ".git/rebase-merge"))).toBe(true);
+      expect(existsSync(join(root, "runner/resolved/5.bundle"))).toBe(false);
+      expect(existsSync(join(root, "runner/resolved/5.md"))).toBe(false);
+    });
+
+    it.runIf(canRehearse)("stops when the workspace or its .git was replaced", () => {
+      const { run } = rebased(
+        () => {},
+        (root, ws) => {
+          execFileSync("mv", [join(ws, ".git"), join(root, "old-git")]);
+          execFileSync("cp", ["-r", join(root, "old-git"), join(ws, ".git")]);
+        },
+      );
+      expect(run.failed).toBe(true);
     });
   });
 

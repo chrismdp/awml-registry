@@ -99,7 +99,7 @@ jobs:
             [[ "$branch" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || continue
 
             git "${safe[@]}" -c http.https://github.com/.extraheader="$auth" fetch -q --no-tags origin "$head_sha"
-            guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$'
+            guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)'
             if git "${safe[@]}" diff --name-only --no-renames -z "$(git merge-base "$MAIN_SHA" "$head_sha")" "$head_sha" |
               grep -zqE "$guarded"; then
               pulls="$(jq -c --argjson number "$number" --arg branch "$branch" --arg head_sha "$head_sha" \
@@ -133,9 +133,13 @@ jobs:
           path: ${{ runner.temp }}/rebased
           if-no-files-found: ignore
 
-  # Resolves each real conflict in turn, each in a Claude session of its own, in a clone of its own,
-  # with a read-only token. It follows main's prompt and AGENTS.md, copied out before any session
-  # starts, and gives the digest of the rebased branches it hands back as its output.
+  # Resolves each real conflict in turn, each in a Claude session of its own, with a read-only
+  # token. Each pull request gets a folder of its own under $RUNNER_TEMP/pr, made before any session
+  # starts: a clone of the branch outside the workspace, its inputs, made read-only, its session's
+  # output and its session's home. The session runs the whole rebase itself, git included, in its
+  # clone, and bundles the result. The step that holds the login token runs no git, and host git
+  # never touches a clone again: a later step reads each bundle as data into a fresh repository,
+  # and gives the digest of what it keeps as the job's output.
   draft:
     needs: find
     if: needs.find.outputs.conflicted == 'true'
@@ -145,64 +149,71 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      digest: ${{ steps.pack.outputs.digest }}
+      digest: ${{ steps.check.outputs.digest }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      # Only for Claude Code, and for npm inside its sandbox. No npm cache is saved or restored.
+      # Only for Claude Code, and for npm before the sessions. No npm cache is saved or restored.
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           package-manager-cache: false
 
-      # Each conflicting pull request gets a clone of its own, its dependencies installed there at
-      # the branch's head, with every package's scripts off and from npm's own registry, its rebase
-      # started with git alone, hooks and fsmonitor off, its git config copied out for the check
-      # after the session, and its context in a folder of its own, all before any session starts.
-      # The clone commits as the app's bot. The session can't install: under the scrub, Claude Code
-      # denies its commands writes to node_modules/.bin and package-lock.json, and its sandbox has
-      # no network.
-      - name: Copy main's prompt, scripts and AGENTS.md out, and start each rebase
+      # Main's prompt, scripts and AGENTS.md are copied out first. Each conflicting branch's head is
+      # fetched into a local branch of the workspace, so its clone carries it and the check can read
+      # it, and cloned with no hardlinks outside the workspace. The clone has no hooks, no fsmonitor
+      # and no editor, and commits as the app's bot. Its dependencies are installed there, with npm's
+      # config files and every package's scripts off, from npm's own registry: the find job held
+      # back any branch that changes an .npmrc, a .yarnrc or node_modules/. Git runs here with hooks,
+      # fsmonitor and global config off, before any session starts. The workspace's identity is
+      # kept, for the check.
+      - name: Prepare a clone of each conflicting branch, before any session starts
+        id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
           PULLS: ${{ needs.find.outputs.pulls }}
+          npm_config_userconfig: /dev/null
+          npm_config_globalconfig: /dev/null
           npm_config_registry: https://registry.npmjs.org/
+          npm_config_ignore_scripts: "true"
         run: |
-          mkdir -p "$RUNNER_TEMP/main"
-          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh AGENTS.md "$RUNNER_TEMP/main/"
-          bot_id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
-          case "$bot_id" in ''|*[!0-9]*) echo "The app's bot has no id: $bot_id"; exit 1 ;; esac
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
+          trap 'echo "::$stop::"' EXIT
+          mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/check" "$RUNNER_TEMP/resolved"
+          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh AGENTS.md "$RUNNER_TEMP/main/"
+          id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
+          case "$id" in ''|*[!0-9]*) echo "The app's bot has no id: $id"; exit 1 ;; esac
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          jq -r '.[] | select(.clean == false and .guarded == false) | "\(.number) \(.head_sha)"' <<< "$PULLS" > "$RUNNER_TEMP/conflicted.txt"
-          while read -r number head_sha; do
-            case "$number" in ''|*[!0-9]*) echo "A pull request's number isn't a number: $number"; exit 1 ;; esac
-            [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "A head isn't a commit id: $head_sha"; exit 1; }
-            input="$RUNNER_TEMP/input-$number"
-            clone="$RUNNER_TEMP/clone-$number"
-            mkdir -p "$input"
-            cp "$RUNNER_TEMP/main/AGENTS.md" "$input/"
-            git -c core.hooksPath=/dev/null -c http.https://github.com/.extraheader="$auth" fetch -q --no-tags origin "$head_sha"
-            git -c core.hooksPath=/dev/null clone -q --no-checkout "$GITHUB_WORKSPACE" "$clone"
-            git -C "$clone" config user.name 'awml-factory[bot]'
-            git -C "$clone" config user.email "$bot_id+awml-factory[bot]@users.noreply.github.com"
-            git -C "$clone" -c core.hooksPath=/dev/null switch -q --detach "$head_sha"
-            stop="$(openssl rand -hex 16)"
-            echo "::stop-commands::$stop"
-            (cd "$clone" && npm ci --ignore-scripts --no-audit --no-fund)
-            echo "::$stop::"
-            gh api "repos/$GITHUB_REPOSITORY/pulls/$number" | jq -r '"# " + .title + "\n\n" + (.body // "")' > "$input/pull-request.md"
-            base="$(git -C "$clone" merge-base HEAD "$MAIN_SHA")"
-            git -C "$clone" log --oneline "$base..HEAD" > "$input/branch-log.txt"
-            git -C "$clone" log --oneline "$base..$MAIN_SHA" > "$input/main-log.txt"
-            if git -C "$clone" -c core.hooksPath=/dev/null -c core.fsmonitor=false rebase -q "$MAIN_SHA" > /dev/null 2>&1; then
-              echo "#$number rebased cleanly here after all."
-            fi
-            git -C "$clone" diff --name-only --diff-filter=U > "$input/conflicted-files.txt"
-            cp "$clone/.git/config" "$RUNNER_TEMP/git-config-$number"
-          done < "$RUNNER_TEMP/conflicted.txt"
+          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+          : > "$RUNNER_TEMP/pulls.tsv"
+          while IFS=$'\t' read -r number head_sha; do
+            case "$number" in ''|*[!0-9]*) continue ;; esac
+            [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+            root="$RUNNER_TEMP/pr/$number"
+            mkdir -p "$root/in" "$root/out" "$root/home"
+            GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0="$auth" \
+              safe_git fetch -q --no-tags origin "$head_sha:refs/heads/factory-rebase-$number"
+            safe_git clone -q --no-hardlinks --no-checkout "$GITHUB_WORKSPACE" "$root/work"
+            safe_git -C "$root/work" switch -q --detach "$head_sha"
+            safe_git -C "$root/work" config core.hooksPath /dev/null
+            safe_git -C "$root/work" config core.fsmonitor false
+            safe_git -C "$root/work" config core.editor true
+            safe_git -C "$root/work" config user.name "awml-factory[bot]"
+            safe_git -C "$root/work" config user.email "$id+awml-factory[bot]@users.noreply.github.com"
+            base="$(safe_git merge-base "$head_sha" "$MAIN_SHA")"
+            safe_git log --oneline "$base..$head_sha" > "$root/in/branch-log.txt"
+            safe_git log --oneline "$base..$MAIN_SHA" > "$root/in/main-log.txt"
+            cp "$RUNNER_TEMP/main/AGENTS.md" "$root/in/"
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '"# " + .title + "\n\n" + (.body // "")' > "$root/in/pull-request.md"
+            chmod -R a-w "$root/in"
+            (cd "$root/work" && npm ci --ignore-scripts --no-audit --no-fund)
+            printf '%s\t%s\n' "$number" "$head_sha" >> "$RUNNER_TEMP/pulls.tsv"
+          done < <(jq -r '.[] | select(.clean == false and .guarded == false) | [.number, .head_sha] | @tsv' <<< "$PULLS")
+          stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$RUNNER_TEMP/baseline/workspace"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
@@ -213,98 +224,128 @@ jobs:
           sudo apt-get install -y bubblewrap socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --dev-bind / / --unshare-pid true
-          npm install -g @anthropic-ai/claude-code@2.1.312
+          (cd "$RUNNER_TEMP" && npm_config_userconfig=/dev/null npm_config_globalconfig=/dev/null npm install -g @anthropic-ai/claude-code@2.1.312)
 
-      # The branch's commits can steer each session, so a session only edits the conflicted files
-      # and writes its note, and runs no git. Between sessions, a step that holds no Claude token
-      # adds what it resolved and continues the rebase with git, and a commit that conflicts in turn
-      # waits for the next round's session: three rounds in all, so a rebase that conflicts on more
-      # commits than that is left for a person. The scripts are main's, copied out above.
-      - name: Resolve the conflicts, round 1
-        id: session1
+      # The branch's commits can steer each session. It loads only the settings claude-settings.sh
+      # writes in its own home, and no MCP servers, and reads only its clone and its own folders,
+      # never /proc. Its commands run in its sandbox, offline, seeing none of Claude Code's own
+      # process, and unable to write another pull request's folder, its own inputs, main's scripts,
+      # the check folders, the baseline or the workspace. It runs the rebase, git included, in its
+      # own clone, and bundles the result. Under the scrub, Claude Code forces --permission-mode
+      # default, so every tool it may use is named. This step runs no git, and holds no GitHub token.
+      - name: Resolve the conflicts
+        id: resolve
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+          MAIN_SHA: ${{ github.sha }}
+          GIT_EDITOR: "true"
         run: |
-          bash "$RUNNER_TEMP/main/resolve-session.sh" 1
-      - name: Continue each rebase, round 1
-        id: continue1
-        env:
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_CONFIG_NOSYSTEM: "1"
-        run: |
-          bash "$RUNNER_TEMP/main/resolve-continue.sh"
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
+          trap 'echo "::$stop::"' EXIT
+          while IFS=$'\t' read -r number _; do
+            case "$number" in ''|*[!0-9]*) continue ;; esac
+            root="$RUNNER_TEMP/pr/$number"
+            denied=(--deny-write "$root/in")
+            for other in "$RUNNER_TEMP"/pr/*; do
+              if [ "$other" != "$root" ]; then denied+=(--deny-write "$other"); fi
+            done
+            for shared in main check resolved baseline pulls.tsv; do denied+=(--deny-write "$RUNNER_TEMP/$shared"); done
+            denied+=(--deny-write "$GITHUB_WORKSPACE")
+            bash "$RUNNER_TEMP/main/claude-settings.sh" "$root/home" "${denied[@]}"
+            prompt="$(sed -e "s|RESOLVE_DIR|$root/in|g" -e "s|OUT_DIR|$root/out|g" -e "s|MAIN_SHA|$MAIN_SHA|g" \
+              "$RUNNER_TEMP/main/resolve-prompt.md")"
+            (
+              cd "$root/work"
+              HOME="$root/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
+                --setting-sources user --strict-mcp-config --add-dir "$root/in" --add-dir "$root/out" \
+                --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" \
+                --allowedTools "Read(./**)" "Read(/$root/in/**)" "Read(/$root/out/**)" "Edit(./**)" "Write(./**)" \
+                  "Edit(/$root/out/**)" "Write(/$root/out/**)" \
+                  "Bash(npm run:*)" "Bash(npm test:*)" \
+                  "Bash(npx vitest:*)" "Bash(npx tsc:*)" "Bash(npx eslint:*)" \
+                  "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" \
+                  "Bash(git add:*)" "Bash(git rebase:*)" "Bash(git bundle create:*)" "Bash(ls:*)" \
+                > "$root/session.log" 2>&1
+            ) || echo "The session on #$number ended with an error."
+            cat "$root/session.log"
+          done < "$RUNNER_TEMP/pulls.tsv"
 
-      - name: Resolve the conflicts, round 2
-        id: session2
+      # Each session's bundle is read as data into a fresh repository, whose config no session ever
+      # touched, with no global or system config, hooks, fsmonitor or external diff, beside no login
+      # token, and only if the workspace is the one the sessions started beside and the out folder
+      # is reached through no symbolic link. It must sit on main, carry no conflict marker, and
+      # change nothing the app never pushes. The lines its resolution adds, beyond those the branch
+      # already added, and Claude's note, must carry nothing like a token. The digest of what's kept
+      # is the job's output, which the push job checks it against.
+      - name: Check each rebase, read into a fresh repository
+        id: check
+        if: ${{ !cancelled() }}
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
-        run: |
-          bash "$RUNNER_TEMP/main/resolve-session.sh" 2
-      - name: Continue each rebase, round 2
-        id: continue2
-        env:
+          MAIN_SHA: ${{ github.sha }}
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
-          bash "$RUNNER_TEMP/main/resolve-continue.sh"
-
-      - name: Resolve the conflicts, round 3
-        id: session3
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
-        run: |
-          bash "$RUNNER_TEMP/main/resolve-session.sh" 3
-      - name: Continue each rebase, round 3
-        id: continue3
-        env:
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_CONFIG_NOSYSTEM: "1"
-        run: |
-          bash "$RUNNER_TEMP/main/resolve-continue.sh"
-
-      # Git reads each clone the sessions wrote, in a step without the Claude token, so it runs
-      # nothing the sessions' commands could have set: the clone's git config must be byte for byte
-      # as it was before them, no global or system config is read, and no hook, fsmonitor or
-      # external diff runs. A branch is bundled only if its rebase finished on main.
-      - name: Bundle each resolved branch
-        id: bundle
-        env:
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_CONFIG_NOSYSTEM: "1"
-        run: |
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
+          trap 'echo "::$stop::"' EXIT
+          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+          if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$RUNNER_TEMP/baseline/workspace"; then
+            echo "The workspace or its .git isn't the one the sessions started beside, so nothing is read from it."
+            exit 1
+          fi
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)'
           resolved="$RUNNER_TEMP/resolved"
-          mkdir -p "$resolved"
-          while read -r number _; do
-            clone="$RUNNER_TEMP/clone-$number"
-            out="$RUNNER_TEMP/sessions/resolve-$number/out/message.md"
-            if [ -f "$out" ] && [ ! -L "$out" ]; then
-              head -c 20000 "$out" > "$resolved/$number.md"
+          mkdir -p "$resolved" "$RUNNER_TEMP/check"
+          while IFS=$'\t' read -r number head_sha; do
+            case "$number" in ''|*[!0-9]*) continue ;; esac
+            [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+            out="$RUNNER_TEMP/pr/$number/out"
+            linked=false
+            part="$out"
+            while [ "$part" != / ] && [ -n "$part" ]; do
+              if [ -L "$part" ]; then linked=true; fi
+              part="$(dirname "$part")"
+            done
+            if [ "$linked" = true ]; then
+              echo "The out folder of #$number is reached through a symbolic link, so nothing is read from it."
+              continue
             fi
-            if [ -e "$RUNNER_TEMP/gave-up-$number" ]; then
-              echo "The rebase of #$number stopped short."
-            elif ! cmp -s "$clone/.git/config" "$RUNNER_TEMP/git-config-$number"; then
-              echo "The session for #$number changed its clone's git config, so no git runs there."
-            elif [ -d "$clone/.git/rebase-merge" ] || [ -d "$clone/.git/rebase-apply" ]; then
-              echo "The rebase of #$number still conflicted after three rounds."
-            elif git -C "$clone" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= merge-base --is-ancestor "$MAIN_SHA" HEAD; then
-              git -C "$clone" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= bundle create -q "$resolved/$number.bundle" "$MAIN_SHA..HEAD"
+            fresh="$RUNNER_TEMP/check/$number"
+            bundle="$out/rebased.bundle"
+            safe_git init -q "$fresh"
+            safe_git -C "$fresh" fetch -q --no-tags "$GITHUB_WORKSPACE" "$MAIN_SHA" "refs/heads/factory-rebase-$number"
+            if [ -f "$bundle" ] && [ ! -L "$bundle" ] &&
+              safe_git -C "$fresh" bundle verify -q "$bundle" > /dev/null 2>&1 &&
+              safe_git -C "$fresh" fetch -q "$bundle" "HEAD:refs/rebased" &&
+              safe_git -C "$fresh" merge-base --is-ancestor "$MAIN_SHA" refs/rebased &&
+              ! safe_git -C "$fresh" grep -qE '^(<<<<<<<|>>>>>>>)( |$)' refs/rebased -- &&
+              ! safe_git -C "$fresh" diff --name-only --no-ext-diff --no-textconv --no-renames -z "$MAIN_SHA" refs/rebased | grep -zqE "$guarded"; then
+              base="$(safe_git -C "$fresh" merge-base "$head_sha" "$MAIN_SHA")"
+              comm -23 <(safe_git -C "$fresh" diff --no-ext-diff --no-textconv "$MAIN_SHA" refs/rebased | LC_ALL=C grep -a '^+' | LC_ALL=C sort -u) \
+                <(safe_git -C "$fresh" diff --no-ext-diff --no-textconv "$base" "$head_sha" | LC_ALL=C grep -a '^+' | LC_ALL=C sort -u) \
+                > "$RUNNER_TEMP/check/$number.added"
+              if bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/check/$number.added"; then
+                cp "$bundle" "$resolved/$number.bundle"
+              else
+                echo "The resolution of #$number adds what looks like a token, so it isn't kept."
+              fi
             else
-              echo "The session for #$number left a branch that doesn't sit on main."
+              echo "The session on #$number left no rebase that sits on main without conflict markers or files the app never pushes."
             fi
-          done < "$RUNNER_TEMP/conflicted.txt"
-
-      # The artifact is public, so what the sessions wrote is scanned for anything like the login
-      # token before it's kept. Its digest is the job's output.
-      - name: Keep the resolved branches, with their digest
-        id: pack
-        run: |
-          bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/resolved"
+            if [ -f "$out/message.md" ] && [ ! -L "$out/message.md" ]; then
+              head -c 20000 "$out/message.md" > "$RUNNER_TEMP/check/$number.md"
+              if bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/check/$number.md"; then
+                cp "$RUNNER_TEMP/check/$number.md" "$resolved/$number.md"
+              fi
+            fi
+          done < "$RUNNER_TEMP/pulls.tsv"
           digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c 1-64; }
-          echo "digest=$(digest "$RUNNER_TEMP/resolved")" >> "$GITHUB_OUTPUT"
+          echo "digest=$(digest "$resolved")" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
         with:
           name: resolved
           path: ${{ runner.temp }}/resolved
@@ -378,7 +419,7 @@ jobs:
         run: |
           refuse() { echo "$1"; { echo "result=refused"; echo "reason=$1"; } >> "$GITHUB_OUTPUT"; exit 0; }
           if [ "$GUARDED" = true ]; then
-            refuse "The branch's commits change .github/ or Claude Code's own files, which the app doesn't push, so it wasn't rebased."
+            refuse "The branch's commits change .github/, Claude Code's own files, an .npmrc, a .yarnrc or node_modules/, which the app doesn't push or install, so it wasn't rebased."
           fi
           mkdir -p "$RUNNER_TEMP/bundles"
           bundle="$RUNNER_TEMP/bundles/$PR_NUMBER.bundle"
@@ -393,7 +434,7 @@ jobs:
           if git "${safe[@]}" grep -qE '^(<<<<<<<|>>>>>>>)( |$)' refs/rebased --; then
             refuse "The rebased branch still holds conflict markers."
           fi
-          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$'
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)'
           if git "${safe[@]}" diff --name-only --no-renames -z "$MAIN_SHA" refs/rebased | grep -zqE "$guarded"; then
             refuse "The rebased branch changes .github/ or Claude Code's own files, which the app doesn't push."
           fi

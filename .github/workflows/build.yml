@@ -234,13 +234,18 @@ jobs:
       # check after the session.
       - name: Install the dependencies with their scripts off
         env:
+          npm_config_userconfig: /dev/null
+          npm_config_globalconfig: /dev/null
           npm_config_registry: https://registry.npmjs.org/
+          npm_config_ignore_scripts: "true"
         run: |
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
           npm ci --ignore-scripts --no-audit --no-fund
           echo "::$stop::"
-          cp .git/config "$RUNNER_TEMP/git-config"
+          mkdir -p "$RUNNER_TEMP/baseline"
+          cp .git/config "$RUNNER_TEMP/baseline/git-config"
+          stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$RUNNER_TEMP/baseline/workspace"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
@@ -251,7 +256,7 @@ jobs:
           sudo apt-get install -y bubblewrap socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --dev-bind / / --unshare-pid true
-          npm install -g @anthropic-ai/claude-code@2.1.312
+          (cd "$RUNNER_TEMP" && npm_config_userconfig=/dev/null npm_config_globalconfig=/dev/null npm install -g @anthropic-ai/claude-code@2.1.312)
 
       # Claude Code holds the maintainer's login token for its own calls and strips it, with any
       # other credential, from the commands it runs, which run in its sandbox: they see none of
@@ -272,7 +277,7 @@ jobs:
           session="$RUNNER_TEMP/sessions/build"
           rm -rf "$session"
           mkdir -p "$session/out"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write ./.git
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write ./.git --deny-write "$RUNNER_TEMP/baseline"
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/build-prompt.md")"
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
@@ -293,16 +298,26 @@ jobs:
       # The pages are pictured unless Claude named none: no pictures.json, or an empty list. A
       # pictures.json that isn't a list still starts the pictures job, which says what is wrong.
       # Git reads the tree the session wrote, so it runs nothing the session's commands could have
-      # set: git's config must be byte for byte as it was before the session, no global or system
-      # config is read, and no hook, fsmonitor, external diff or text conversion runs.
+      # set: the workspace and its .git must be the ones the session started in, git's config byte
+      # for byte as it was, kept where the session couldn't write, and no repository nested below
+      # the top; no global or system config is read, and no hook, fsmonitor, external diff or text
+      # conversion runs.
       - name: Make the patch
         id: patch
         env:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
-          if ! cmp -s .git/config "$RUNNER_TEMP/git-config"; then
+          if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$RUNNER_TEMP/baseline/workspace"; then
+            echo "The workspace or its .git isn't the one the session started in, so no git runs on it."
+            exit 1
+          fi
+          if ! cmp -s .git/config "$RUNNER_TEMP/baseline/git-config"; then
             echo "Git's config changed during the session, so no git runs on the tree."
+            exit 1
+          fi
+          if [ -n "$(find . -mindepth 2 -path ./node_modules -prune -o -name .git -print -quit)" ]; then
+            echo "The session left a repository nested in the tree, whose config git would read, so no git runs on it."
             exit 1
           fi
           out="$RUNNER_TEMP/sessions/build/out"
@@ -485,7 +500,7 @@ jobs:
             echo "result=stale" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$'
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)'
           if git diff --cached --name-only --no-renames -z | grep -zqE "$guarded"; then
             # The names are the draft's, so they're printed as JSON, where none can start a workflow
             # command.
@@ -686,7 +701,7 @@ jobs:
         run: |
           export MEDIA_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/raw/factory-media/issue-$ISSUE/run-$GITHUB_RUN_ID"
           bash "$RUNNER_TEMP/pull-request-body.sh" > "$RUNNER_TEMP/pull-request.md"
-          title="$(head -n 1 "$RUNNER_TEMP/change/message.md" 2> /dev/null | cut -c 1-200 || true)"
+          title="$(head -n 1 "$RUNNER_TEMP/change/message.md" | bash "$RUNNER_TEMP/unclose.sh" | cut -c 1-200 || true)"
           [ -n "$title" ] || title="Build #$ISSUE"
           printf '%s\n' "$title" > "$RUNNER_TEMP/title.txt"
 
