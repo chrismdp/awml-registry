@@ -396,6 +396,12 @@ const strangerPull = (head: string) => ({
   base: { ref: "main" },
 });
 
+// GitHub's answer to who may write: the repository's own people by their role, anyone else read.
+const roles: Record<string, string> = { owner: "admin", lead: "maintain", maintainer: "write", triager: "triage", stranger: "read" };
+const permissionStub = Object.entries(roles)
+  .map(([login, role]) => `  *"collaborators/${login}/permission"*) answer <<< '${JSON.stringify({ role_name: role })}' ;;`)
+  .join("\n");
+
 // A path that would end its line and start a workflow command of its own if printed as it is.
 const forgedPath = "a\n::notice title=Verdict::ship\nb";
 
@@ -1123,50 +1129,55 @@ describe("ci.yml", () => {
     expect(gate.uses).toBeUndefined();
     expect(JSON.stringify(gate)).not.toContain("secrets.");
     expect(gate.env).toEqual({
+      GH_TOKEN: "${{ github.token }}",
       HEAD_REPOSITORY: "${{ github.event.pull_request.head.repo.full_name }}",
-      AUTHOR_ASSOCIATION: "${{ github.event.pull_request.author_association }}",
       AUTHOR: "${{ github.event.pull_request.user.login }}",
+      AUTHOR_TYPE: "${{ github.event.pull_request.user.type }}",
     });
     // The token reaches only the session, which a failed gate stops before it starts.
     for (const each of rest) if (each.env && "CLAUDE_CODE_OAUTH_TOKEN" in each.env) expect(each.id).toBe("session");
     for (const each of steps(jobs.review)) expect(each.if, each.name).toBeUndefined();
   });
 
+  // Trust is by what GitHub says the opener may do to the repository, not how they're associated
+  // with it: an organisation's member may have no write access here.
   const trust = (env: Record<string, string>) =>
     rehearse(stepWithId(jobs.review, "trust").run ?? "", {
       root: scratch(),
-      env: { HEAD_REPOSITORY: "owner/repo", AUTHOR_ASSOCIATION: "MEMBER", AUTHOR: "maintainer", ...env },
+      env: { HEAD_REPOSITORY: "owner/repo", AUTHOR: "maintainer", AUTHOR_TYPE: "User", ...env },
+      answers: permissionStub,
     });
 
   it.runIf(canRehearse).each([
-    ["a member's pull request from this repository", {}],
-    ["the owner's", { AUTHOR_ASSOCIATION: "OWNER" }],
-    ["a collaborator's", { AUTHOR_ASSOCIATION: "COLLABORATOR" }],
-    ["the factory's app's", { AUTHOR_ASSOCIATION: "CONTRIBUTOR", AUTHOR: "awml-factory[bot]" }],
+    ["a writer's pull request from this repository", {}],
+    ["an admin's", { AUTHOR: "owner" }],
+    ["a maintainer's", { AUTHOR: "lead" }],
+    ["the factory's app's", { AUTHOR: "awml-factory[bot]", AUTHOR_TYPE: "Bot" }],
   ])("lets %s through to the review", (_, env) => {
     const run = trust(env);
     expect(run.failed, run.printed).toBe(false);
   });
 
   it.runIf(canRehearse).each([
-    ["a fork's pull request", { HEAD_REPOSITORY: "stranger/repo", AUTHOR_ASSOCIATION: "OWNER" }],
-    ["a stranger's pull request from a branch here", { AUTHOR_ASSOCIATION: "NONE", AUTHOR: "stranger" }],
-    ["a contributor's", { AUTHOR_ASSOCIATION: "CONTRIBUTOR", AUTHOR: "someone" }],
+    ["a fork's pull request", { HEAD_REPOSITORY: "stranger/repo", AUTHOR: "owner" }],
+    ["a reader's pull request from a branch here", { AUTHOR: "stranger" }],
+    ["a triager's", { AUTHOR: "triager" }],
+    ["a user who only shares the app's name", { AUTHOR: "awml-factory[bot]", AUTHOR_TYPE: "User" }],
+    ["a login that isn't one", { AUTHOR: "../x" }],
   ])("fails the review on %s, saying why", (_, env) => {
     const run = trust(env);
     expect(run.failed).toBe(true);
     expect(run.printed).toContain("isn't reviewed here");
   });
 
-  // Classify isn't a required check, so it keeps its own conditions and is simply skipped.
-  // Classify runs once both reviews have ended, whatever they found, on a factory branch only.
-  it("classifies only a factory branch, once both reviews have ended", () => {
+  // Classify isn't a required check, so it keeps its own conditions and is simply skipped. Only the
+  // app's pull requests on a factory branch are landed, so only those are classified.
+  it("classifies only the app's pull request on a factory branch, once both reviews have ended", () => {
     expect(needs(jobs.classify)).toEqual(["review"]);
     expect(squash(jobs.classify.if)).toBe(
       squash(`\${{ !cancelled() && needs.review.result != 'skipped' && startsWith(github.head_ref, 'build/issue-') &&
         github.event.pull_request.head.repo.full_name == github.repository &&
-        (contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) ||
-        github.event.pull_request.user.login == 'awml-factory[bot]') }}`),
+        github.event.pull_request.user.login == 'awml-factory[bot]' && github.event.pull_request.user.type == 'Bot' }}`),
     );
   });
 
@@ -1261,6 +1272,33 @@ describe("ci.yml", () => {
     expect(run.failed, run.printed).toBe(true);
     expect(run.printed).toContain("CLAUDE.md");
     expect(commandsIn(run.printed)).toEqual([]);
+  });
+
+  // A session follows a symbolic link it reads, to /proc or anywhere, so a patch that adds or
+  // changes one isn't reviewed.
+  it.runIf(canRehearse)("refuses a patch that adds or changes a symbolic link", () => {
+    const root = scratch();
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q");
+    put(join(repo, "README.md"), "A registry\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-qm", "main");
+    const main = git(repo, "rev-parse", "HEAD");
+    symlinkSync("/proc/self/environ", join(repo, "env"));
+    git(repo, "add", "-A");
+    put(join(root, "change.patch"), git(repo, "diff", "--cached") + "\n");
+    git(repo, "reset", "-q", "--hard");
+    const run = rehearse(script("bring-patch.sh", [join(root, "input")]), {
+      root,
+      cwd: repo,
+      env: { HEAD_SHA: "b".repeat(40) },
+      answers: `
+  *"merge_base_commit"*) echo ${main} ;;
+  *"application/vnd.github.diff"*) cat ${join(root, "change.patch")} ;;`,
+    });
+    expect(run.failed).toBe(true);
+    expect(run.printed).toContain("symbolic link");
   });
 
   // A build's push can land before its description is edited, and the event holds the pull request
@@ -1810,7 +1848,8 @@ describe("build.yml", () => {
       put(join(repo, ".github/unclose.sh"), "#!/bin/bash\n");
       git(repo, "add", "-A");
       git(repo, "commit", "-qm", "main");
-      put(join(repo, path), contents);
+      if (contents.startsWith("->")) symlinkSync(contents.slice(2), join(repo, path));
+      else put(join(repo, path), contents);
       git(repo, "add", "-A");
       put(join(root, "runner/change/change.patch"), git(repo, "diff", "--cached", "--binary") + "\n");
       git(repo, "reset", "-q", "--hard");
@@ -1846,6 +1885,25 @@ describe("build.yml", () => {
         expect(run.calls).toContain("30 days");
       },
     );
+
+    // A symbolic link is read wherever it's followed, so the app never pushes one.
+    it.runIf(canRehearse)("offers a change that adds a symbolic link", () => {
+      const run = guard("env", "->/proc/self/environ");
+      expect(run.failed, run.printed).toBe(false);
+      expect(run.outputs.result).toBe("offer");
+    });
+
+    // The offer names each kind of file the app holds back, and why.
+    it.runIf(canRehearse)("names every kind of file it holds back, with the reason for each", () => {
+      const run = guard(".github/workflows/ci.yml");
+      for (const reason of [
+        "the app may not change a workflow",
+        "no session loads Claude Code's settings, servers or instructions from a branch",
+        "an install of the branch would read them",
+        "a symbolic link is read wherever it's followed",
+      ])
+        expect(run.calls, reason).toContain(reason);
+    });
 
     it.runIf(canRehearse)("prints the paths it offers without letting one start a workflow command", () => {
       const run = guard(`.github/${forgedPath}`);
@@ -2411,8 +2469,10 @@ describe("fix.yml", () => {
   *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })) })}' ;;
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([
     strangerPull(pullHead ?? sha),
-    { ...appPull(pullHead ?? sha, pullRepository), user: { login: "maintainer", type: "User" }, author_association: "MEMBER" },
-  ])}' ;;`,
+    { ...appPull(pullHead ?? sha, pullRepository), number: 13, user: { login: "triager", type: "User" }, author_association: "MEMBER" },
+    { ...appPull(pullHead ?? sha, pullRepository), user: { login: "maintainer", type: "User" }, author_association: "NONE" },
+  ])}' ;;
+${permissionStub}`,
     });
     return { ...run, sha };
   };
@@ -2447,9 +2507,13 @@ describe("fix.yml", () => {
     expect(decide({ bug: "success", security: "failure" }).outputs.outcome).toBe("fix");
   });
 
-  it.runIf(canRehearse)("fixes the pull request of the repository's own people, never a stranger's from the same branch", () => {
+  // Trust is by the opener's permission on the repository: an organisation's member who can only
+  // triage it, or a stranger, is passed over, and a writer whose association says nothing isn't.
+  it.runIf(canRehearse)("fixes the pull request of someone who may write, never a stranger's or a triager's from the same branch", () => {
     expect(decide().outputs.pr).toBe("12");
-    expect(stepWithId(jobs.decide, "ready").run).toMatch(/select\(\.head\.ref == \$branch[^)]*author_association \| IN\("OWNER", "MEMBER", "COLLABORATOR"\)[^]*\| first/);
+    const ready = stepWithId(jobs.decide, "ready").run ?? "";
+    expect(ready).toContain('collaborators/$login/permission');
+    expect(ready).not.toContain("author_association");
   });
 
   // A review that failed without an Important finding, having refused the patch or run out of
@@ -2559,7 +2623,7 @@ describe("fix.yml", () => {
   });
 
   describe("the write job's guard", () => {
-    const guard = (env: Record<string, string>, path = "src/page.tsx", pullHead = head) => {
+    const guard = (env: Record<string, string>, path = "src/page.tsx", pullHead = head, link = "") => {
       const root = scratch();
       const repo = join(root, "repo");
       mkdirSync(repo);
@@ -2567,7 +2631,8 @@ describe("fix.yml", () => {
       put(join(repo, "README.md"), "A registry\n");
       git(repo, "add", "-A");
       git(repo, "commit", "-qm", "head");
-      put(join(repo, path), "fixed\n");
+      if (link) symlinkSync(link, join(repo, path));
+      else put(join(repo, path), "fixed\n");
       git(repo, "add", "-A");
       put(join(root, "runner/fix/fix.patch"), git(repo, "diff", "--cached", "--binary") + "\n");
       git(repo, "reset", "-q", "--hard");
@@ -2633,6 +2698,12 @@ describe("fix.yml", () => {
       expect(run.outputs.result).toBe("done");
       expect(run.calls).toContain("The fix job failed before the fix was kept. The run says why.");
       expect(run.calls).not.toContain("session");
+    });
+
+    it.runIf(canRehearse)("offers a fix that adds a symbolic link rather than push it", () => {
+      const run = guard({}, "env", head, "/proc/self/environ");
+      expect(run.outputs.result).toBe("done");
+      expect(run.calls).toContain("a symbolic link is read wherever it's followed");
     });
 
     it.runIf(canRehearse).each(["package.json", "package-lock.json"])("offers a fix to %s rather than push it", (path) => {
@@ -2902,20 +2973,38 @@ describe("resolve.yml", () => {
     git(origin, "commit", "-qm", "dependency change");
     const depsHead = git(origin, "rev-parse", "HEAD");
     git(origin, "switch", "-q", "main");
+    // A branch that changes the dependencies in one commit and puts them back in the next leaves no
+    // change in its net diff, but each commit is installed along the way.
+    git(origin, "switch", "-q", "-c", "sneaky");
+    put(join(origin, "a.txt"), "sneaky\n");
+    put(join(origin, "package.json"), '{"dependencies": {"c": "git+ssh://git@example.com/c.git"}}\n');
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "add a dependency");
+    git(origin, "rm", "-q", "package.json");
+    git(origin, "commit", "-qm", "and take it out");
+    const sneakyHead = git(origin, "rev-parse", "HEAD");
+    git(origin, "switch", "-q", "main");
     put(join(origin, "a.txt"), "main\n");
     git(origin, "commit", "-qam", "main moves");
     const main = git(origin, "rev-parse", "HEAD");
     const work = join(root, "work");
     git(root, "clone", "-q", origin, work);
-    const pull = (number: number, branch: string, sha: string, association = "MEMBER") =>
-      JSON.stringify({ number, base: { ref: "main" }, head: { ref: branch, sha, repo: { full_name: "owner/repo" } }, author_association: association, user: { type: "User" } });
+    const pull = (number: number, branch: string, sha: string, login = "maintainer", type = "User") =>
+      JSON.stringify({ number, base: { ref: "main" }, head: { ref: branch, sha, repo: { full_name: "owner/repo" } }, author_association: "MEMBER", user: { login, type } });
     const run = rehearse(stepWithId(jobs.find, "find").run ?? "", {
       root,
       cwd: work,
       env: { MAIN_SHA: main },
       answers: `
   *"users/awml-factory"*) echo 99 ;;
-  *"pulls?state=open"*) printf '1\\n2\\n3\\n4\\n5\\n' ;;
+${permissionStub}
+  *"pulls?state=open"*) printf '1\\n2\\n3\\n4\\n5\\n6\\n7\\n8\\n' ;;
+  *"pr view 6 "*) answer <<< '{"mergeable": "CONFLICTING", "headRefOid": "${sneakyHead}"}' ;;
+  *"pulls/6"*) answer <<< '${pull(6, "sneaky", sneakyHead)}' ;;
+  *"pr view 7 "*) answer <<< '{"mergeable": "CONFLICTING", "headRefOid": "${clashHead}"}' ;;
+  *"pulls/7"*) answer <<< '${pull(7, "build/issue-7", clashHead, "other-app[bot]", "Bot")}' ;;
+  *"pr view 8 "*) answer <<< '{"mergeable": "CONFLICTING", "headRefOid": "${clashHead}"}' ;;
+  *"pulls/8"*) answer <<< '${pull(8, "clash", clashHead, "triager")}' ;;
   *"pr view 5 "*) answer <<< '{"mergeable": "CONFLICTING", "headRefOid": "${depsHead}"}' ;;
   *"pulls/5"*) answer <<< '${pull(5, "deps", depsHead)}' ;;
   *"pr view 4 "*) answer <<< '{"mergeable": "CONFLICTING", "headRefOid": "${workflowHead}"}' ;;
@@ -2925,7 +3014,7 @@ describe("resolve.yml", () => {
   *"pr view 3 "*) answer <<< '{"mergeable": "CONFLICTING", "headRefOid": "${clashHead}"}' ;;
   *"pulls/1"*) answer <<< '${pull(1, "clean", cleanHead)}' ;;
   *"pulls/2"*) answer <<< '${pull(2, "clash", clashHead)}' ;;
-  *"pulls/3"*) answer <<< '${pull(3, "clash", clashHead, "NONE")}' ;;`,
+  *"pulls/3"*) answer <<< '${pull(3, "clash", clashHead, "stranger")}' ;;`,
     });
     expect(run.failed, run.printed).toBe(false);
     expect(JSON.parse(run.outputs.pulls)).toEqual([
@@ -2933,7 +3022,10 @@ describe("resolve.yml", () => {
       { number: 2, branch: "clash", head_sha: clashHead, clean: false, guarded: false },
       { number: 4, branch: "workflow", head_sha: workflowHead, clean: false, guarded: true },
       { number: 5, branch: "deps", head_sha: depsHead, clean: false, guarded: true },
+      { number: 6, branch: "sneaky", head_sha: sneakyHead, clean: false, guarded: true },
     ]);
+    // A reader's, a triager's and another app's are never touched, whatever the branch.
+    expect(stepWithId(jobs.find, "find").run).not.toContain("author_association");
     expect(run.outputs.conflicted).toBe("true");
     expect(existsSync(join(root, "runner/rebased/1.bundle"))).toBe(true);
     expect(existsSync(join(root, "runner/rebased/2.bundle"))).toBe(false);

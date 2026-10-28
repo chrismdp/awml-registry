@@ -518,14 +518,21 @@ jobs:
             exit 0
           fi
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$'
-          if git diff --cached --name-only --no-renames -z | grep -zqE "$guarded"; then
+          # A symbolic link is read wherever it's followed, so the app never pushes one either.
+          links="$(git diff --cached --raw --no-renames | awk '$2 == "120000" { print "link"; exit }')"
+          if [ -n "$links" ] || git diff --cached --name-only --no-renames -z | grep -zqE "$guarded"; then
             # The names are the draft's, so they're printed as JSON, where none can start a workflow
             # command.
             git diff --cached --name-only --no-renames -z | grep -zE "$guarded" | jq -Rs 'split("\u0000") | map(select(. != ""))'
             {
-              echo "**The build's draft changes \`.github/\` or Claude Code's own files, so the app didn't push it.**"
+              echo "**The build's draft changes files the app never pushes, so it didn't push it.** The app holds back:"
               echo
-              echo "The app may not change a workflow, and no session loads Claude Code's settings, servers or instructions from a branch. To look at the draft and apply it yourself, from a checkout of main:"
+              echo "- \`.github/\`: the app may not change a workflow."
+              echo "- Claude Code's own files, \`.claude/\`, \`.mcp.json\` or a \`CLAUDE.md\`: no session loads Claude Code's settings, servers or instructions from a branch."
+              echo "- An \`.npmrc\`, a \`.yarnrc\`, an \`npm-shrinkwrap.json\`, a \`yarn.lock\` or \`node_modules/\`: an install of the branch would read them."
+              echo "- A symbolic link: a symbolic link is read wherever it's followed."
+              echo
+              echo "To look at the draft and apply it yourself, from a checkout of main:"
               echo
               echo '```'
               echo "gh run download $GITHUB_RUN_ID --repo $GITHUB_REPOSITORY -n change -D change"

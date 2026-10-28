@@ -112,9 +112,11 @@ export function readConfig(text: string): Config {
   }
 
   if (config.maxChangedLines < 0) throw new Error("max_changed_lines must not be negative");
-  for (const path of [...config.reviewPaths, ...config.reviewNonTests]) {
-    if (path === "") throw new Error("review_paths must not contain an empty path");
-    if (/^["'#]|\s#/.test(path)) throw new Error(`review_paths can't read ${path}; write each path bare`);
+  for (const [key, paths] of [["review_paths", config.reviewPaths], ["review_non_tests", config.reviewNonTests]] as const) {
+    for (const path of paths) {
+      if (path === "") throw new Error(`${key} must not contain an empty path`);
+      if (/^["'#]|\s#/.test(path)) throw new Error(`${key} can't read ${path}; write each path bare`);
+    }
   }
   for (const folder of config.reviewNonTests) {
     if (!folder.endsWith("/")) throw new Error(`review_non_tests must name a folder, ending in /: ${folder}`);

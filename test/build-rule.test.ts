@@ -76,6 +76,8 @@ describe("the build rules file", () => {
   it("reads the folders whose files other than tests need review", () => {
     expect(readConfig("review_non_tests: [test/]\n").reviewNonTests).toEqual(["test/"]);
     expect(() => readConfig("review_non_tests: [test]\n")).toThrow(/folder/);
+    expect(() => readConfig("review_non_tests: [test/, ]\n")).toThrow(/review_non_tests/);
+    expect(() => readConfig("review_non_tests: ['test/']\n")).toThrow(/review_non_tests/);
   });
 
   it("refuses a setting it doesn't know, so a typo can't switch a rule off", () => {

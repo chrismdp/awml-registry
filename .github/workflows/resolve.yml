@@ -89,20 +89,27 @@ jobs:
             [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
 
             pull="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number")"
-            eligible="$(jq -r --arg repository "$GITHUB_REPOSITORY" '
-              .base.ref == "main" and
-              .head.repo.full_name == $repository and
-              .head.ref != "factory-media" and
-              ((.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) or
-               (.user.type == "Bot" and (.head.ref | startswith("build/issue-"))))
-            ' <<< "$pull")"
-            [ "$eligible" = true ] || continue
+            jq -e --arg repository "$GITHUB_REPOSITORY" \
+              '.base.ref == "main" and .head.repo.full_name == $repository and .head.ref != "factory-media"' \
+              <<< "$pull" > /dev/null || continue
+            # The factory's own pull requests, by the app's exact login and type on a build/issue-
+            # branch, and those of anyone GitHub says may write to the repository, not how they're
+            # associated with it.
+            if ! jq -e '.user.login == "awml-factory[bot]" and .user.type == "Bot" and (.head.ref | startswith("build/issue-"))' \
+              <<< "$pull" > /dev/null; then
+              login="$(jq -r '.user.login' <<< "$pull")"
+              [[ "$login" =~ ^[A-Za-z0-9-]{1,39}$ ]] || continue
+              role="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$login/permission" --jq .role_name || true)"
+              case "$role" in admin|maintain|write) ;; *) continue ;; esac
+            fi
             branch="$(jq -r '.head.ref' <<< "$pull")"
             [[ "$branch" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || continue
 
             git "${safe[@]}" -c http.https://github.com/.extraheader="$auth" fetch -q --no-tags origin "$head_sha"
             guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
-            if git "${safe[@]}" diff --name-only --no-renames -z "$(git merge-base "$MAIN_SHA" "$head_sha")" "$head_sha" |
+            # Every commit's files, not the net change: each commit is installed as the rebase replays
+            # it, so one that adds a dependency and a later one that takes it out still count.
+            if git "${safe[@]}" log --no-renames --name-only -z --format= "$(git merge-base "$MAIN_SHA" "$head_sha")..$head_sha" |
               grep -zqE "$guarded"; then
               pulls="$(jq -c --argjson number "$number" --arg branch "$branch" --arg head_sha "$head_sha" \
                 '. + [{number: $number, branch: $branch, head_sha: $head_sha, clean: false, guarded: true}]' <<< "$pulls")"

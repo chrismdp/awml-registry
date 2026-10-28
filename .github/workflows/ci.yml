@@ -91,29 +91,33 @@ jobs:
     permissions:
       contents: read
     steps:
-      # A fork's pull request, or one opened by anyone but the repository's own people or the
-      # factory's app, could steer the sessions, which hold the maintainer's login token. Anyone who
-      # can read the repository can open a pull request between two of its branches, so the opener
-      # must be the owner, a member, a collaborator or the app, whose bot GitHub counts only as a
-      # contributor. This runs before anything is checked out, any secret is named or Claude Code
-      # is installed, and fails the review, so it can't pass by being skipped.
+      # A fork's pull request, or one opened by anyone who may not write to the repository, could
+      # steer the sessions, which hold the maintainer's login token. Trust is by what GitHub says
+      # the opener may do here, write, maintain or admin, not by how they're associated with it: an
+      # organisation's member may have no write access. The factory's app is known by its exact
+      # login and type. This runs before anything is checked out, any Claude secret is named or
+      # Claude Code is installed, with the Actions token, which only reads, and fails the review,
+      # so it can't pass by being skipped.
       - name: Check this pull request is one the reviews may read
         id: trust
         env:
+          GH_TOKEN: ${{ github.token }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
         run: |
-          if [ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
-            echo "::error::This pull request comes from a fork, so it isn't reviewed here. A person must review it, and merge it from their own account."
+          refuse() {
+            echo "::error::$1, so it isn't reviewed here. A person must review it, and merge it from their own account."
             exit 1
-          fi
-          case "$AUTHOR_ASSOCIATION" in
-            OWNER|MEMBER|COLLABORATOR) exit 0 ;;
+          }
+          [ "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ] || refuse "This pull request comes from a fork"
+          if [ "$AUTHOR" = "awml-factory[bot]" ] && [ "$AUTHOR_TYPE" = Bot ]; then exit 0; fi
+          [[ "$AUTHOR" =~ ^[A-Za-z0-9-]{1,39}$ ]] || refuse "This pull request's author has no login GitHub gives a person"
+          role="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$AUTHOR/permission" --jq .role_name || true)"
+          case "$role" in
+            admin|maintain|write) exit 0 ;;
           esac
-          if [ "$AUTHOR" = "awml-factory[bot]" ]; then exit 0; fi
-          echo "::error::This pull request was opened by someone other than the repository's own people or the factory's app, so it isn't reviewed here. A person must review it, and merge it from their own account."
-          exit 1
+          refuse "This pull request was opened by someone who may not write to the repository"
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -203,11 +207,11 @@ jobs:
   classify:
     name: Classify
     needs: review
+    # Only the app's pull requests on a factory branch are landed, so only those are classified.
     if: >-
       ${{ !cancelled() && needs.review.result != 'skipped' && startsWith(github.head_ref, 'build/issue-') &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      (contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) ||
-      github.event.pull_request.user.login == 'awml-factory[bot]') }}
+      github.event.pull_request.user.login == 'awml-factory[bot]' && github.event.pull_request.user.type == 'Bot' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:

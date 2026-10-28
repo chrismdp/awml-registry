@@ -78,12 +78,20 @@ jobs:
             leave "CI's tests didn't all pass, so this is retry's, or nothing's."
           jq -e 'any(.[]; (.name | IN("Bug review", "Security review")) and .conclusion == "failure")' "$RUNNER_TEMP/jobs.json" > /dev/null ||
             leave "Neither review failed."
-          pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" |
+          # The first open pull request at the reviewed commit opened by the factory's app, known by
+          # its exact login and type, or by someone GitHub says may write to the repository: write,
+          # maintain or admin, not how they're associated with it.
+          pr=""
+          while IFS=$'\t' read -r number login type; do
+            case "$number" in ''|*[!0-9]*) continue ;; esac
+            if [ "$login" = "awml-factory[bot]" ] && [ "$type" = Bot ]; then pr="$number"; break; fi
+            [[ "$login" =~ ^[A-Za-z0-9-]{1,39}$ ]] || continue
+            role="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$login/permission" --jq .role_name || true)"
+            case "$role" in admin|maintain|write) pr="$number"; break ;; esac
+          done < <(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" |
             jq -r --arg repository "$GITHUB_REPOSITORY" --arg branch "$BRANCH" --arg head "$HEAD_SHA" \
-              '[.[] | select(.head.ref == $branch and .head.repo.full_name == $repository and .head.sha == $head
-                and ((.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) or
-                  (.user.login == "awml-factory[bot]" and .user.type == "Bot")))]
-                | first | .number // empty')"
+              '.[] | select(.head.ref == $branch and .head.repo.full_name == $repository and .head.sha == $head)
+                | [.number, .user.login, .user.type] | @tsv')
           case "$pr" in *[!0-9]*) leave "The pull request's number isn't a number." ;; esac
           [ -n "$pr" ] || leave "No open pull request on $BRANCH is at the reviewed commit, so there's nothing to fix."
           # A stranger's pull request from the branch, at the same head, gets a CI run of its own, so
@@ -388,14 +396,22 @@ jobs:
           git -c core.hooksPath=/dev/null apply --index "$RUNNER_TEMP/fix/fix.patch" ||
             give_up "The fixer's fix doesn't apply to the reviewed commit."
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
-          if git diff --cached --name-only --no-renames -z | grep -zqE "$guarded"; then
+          # A symbolic link is read wherever it's followed, so the app never pushes one either.
+          links="$(git diff --cached --raw --no-renames | awk '$2 == "120000" { print "link"; exit }')"
+          if [ -n "$links" ] || git diff --cached --name-only --no-renames -z | grep -zqE "$guarded"; then
             # The names are the fix's, so they're printed as JSON, where none can start a workflow
             # command.
             git diff --cached --name-only --no-renames -z | grep -zE "$guarded" | jq -Rs 'split("\u0000") | map(select(. != ""))'
             {
-              echo "**The fixer's fix changes \`.github/\`, Claude Code's own files, an \`.npmrc\`, a \`.yarnrc\`, \`node_modules/\` or the dependencies, so the app didn't push it.**"
+              echo "**The fixer's fix changes files the app never pushes, so it didn't push it.** The app holds back:"
               echo
-              echo "The app may not change a workflow, and no session loads Claude Code's settings, servers or instructions from a branch. To look at the fix and apply it yourself, from a checkout of this branch:"
+              echo "- \`.github/\`: the app may not change a workflow."
+              echo "- Claude Code's own files, \`.claude/\`, \`.mcp.json\` or a \`CLAUDE.md\`: no session loads Claude Code's settings, servers or instructions from a branch."
+              echo "- An \`.npmrc\`, a \`.yarnrc\`, an \`npm-shrinkwrap.json\`, a \`yarn.lock\` or \`node_modules/\`: an install of the branch would read them."
+              echo "- A symbolic link: a symbolic link is read wherever it's followed."
+              echo "- \`package.json\` or \`package-lock.json\`: the fixer installs only main's dependencies."
+              echo
+              echo "To look at the fix and apply it yourself, from a checkout of this branch:"
               echo
               echo '```'
               echo "gh run download $GITHUB_RUN_ID --repo $GITHUB_REPOSITORY -n fix -D fix"
