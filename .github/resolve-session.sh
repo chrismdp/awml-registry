@@ -58,7 +58,7 @@ set -euo pipefail
     prompt+=$'\n\nThe files that conflict now, one a line:\n\n'"$(cat "$HOST_DIR/conflicted-$number.txt")"
     (
       cd "$root/work"
-      HOME="$home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
+      HOME="$home" claude -p "$prompt" --model sonnet --max-turns 200 --permission-mode default \
         --setting-sources user --strict-mcp-config --add-dir "$root/in" --add-dir "$root/out" \
         --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" \
         --allowedTools "Read(./**)" "Read(/$root/in/**)" "Read(/$root/out/**)" "Edit(./**)" "Write(./**)" \
