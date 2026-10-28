@@ -1,0 +1,22 @@
+# An AWML 0.7 workflow with no mistakes and each of the four warnings AWML
+# 0.7 added: its two triggers start two workflows, nothing links the list to
+# a trigger, no trigger's run starts the stray step, and the aside is tied to
+# nothing.
+awml: "0.7"
+title: Loose ends
+scopes:
+  - { id: home, label: "home: the family" }
+parts:
+  - { id: mon, kind: trigger, label: "Monday 09:00", in: home }
+  - { id: plan, kind: code, op: do, label: "Plan the week", in: home }
+  - { id: notes, kind: context, label: "The week's notes", in: home }
+  - { id: stray, kind: code, op: do, label: "Act on the notes", in: home }
+  - { id: fri, kind: trigger, label: "Friday 17:00", in: home }
+  - { id: tidy, kind: code, op: do, label: "Tidy up", in: home }
+  - { id: list, kind: context, label: "The list", in: home }
+  - { id: aside, kind: comment, label: "An aside" }
+lines:
+  - { from: mon, to: plan, kind: start }
+  - { from: plan, to: notes, kind: data }
+  - { from: notes, to: stray, kind: data }
+  - { from: fri, to: tidy, kind: start }

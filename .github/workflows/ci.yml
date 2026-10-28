@@ -75,7 +75,21 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
+      # The AWML engine is built from the commit vendor/awml/version.json pins, and never kept in
+      # git (issue #73). Its build is kept by that commit, the whole pin and the build scripts, so a
+      # run builds it only when one of them changes. Every run checks it against the pin's hashes,
+      # and builds again when it doesn't match, so a cache the pictures job wrote can't change it.
+      - id: engine
+        run: echo "commit=$(node -p 'require("./vendor/awml/version.json").commit')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            vendor/awml/awml.wasm
+            vendor/awml/wasm_exec.js
+            vendor/awml/build.json
+          key: awml-engine-${{ steps.engine.outputs.commit }}-${{ hashFiles('vendor/awml/version.json', 'scripts/engine-build.sh', 'scripts/engine-lib.sh', 'scripts/engine-pin.mjs') }}
       - run: npm ci
+      - run: npm run engine:build
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test

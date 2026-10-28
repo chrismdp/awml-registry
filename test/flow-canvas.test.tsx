@@ -11,19 +11,31 @@ import { lineRoute, NODE_TYPES, nodesOf } from "@/components/flow/FlowCanvas";
 import { roundedPath } from "@/components/flow/Graphic";
 import { atServer } from "@/components/flow/physics";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
-import { layOut } from "@/server/drawing";
+import { readGraph } from "@/components/flow/graph";
+import { hrefOf } from "@/components/links";
+import { layOut, mapLinks } from "@/server/drawing";
 import type { PartLink } from "@/server/part-links";
 import { laidOut } from "./drawn";
 import { example } from "./helpers";
 
-const text = `flowchart TB\n  list[("Shopping list")]\n  plan("<small>🤖</small><br>Plan the week#39;s dinners")\n  list -.-> plan\n  n@{ shape: notch-rect, label: "Kept by Ana" }\n  class list ctx\n  class plan ai\n  class n gap`;
+const text = JSON.stringify({
+  view: "security",
+  groups: [],
+  parts: [
+    { id: "list", kind: "context", label: "Shopping list" },
+    { id: "plan", kind: "ai", label: "Plan the week's dinners", decider: "ai" },
+  ],
+  lines: [{ from: "list", to: "plan", kind: "data", points: "to" }],
+  comments: [{ id: "n", label: "Kept by Ana", gap: false, ties: [] }],
+  places: [],
+});
 
 // The nodes React Flow draws for a drawing, as it renders them, where the server put them.
 async function rendered(
   source: string,
   { links = [], hrefs = {}, target, menuFor }: { links?: PartLink[]; hrefs?: Record<string, string>; target?: string; menuFor?: string },
 ) {
-  const { full } = laidOut(await layOut(source, { map: Object.keys(hrefs).length > 0 }));
+  const { full } = laidOut(await layOut(source));
   const { bodies, hulls } = atServer(full);
   const nodes = nodesOf(full, bodies, hulls, { id: "t", links: new Map(links.map((l) => [l.part, l])), hrefs, notes: new Map(), target, menuFor, onNote: () => {} });
   return renderToStaticMarkup(<ReactFlow nodes={nodes} edges={[]} nodeTypes={NODE_TYPES} width={800} height={600} />);
@@ -93,8 +105,8 @@ describe("a linked part, once React Flow draws it", () => {
 });
 
 describe("a workflow's box on a system's map, once React Flow draws it", () => {
-  it("is a focusable link to the workflow's page, named by it", async () => {
-    const html = await rendered(example("flow/factory-map.mmd"), { hrefs: { w1: "/chrismdp/issue-to-pull-request" } });
+  it("is a focusable link to the workflow's page, named by it, though it holds the outside actions that start others", async () => {
+    const html = await rendered(example("flow/factory-map.graph.json"), { hrefs: { w1: "/chrismdp/issue-to-pull-request" } });
     const w1 = node(html, "w1");
     expect(w1.tag).toContain('tabindex="0"');
     expect(w1.tag).toContain('role="link"');
@@ -106,11 +118,11 @@ describe("a workflow's box on a system's map, once React Flow draws it", () => {
 
 describe("a scope's heading (#67)", () => {
   it("is its name, with who it is for on lines of their own under it, the same in the server's SVG and in React Flow", async () => {
-    const { full } = laidOut(await layOut(example("dinners.mmd")));
+    const { full } = laidOut(await layOut(example("dinners.graph.json")));
     const carers = full.scopes.find((s) => s.id === "carers")!;
     expect(carers).toMatchObject({ name: "carers", who: ["+ June, Beth"] });
     const svg = renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />);
-    const html = await rendered(example("dinners.mmd"), {});
+    const html = await rendered(example("dinners.graph.json"), {});
     for (const drawn of [/<g [^>]*data-scope="carers"[^]*?<\/g>/.exec(svg)![0], node(html, "carers").inside]) {
       const name = /<text class="flow-scope-name" x="20" y="([\d.]+)"[^>]*>carers<\/text>/.exec(drawn);
       const who = /<text class="flow-scope-who" font-size="12"><tspan x="20" y="([\d.]+)">\+ June, Beth<\/tspan><\/text>/.exec(drawn);
@@ -131,7 +143,7 @@ describe("a line, once a part is dragged (#67)", () => {
     ((p.y === r.y || p.y === r.y + r.height) && p.x >= r.x && p.x <= r.x + r.width);
 
   it("keeps the server's route while its ends haven't moved, or have moved together, and goes square once one has", async () => {
-    const { full } = laidOut(await layOut(example("flow/issue-to-pull-request.mmd")));
+    const { full } = laidOut(await layOut(example("flow/issue-to-pull-request.graph.json")));
     const at = new Map<string, Rect>([...full.parts, ...full.scopes].map((b) => [b.id, b]));
     const line = full.lines.find((l) => l.label && l.points.length > 3)!;
     const s = at.get(line.from)!;
@@ -191,5 +203,45 @@ describe("the notes of the whole drawing, once React Flow draws it", () => {
     expect(notes.inside).toContain('aria-label="Note on The whole drawing"');
     // It is no part of its own, for a reader to tab to apart from its button.
     expect(notes.tag).not.toContain("tabindex");
+  });
+});
+
+// Ids index the links and pages a drawing's parts and boxes lead to. An id every object inherits,
+// such as constructor or toString, must lead nowhere it wasn't given, on the server's SVG, in
+// React Flow and on a system's map.
+describe("parts and boxes whose ids every object inherits", () => {
+  // Three workflows' boxes, each started by a trigger, every id one an object inherits.
+  const ids = ["constructor", "toString", "__proto__"];
+  const triggers = ["valueOf", "hasOwnProperty", "isPrototypeOf"];
+  const graph = JSON.stringify({
+    view: "map",
+    groups: ids.map((id) => ({ id, label: `Box ${id}` })),
+    parts: triggers.map((id) => ({ id, kind: "trigger", label: `Start ${id}` })),
+    lines: ids.map((id, i) => ({ from: triggers[i], to: id, kind: "start", points: "to" })),
+    comments: [],
+    places: [],
+  });
+
+  it("are read as parts and boxes of their own", () => {
+    const g = readGraph(JSON.parse(graph));
+    expect(g.scopes.map((sc) => sc.id)).toEqual(ids);
+    expect(g.lines).toHaveLength(3);
+    expect(readGraph({ view: "security", groups: [], parts: [{ id: "a", kind: "constructor", label: "A" }], lines: [], comments: [], places: [] }).parts[0].kind).toBe("part");
+  });
+
+  it("lead nowhere they weren't given, on the server's SVG, in React Flow and on a map", async () => {
+    for (const id of [...ids, "valueOf", "hasOwnProperty"]) expect(hrefOf({}, id), id).toBeUndefined();
+    expect(hrefOf({ constructor: "/a/b" }, "constructor")).toBe("/a/b");
+    const { full } = laidOut(await layOut(graph));
+    expect(renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />)).not.toContain("<a ");
+    const html = await rendered(graph, {});
+    expect(html).not.toContain('role="link"');
+    expect(mapLinks(full, {})).toEqual([]);
+    // Given one, it leads there, and only there.
+    const given = await rendered(graph, { hrefs: { toString: "/acme/to-string" } });
+    expect(node(given, "toString").tag).toContain('role="link"');
+    expect(node(given, "constructor").tag).not.toContain('role="link"');
+    const box = { title: "To string", address: "acme/to-string", href: "/acme/to-string" };
+    expect(mapLinks(full, { toString: box }).map((l) => l.part)).toEqual(["hasOwnProperty"]);
   });
 });

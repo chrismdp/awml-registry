@@ -341,6 +341,12 @@ export const workflowRef = sqliteTable(
     targetOwner: text("target_owner").notNull(),
     targetSlug: text("target_slug").notNull(),
     targetPart: text("target_part").notNull(),
+    // Whether the ref starts the workflow it names (AWML 0.7): the referring
+    // part is an outside action, in the file as the engine reads it, and the
+    // part it names is a trigger, when the push could see that workflow. Set
+    // at push. Null for a ref written before 2026-10-27, which is worked out
+    // once, from the stored file converted, the first time it is read.
+    starts: integer("starts", { mode: "boolean" }),
   },
   (t) => [
     index("workflow_ref_target_idx").on(t.targetOwner, t.targetSlug),

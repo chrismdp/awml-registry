@@ -7,7 +7,7 @@ import type { Drawings, Note, Rect } from "./flow/drawing";
 import type { FlowApi, FlowCanvasProps } from "./flow/FlowCanvas";
 import { Arrowheads } from "./flow/Graphic";
 import { StaticDrawing } from "./flow/StaticDrawing";
-import { destination, followOf, followsOnKey, partInHash } from "./links";
+import { destination, followOf, followsOnKey, hrefOf, partInHash } from "./links";
 import { PartMenu } from "./PartLinks";
 import { COMPACT_INSET, fit, INSET, STEP, viewOf, type Box, type Viewport } from "./viewport";
 
@@ -98,7 +98,7 @@ export function Drawing({
   const onFollow = useCallback(
     (part: string, e: { ctrlKey: boolean; metaKey: boolean; button?: number }) => {
       const link = links.find((l) => l.part === part);
-      const to = hrefs[part] ?? (link ? destination(link) : null);
+      const to = hrefOf(hrefs, part) ?? (link ? destination(link) : null);
       const f = followOf(to, e, menu?.link.part === part, newTab);
       const node = api.current?.rectOf(part);
       if (f === "close") closeMenu();

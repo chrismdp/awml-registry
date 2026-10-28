@@ -86,15 +86,18 @@ async function start(source) {
       return JSON.parse(this.fitJSON(sourceTexts, implementation));
     },
     // convert upgrades one file of an older version, or joins a legacy security view and its
-    // platform view given as [security, platform], into one 0.6 file, as awml convert does. When the
-    // current rules find mistakes in the file, it throws them, one to a line, and the error's
+    // platform view given as [security, platform], into one 0.7 file, as awml convert does. When it
+    // notes something it couldn't carry over, or the current rules find mistakes in the file, it
+    // throws them, one to a line, notes first. The error's notes and mistakes hold each, and its
     // converted holds the file, which awml convert still writes.
     convert(sourceTexts, implementation = "") {
       const sources = Array.isArray(sourceTexts) ? sourceTexts : [sourceTexts];
       const decoded = JSON.parse(globalThis.__awmlConvert(JSON.stringify(sources), implementation));
       if (decoded.error) throw new Error(decoded.error);
-      if (decoded.mistakes.length) {
-        const error = new Error(decoded.mistakes.join("\n"));
+      if (decoded.notes.length || decoded.mistakes.length) {
+        const error = new Error([...decoded.notes, ...decoded.mistakes].join("\n"));
+        error.notes = decoded.notes;
+        error.mistakes = decoded.mistakes;
         error.converted = decoded.file;
         throw error;
       }
@@ -130,7 +133,43 @@ async function start(source) {
       if (output.startsWith("{")) throw new Error(JSON.parse(output).error);
       return output;
     },
+    // graph gives what draw draws, with nothing laid out, as awml graph does: one workflow's view,
+    // or the map of several workflows given together. It takes what draw takes, and throws what draw
+    // throws. Every label is given exactly as the file wrote it, and no text in it is escaped, so a
+    // page that shows it must escape it itself, unlike draw, whose Mermaid escapes it.
+    graphJSON(sourceText, implementation = "") {
+      const sources = given(sourceText);
+      if (sources.length > 1 && implementation) throw new Error("an implementation is given for one workflow, not several");
+      for (const source of sources) {
+        const errors = this.unsound(text(source));
+        if (errors.length) throw new Error(errors.join("\n"));
+      }
+      if (sources.length > 1) return graphOutput(globalThis.__awmlGraphMap(JSON.stringify(sources)));
+      return graphOutput(typeof sources[0] === "string"
+        ? globalThis.__awmlGraph(text(sources[0]), implementation)
+        : globalThis.__awmlGraph(text(sources[0]), implementation, sources[0].file || ""));
+    },
+    graph(sourceText, implementation = "") {
+      return JSON.parse(this.graphJSON(sourceText, implementation));
+    },
+    // graphUntrusted gives what drawUntrusted draws, as awml graph --untrusted does, with its text
+    // unescaped as graph gives it.
+    graphUntrustedJSON(sourceText) {
+      const errors = this.unsound(sourceText);
+      if (errors.length) throw new Error(errors.join("\n"));
+      return graphOutput(globalThis.__awmlGraphUntrusted(sourceText));
+    },
+    graphUntrusted(sourceText) {
+      return JSON.parse(this.graphUntrustedJSON(sourceText));
+    },
   };
+}
+
+// graphOutput gives a graph's JSON, or throws the error given in its place.
+function graphOutput(output) {
+  const decoded = JSON.parse(output);
+  if (decoded.error) throw new Error(decoded.error);
+  return output;
 }
 
 function given(sources) {

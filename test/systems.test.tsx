@@ -7,13 +7,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { and, eq, like } from "drizzle-orm";
 import { getDb } from "@/db/client";
-import { auditEvent, systemMember, workflow as workflowTable } from "@/db/schema";
+import { auditEvent, systemMember, version, workflow as workflowTable } from "@/db/schema";
 import { engine } from "@/engine";
 import { addMember, createOrganisation, removeMember } from "@/server/organisations";
 import { readSystemVersion } from "@/server/systems";
 import { listTokens, revokeToken } from "@/server/tokens";
 import SystemPage from "@/app/[owner]/systems/[slug]/page";
 import { loadSystem } from "@/app/[owner]/systems/[slug]/load";
+import { loadVersion } from "@/app/[owner]/[slug]/load";
 import SystemChecksPage from "@/app/[owner]/systems/[slug]/checks/page";
 import SystemWaitsPage from "@/app/[owner]/systems/[slug]/who-waits/page";
 import SystemRunsPage from "@/app/[owner]/systems/[slug]/where-it-runs/page";
@@ -22,6 +23,7 @@ import SystemVersionChecksPage from "@/app/[owner]/systems/[slug]/v/[n]/checks/p
 import SystemVersionWaitsPage from "@/app/[owner]/systems/[slug]/v/[n]/who-waits/page";
 import SystemVersionRunsPage from "@/app/[owner]/systems/[slug]/v/[n]/where-it-runs/page";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
+import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
 import OwnerPage from "@/app/[owner]/page";
 import GalleryPage from "@/app/gallery/page";
 import { BASE, example, orgWith, person, request, storeVersion, type Who } from "./helpers";
@@ -32,7 +34,7 @@ import { laidOut } from "./drawn";
 // A workflow that the fit can judge: one scope any company may process, a
 // trigger that waits up to an hour, a note kept in the scope and a step a
 // person takes, each labelled so a test can find it on a page.
-const workflow = (title: string, words: string) => `awml: "0.6"
+const workflow = (title: string, words: string) => `awml: "0.7"
 title: ${title}
 scopes:
   - { id: home, label: "home: the family", processing: any }
@@ -403,7 +405,8 @@ describe("a system's page", () => {
       const sent = JSON.stringify(panel);
       expect(sent).toContain("Shopping note");
       for (const hidden of ["Notes", "Dinners", "ana/notes", "acme/dinners"]) expect(sent).not.toContain(hidden);
-      expect(panel).toMatchObject({ hrefs: { w1: "/acme/shopping" } });
+      // With one member drawn, the map is that workflow's own drawing, with no box to open.
+      expect(panel).toMatchObject({ hrefs: {} });
     }
     // Ana, who may see all three, gets a box for each, each leading to its page.
     const own = await panelAs(ana);
@@ -427,7 +430,7 @@ describe("a system's page", () => {
 
   it("draws a part two members share once, by the ref between them, and says who shares it", async () => {
     const { ana } = await world();
-    const meals = `awml: "0.6"
+    const meals = `awml: "0.7"
 title: Meals
 scopes:
   - { id: home, label: "home: the family", processing: any }
@@ -752,5 +755,110 @@ describe("a big system, within D1's limit on bound values", () => {
     const page = await renderPage(WorkflowPage, { owner: "acme", slug: "shopping" }, { as: asCookie(ana) });
     expect(page.status).toBe(200);
     expect(page.html).toMatch(/In <a href="\/acme\/systems\/kitchen">Kitchen<\/a>/);
+  });
+});
+
+// AWML 0.7 starts another workflow with an outside action whose ref names that workflow's
+// trigger (awml#109), and the engine's map draws a line from the action to the trigger it starts
+// (awml#122). Given together, as a system gives its members, untrusted text follows the action
+// into the workflow it starts (awml#112). The bakery's stock count starts its supplier order:
+// AWML's own example, pushed with its path refs, as bakery-stock and bakery-order.
+describe("a system whose members start one another", () => {
+  // The supplier order with no review before the order is placed, so text that reaches it from
+  // the stock count reaches its outside action.
+  const unreviewed = (order: string) =>
+    order
+      .replace(/\n  - \{ id: approve, kind: review[^\n]*/, "")
+      .replace("{ from: ask, to: approve, kind: start }", "{ from: ask, to: place, kind: start }")
+      .replace(/\n  - \{ from: approve, to: place[^\n]*/, "")
+      .replace("Place the order: Ask", "Place the order: Allow");
+  const untrusted = (stock: string) =>
+    stock.replace('{ id: close, kind: trigger, label: "Every day 18:00" }', '{ id: close, kind: trigger, label: "Every day 18:00", untrusted: true }');
+
+  // Ana's organisation acme holds the two, private, so each may refer to the other before it is
+  // pushed; the order first, then the stock count, whose action is checked against the order.
+  async function bakery(stock = example("bakery-stock.yaml"), order = example("bakery-order.yaml")) {
+    const ana = await person("ana");
+    const nell = await person("nell");
+    await orgWith("acme", ana);
+    await pushWorkflow("acme", "bakery-order", { token: ana.token }, order, "private");
+    await pushWorkflow("acme", "bakery-stock", { token: ana.token }, stock, "private");
+    await pushedSystem("acme", "bakery", { token: ana.token }, { title: "The bakery", members: ["acme/bakery-stock", "acme/bakery-order"], visibility: "private" });
+    return { ana, nell };
+  }
+
+  const as = async (who: { cookie: string } | undefined, load: () => Promise<unknown>) => {
+    pageRequest.headers = new Headers();
+    if (who) pageRequest.headers.set("cookie", who.cookie);
+    return load();
+  };
+
+  it("draws on the map the outside action that starts the other workflow, with a line to its trigger, and leads it there", async () => {
+    const { ana } = await bakery();
+    const { panel } = (await as(ana, () => loadSystem("acme", "bakery", "latest", "map"))) as Awaited<ReturnType<typeof loadSystem>>;
+    if (panel.tab !== "map" || !panel.drawing) throw new Error("no map");
+    const { full } = laidOut(panel.drawing);
+    expect(full.scopes.map((sc) => [sc.id, sc.workflow])).toEqual([
+      ["w1", "acme/bakery-stock"],
+      ["w2", "acme/bakery-order"],
+    ]);
+    expect(full.parts.find((p) => p.id === "w1_start")).toMatchObject({ kind: "outside", lines: ["Start the supplier order"], tier: "Allow", scope: "w1" });
+    expect(full.parts.find((p) => p.id === "w2_low")).toMatchObject({ kind: "trigger", lines: ["Flour, butter or sugar runs low"] });
+    expect(full.parts.find((p) => p.id === "w2_low")?.scope).toBeUndefined();
+    expect(full.lines.find((l) => l.from === "w1_start" && l.to === "w2_low")).toMatchObject({ style: "solid", arrowEnd: true });
+    expect(panel.hrefs).toEqual({ w1: "/acme/bakery-stock", w2: "/acme/bakery-order" });
+    expect(panel.links?.find((l) => l.part === "w1_start")).toEqual({
+      part: "w1_start",
+      title: "Starts The bakery's supplier order",
+      to: [{ label: "acme/bakery-order", href: "/acme/bakery-order" }],
+    });
+    const map = (await tab("acme", "bakery", "map", ana)).html;
+    expect(map).toContain('<a href="/acme/bakery-order" aria-label="Start the supplier order. Starts The bakery&#x27;s supplier order">');
+  });
+
+  it("links the outside action on its workflow's page to the trigger it starts, and that trigger back", async () => {
+    const { ana } = await bakery();
+    const stock = (await as(ana, () => loadVersion("acme", "bakery-stock", "latest", "security"))) as Awaited<ReturnType<typeof loadVersion>>;
+    expect(stock.links.find((l) => l.part === "start")).toEqual({
+      part: "start",
+      title: "Starts acme/bakery-order#low",
+      to: [{ label: "acme/bakery-order", href: "/acme/bakery-order#low" }],
+    });
+    // A push stored the path ref as owner/slug#id.
+    expect(stock.files[0].text).toContain("ref: acme/bakery-order#low");
+    const order = (await as(ana, () => loadVersion("acme", "bakery-order", "latest", "security"))) as Awaited<ReturnType<typeof loadVersion>>;
+    expect(order.links.find((l) => l.part === "low")).toEqual({
+      part: "low",
+      title: "Started by acme/bakery-stock",
+      to: [{ label: "acme/bakery-stock", href: "/acme/bakery-stock" }],
+    });
+    expect(order.referredBy.map((r) => [`${r.owner}/${r.slug}`, r.parts])).toEqual([["acme/bakery-stock", ["low"]]]);
+  });
+
+  it("follows untrusted text through the action into the workflow it starts, on Checks and Who waits, and not for a file checked alone", async () => {
+    const { ana } = await bakery(untrusted(example("bakery-stock.yaml")), unreviewed(example("bakery-order.yaml")));
+    const reached = "untrusted text from part &quot;close&quot; in acme/bakery-stock.yaml reaches outside action &quot;place&quot;";
+    const checks = await tab("acme", "bakery", "checks", ana);
+    const order = checks.html.slice(checks.html.indexOf("acme/bakery-order.yaml"));
+    expect(order).toContain(reached);
+    expect(checks.html).toContain('<li data-check="warn.untrusted-outside">');
+    const waits = (await tab("acme", "bakery", "who-waits", ana)).html;
+    expect(waits).toContain("<h2>Where untrusted text reaches</h2>");
+    expect(waits).toContain("Every day 18:00<span class=\"note\"> · reaches Start the supplier order: Allow, Place the order: Allow</span>");
+    // The supplier order's own Checks tab gives it with the stock count its ref names, so says so
+    // too; the list stored at its push, of the file checked alone, doesn't.
+    const own = await renderPage(WorkflowChecksPage, { owner: "acme", slug: "bakery-order" }, { as: { cookie: ana.cookie } });
+    expect(own.html).toContain(reached);
+    const [row] = await (await getDb())
+      .select({ checks: version.checks })
+      .from(version)
+      .innerJoin(workflowTable, eq(workflowTable.id, version.workflowId))
+      .where(eq(workflowTable.slug, "bakery-order"));
+    expect(row.checks?.checks.find((c) => c.id === "warn.untrusted-outside")).toMatchObject({ result: "pass", mistakes: [] });
+  });
+
+  it("shows none of it to someone outside acme", async () => {
+    const { nell } = await bakery();
+    for (const page of await everyTab("acme", "bakery", nell)) expect(page.status).toBe(404);
   });
 });

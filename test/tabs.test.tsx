@@ -90,7 +90,7 @@ describe("a workflow page's tabs", () => {
 
   it("draws only on the tabs that show a drawing", async () => {
     const owner = await pushed();
-    const draw = vi.spyOn(engine, "draw");
+    const draw = vi.spyOn(engine, "graph");
     for (const page of [WorkflowYamlPage, WorkflowChecksPage]) {
       expect((await renderPage(page, { owner, slug: "dinners" })).status).toBe(200);
     }

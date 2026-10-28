@@ -14,30 +14,40 @@ const listed = (names: string[]) =>
 
 // Each part a workflow's drawing marks, from its refs as the viewer may know
 // them and the referrers the viewer may see, so it names nothing they can't.
-export function partLinks(refs: ShownRef[], referredBy: Referrer[]): PartLink[] {
-  const links = new Map<string, { lines: string[]; to: PartLink["to"]; usedBy: string[] }>();
+// `kinds` are the kinds of the workflow's parts: an outside action whose ref
+// names another workflow's trigger starts that workflow (AWML 0.7). A trigger
+// another workflow refers to from an outside action, which a referrer's
+// `starts` names, is started by it; any other referrer uses it.
+export function partLinks(refs: ShownRef[], referredBy: Referrer[], kinds: Map<string, string> = new Map()): PartLink[] {
+  const links = new Map<string, { lines: string[]; to: PartLink["to"]; usedBy: string[]; startedBy: string[] }>();
   const at = (part: string) => {
-    if (!links.has(part)) links.set(part, { lines: [], to: [], usedBy: [] });
+    if (!links.has(part)) links.set(part, { lines: [], to: [], usedBy: [], startedBy: [] });
     return links.get(part)!;
   };
   for (const r of refs) {
     const link = at(r.part);
-    if (r.state === "hidden") link.lines.push("Linked to a workflow you can't see");
-    else if (r.state === "missing") link.lines.push(`Linked to ${r.owner}/${r.slug}#${r.id}, not pushed yet`);
+    const linked = kinds.get(r.part) === "outside" ? "Starts" : "Linked to";
+    if (r.state === "hidden") link.lines.push(`${linked} a workflow you can't see`);
+    else if (r.state === "missing") link.lines.push(`${linked} ${r.owner}/${r.slug}#${r.id}, not pushed yet`);
     else {
-      link.lines.push(`Linked to ${r.owner}/${r.slug}#${r.id}`);
+      link.lines.push(`${linked} ${r.owner}/${r.slug}#${r.id}`);
       link.to.push({ label: `${r.owner}/${r.slug}`, href: `/${r.owner}/${r.slug}#${encodeURIComponent(r.id)}` });
     }
   }
   for (const r of referredBy)
     for (const part of r.parts) {
       const link = at(part);
-      link.usedBy.push(`${r.owner}/${r.slug}`);
+      const starts = r.starts?.includes(part) && kinds.get(part) === "trigger";
+      (starts ? link.startedBy : link.usedBy).push(`${r.owner}/${r.slug}`);
       link.to.push({ label: `${r.owner}/${r.slug}`, href: `/${r.owner}/${r.slug}` });
     }
   return [...links].map(([part, l]) => ({
     part,
-    title: [...l.lines, ...(l.usedBy.length ? [`Used by ${listed(l.usedBy)}`] : [])].join("\n"),
+    title: [
+      ...l.lines,
+      ...(l.startedBy.length ? [`Started by ${listed(l.startedBy)}`] : []),
+      ...(l.usedBy.length ? [`Used by ${listed(l.usedBy)}`] : []),
+    ].join("\n"),
     to: l.to,
   }));
 }

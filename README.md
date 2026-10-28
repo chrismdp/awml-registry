@@ -2,7 +2,7 @@
 
 You do not have to host a registry yourself. There is an official one at [awml.io](https://awml.io), free for public workflows.
 
-The AWML Registry stores, versions and draws [AWML](https://github.com/chrismdp/awml) workflow files. You push a workflow's one AWML 0.6 file, which holds its design and any implementations, and the registry checks it, numbers each push as a new version, and draws its security view and the platform view of each implementation. Public workflows are open to anyone. You can keep private workflows on your own account, which only you see. An organisation can also keep private workflows, which only its members see, with an inventory of all its workflows and an audit log.
+The AWML Registry stores, versions and draws [AWML](https://github.com/chrismdp/awml) workflow files. You push a workflow's one AWML 0.7 file, which holds its design and any implementations, and the registry checks it, numbers each push as a new version, and draws its security view and the platform view of each implementation. Public workflows are open to anyone. You can keep private workflows on your own account, which only you see. An organisation can also keep private workflows, which only its members see, with an inventory of all its workflows and an audit log.
 
 The registry also keeps platforms: descriptions of where a workflow can run, each with an optional install recipe. It works out which platforms a workflow fits, with the same AWML code as `awml fit`.
 
@@ -10,13 +10,15 @@ The registry also keeps platforms: descriptions of where a workflow can run, eac
 
 ## Run it on your machine
 
-You need Node 22.
+You need Node 22, git and tar.
 
 ```sh
 npm install
 cp .env.example .env.local   # then set BETTER_AUTH_SECRET
 npm run dev
 ```
+
+`npm install` builds the AWML engine the registry checks and draws with, from AWML's source at the commit `vendor/awml/version.json` pins, into `vendor/awml/awml.wasm`. It fetches the source from GitHub, and builds it with the Go release the pin names, downloaded once from go.dev into `~/.cache/awml-registry` and checked against the SHA-256 the pin gives it; a `go` you have installed isn't used, so every machine builds the same bytes, which must have the SHA-256 the pin gives them. If it can't, it says so and goes on; build it later with `npm run engine:build`, which does nothing while the build matches the pin. `AWML_SOURCE` names another place to fetch AWML from, such as a local clone.
 
 The registry will not start without a `BETTER_AUTH_SECRET` of at least 32 random characters. `openssl rand -base64 32` makes one.
 
@@ -34,7 +36,7 @@ curl -X POST http://localhost:3000/api/v1/<you>/<workflow>/versions \
 
 To keep the workflow private, add `"visibility": "private"` to its first push, or push it with `awml push --private`. A private workflow on your own account is seen by you alone; anyone else gets a 404, as for one that doesn't exist. A later push cannot change it. The registry may limit how many private workflows one person keeps (see "Where to change things"); an organisation has no such limit.
 
-The registry takes only AWML 0.6 files, marked `awml: "0.6"`. It refuses an older file with a 400 that says how to convert it: run `awml convert workflow.yaml > upgraded.yaml`, or for a 0.3 or 0.2 pair `awml convert security.yaml platform.yaml > upgraded.yaml`, and push that. Versions stored in an older AWML are never rewritten: the registry converts each one whenever it draws, checks or fits it, and its YAML tab and download give the file as it was pushed.
+The registry takes only AWML 0.7 files, marked `awml: "0.7"`. It refuses an older file with a 400 that says how to convert it: run `awml convert workflow.yaml > upgraded.yaml`, or for a 0.3 or 0.2 pair `awml convert security.yaml platform.yaml > upgraded.yaml`, and push that. Versions stored in an older AWML are never rewritten: the registry converts each one whenever it draws, checks or fits it, and its YAML tab and download give the file as it was pushed.
 
 The workflow's page is then at `/<you>/<workflow>`. Each view has its own address: `/<you>/<workflow>/security`, which draws the design; `/platform`, which draws the first implementation, with each at `/platform/<implementation>`; `/yaml`, which shows the file as text to copy or download; and `/checks`, which says what checking the file found. Older versions are at `/<you>/<workflow>/v/<n>`, with their views at `/v/<n>/security` and so on. Versions pushed before the registry took only 0.4 files keep their security and platform files, and their pages still show them, converted: a platform file is drawn only when AWML can join it with its security file.
 
@@ -72,9 +74,9 @@ curl -X POST http://localhost:3000/api/v1/fit \
   -d '{"workflow": "<owner>/<workflow>", "platforms": ["<owner>/<platform>"]}'
 ```
 
-Leave out `platforms` to fit against every platform you can see: the public ones, and your organisations' private ones. Send `"file": "<YAML>"` in place of `workflow` to fit a 0.6 file that is not in the registry. For each platform, the answer says whether the workflow's design fits, and if not, every reason. Add `"implementation": "<id>"` to judge where one implementation places each part instead, as `awml fit --implementation` does: each block is judged against the platform it names, found among those platforms by its description's id, or by the platform's address, as in `platform: acme/platforms/ops-runner`. A new registry has no platforms until someone pushes one.
+Leave out `platforms` to fit against every platform you can see: the public ones, and your organisations' private ones. Send `"file": "<YAML>"` in place of `workflow` to fit a 0.7 file that is not in the registry. For each platform, the answer says whether the workflow's design fits, and if not, every reason. Add `"implementation": "<id>"` to judge where one implementation places each part instead, as `awml fit --implementation` does: each block is judged against the platform it names, found among those platforms by its description's id, or by the platform's address, as in `platform: acme/platforms/ops-runner`. A new registry has no platforms until someone pushes one.
 
-A platform description must be marked `awml: "0.6"`. The registry refuses an older one with a 400 that says to convert it with `awml convert`; one stored before is converted whenever the fit reads it. A description may give its own address as its id, `platform: { id: <owner>/platforms/<slug>, ... }`, but never another platform's.
+A platform description must be marked `awml: "0.7"`. The registry refuses an older one with a 400 that says to convert it with `awml convert`; one stored before is converted whenever the fit reads it. A description may give its own address as its id, `platform: { id: <owner>/platforms/<slug>, ... }`, but never another platform's.
 
 ## Use the awml command
 
@@ -163,7 +165,7 @@ cp compose.example.yaml compose.yaml   # then set BETTER_AUTH_URL and BETTER_AUT
 docker compose up -d
 ```
 
-The container brings the database up to date each time it starts. `docker compose ps` shows it as healthy once it answers.
+Building the image builds the AWML engine from AWML's source, so it needs to reach github.com, go.dev and proxy.golang.org. The container brings the database up to date each time it starts. `docker compose ps` shows it as healthy once it answers.
 
 `BETTER_AUTH_URL` must match the address in the browser, port included. To serve on port 8080, change the port mapping to `"8080:3000"` and `BETTER_AUTH_URL` to `http://localhost:8080`. If you change one without the other, signing in fails with "Invalid origin".
 
@@ -192,7 +194,7 @@ npm run cf:build
 npx wrangler dev --local-upstream localhost:8787 --upstream-protocol http
 ```
 
-`npm run cf:build` swaps the SQLite file driver for the D1 one, so the Worker never carries the SQLite library. Once `wrangler.jsonc` has a route, `wrangler dev` makes each request look as if it came to the route's domain unless you pass `--local-upstream`, and signing in fails with "Invalid origin".
+`npm run cf:build` builds the AWML engine first, when its build doesn't match the pin, and bundles it into the Worker. It swaps the SQLite file driver for the D1 one, so the Worker never carries the SQLite library. Once `wrangler.jsonc` has a route, `wrangler dev` makes each request look as if it came to the route's domain unless you pass `--local-upstream`, and signing in fails with "Invalid origin".
 
 Locally, sign-in emails are written to `.wrangler/tmp/email/`, and the log says where.
 
@@ -223,7 +225,7 @@ You need a Cloudflare account. Sign in to it with `npx wrangler login`, then:
 
 ## Where to change things
 
-- `vendor/awml/` holds the AWML Go package compiled to WebAssembly, which checks, summarises, draws and fits each file, so the registry and the `awml` command line agree. `vendor/awml/VERSION` names the AWML commit. To move to a newer AWML, run `npm run engine:update -- /path/to/awml`; it needs Go, and rewrites the test fixtures with what the native `awml` prints so `npm test` compares the two.
+- `vendor/awml/` holds the AWML engine: the Go package compiled to WebAssembly, which checks, summarises, draws and fits each file, so the registry and the `awml` command line agree. `vendor/awml/version.json` pins its release and commit, and `npm run engine:build` builds it from that commit (git keeps only the pin and the JavaScript around it, never the WebAssembly). To move to another AWML release, run `npm run engine:update -- <tag>`, such as `v0.7.1`: it moves the pin, builds the engine, and rewrites the test fixtures with what the native `awml` prints so `npm test` compares the two.
 - `src/edition.ts` decides whether an organisation may push and keep private workflows and platforms, how many private workflows a person may keep on their own account, what the home page shows, and whether the sign-in page links to terms and a privacy policy. The default allows everything, sets no limit, shows the gallery at `/` and links to neither.
 - `drizzle/` holds the database migrations. After changing `src/db/schema.ts`, run `npm run db:generate`.
 - `src/fonts/` holds Inter, the font AWML's drawings ask for, which the registry serves itself so drawings look the same in every browser.

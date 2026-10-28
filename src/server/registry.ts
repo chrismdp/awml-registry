@@ -1,16 +1,16 @@
-import { and, count, desc, eq, inArray, max, ne, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, max, ne, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@/db/client";
 import { insertRows } from "@/db/rows";
 import { membership, user, version, workflow, workflowRef } from "@/db/schema";
 import { edition } from "@/edition";
-import { engine, type Files } from "@/engine";
+import { engine, type Files, type Named } from "@/engine";
 import { record } from "./audit";
 import { measures, total } from "./summary";
 import { findOwner, isOwnerOrMember, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH } from "./push";
 import { asRead } from "./as-read";
-import { awmlOf, isOlderAwml, readYaml, WORKFLOW_IS_TOO_OLD } from "./awml-file";
-import { namedAtPush, refPath, rewriteRefs, type Rewrite } from "./refs";
+import { awmlOf, isOlderAwml, partKinds, readYaml, WORKFLOW_IS_TOO_OLD } from "./awml-file";
+import { namedAtPush, refPath, rewriteRefs, type Ref, type Rewrite } from "./refs";
 import { refuse, type Result } from "./result";
 import { workflowSlugProblem } from "./slugs";
 import { ownerSystems, systemsOf } from "./systems";
@@ -54,7 +54,7 @@ async function readable(db: Db, viewer: Viewer, ownerSlug: string, slug: string)
   return { owner, workflow: w };
 }
 
-// The one file a push sends: an AWML 0.6 workflow, as `workflow`, or alone
+// The one file a push sends: an AWML 0.7 workflow, as `workflow`, or alone
 // as `security`, as awml push 0.4.0 sent it. Anything marked as an older
 // AWML is refused with a 400 that says how to convert it, whichever field it
 // came in.
@@ -67,9 +67,9 @@ function fileFrom(body: PushBody): Result<{ file: string }> {
     sent.push(text);
   }
   if (sent.some(isOlderAwml)) return refuse(400, WORKFLOW_IS_TOO_OLD);
-  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.6 file as workflow.");
+  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.7 file as workflow.");
   if (sent.length > 1)
-    return refuse(422, "Send one file, as workflow: an AWML 0.6 workflow holds its design and its implementations.");
+    return refuse(422, "Send one file, as workflow: an AWML 0.7 workflow holds its design and its implementations.");
   return { ok: true, file: sent[0] };
 }
 
@@ -113,8 +113,13 @@ async function roomForPrivate(db: Db, owner: Owner & { type: "user" }): Promise<
   );
 }
 
-// A version saved, and each path ref its push rewrote as owner/slug#id.
-type Pushed = Result<{ owner: string; slug: string; number: number; rewrites: Rewrite[] }>;
+// A warning AWML gave the file pushed, by the id of the check that gave it,
+// such as warn.several-workflows. A warning never refuses a push.
+export type PushWarning = { check: string; message: string };
+
+// A version saved, each path ref its push rewrote as owner/slug#id, and the
+// warnings its checks gave.
+type Pushed = Result<{ owner: string; slug: string; number: number; rewrites: Rewrite[]; warnings: PushWarning[] }>;
 
 export async function pushVersion(
   db: Db,
@@ -166,13 +171,24 @@ async function saveVersion(
 
   const { errors, check, title } = await checkFile(file);
   if (errors.length) return refuse(422, ...errors);
+  let given: Named[] = [];
   if (refs.length) {
     const named = await namedAtPush(db, owner, slug, visibility, refs);
     if (!named.ok) return named;
+    given = named.given;
     const listed = await engine.checksWith({ file: refPath(owner.slug, slug), source: file }, named.given);
     const mistakes = listed.filter((c) => c.result === "fail").flatMap((c) => c.mistakes);
     if (mistakes.length) return refuse(422, ...mistakes.map((m) => `workflow: ${m}`));
   }
+
+  // Whether each ref starts the workflow it names (AWML 0.7): its part is an
+  // outside action, and the part it names is a trigger, when the push could
+  // see that workflow; otherwise the outside action alone, and the page of the
+  // workflow it names checks the rest from its own file.
+  const kinds = partKinds(file);
+  const targets = new Map(given.map((g) => [g.file, partKinds(g.source)]));
+  const startsFor = (r: Ref) =>
+    kinds.get(r.part) === "outside" && (targets.get(refPath(r.owner, r.slug))?.get(r.id) ?? "trigger") === "trigger";
 
   const summary = await engine.summarise({ workflow: file });
   const checks = { awml: engine.version, checks: await engine.checks(file) };
@@ -223,7 +239,14 @@ async function saveVersion(
         await insertRows(
           db,
           workflowRef,
-          refs.map((r) => ({ versionId: inserted[0].id, part: r.part, targetOwner: r.owner, targetSlug: r.slug, targetPart: r.id })),
+          refs.map((r) => ({
+            versionId: inserted[0].id,
+            part: r.part,
+            targetOwner: r.owner,
+            targetSlug: r.slug,
+            targetPart: r.id,
+            starts: startsFor(r),
+          })),
         );
       } catch (e) {
         await db.delete(version).where(eq(version.id, inserted[0].id));
@@ -235,7 +258,8 @@ async function saveVersion(
   }
   await db.update(workflow).set({ title: title!, updatedAt: new Date() }).where(eq(workflow.id, w.id));
   if (owner.type === "organisation") await record(db, owner.id, viewer.id, "push", `${owner.slug}/${slug} v${number}`);
-  return { ok: true, owner: owner.slug, slug, number, rewrites };
+  const warnings = checks.checks.flatMap((c) => (c.result === "warn" ? c.mistakes.map((message) => ({ check: c.id, message })) : []));
+  return { ok: true, owner: owner.slug, slug, number, rewrites, warnings };
 }
 
 export type ForkBody = { owner?: unknown; slug?: unknown; visibility?: unknown; version?: unknown };
@@ -326,38 +350,89 @@ export async function referrersOf(db: Db, viewer: Viewer, ownerSlug: string, slu
   return referrers(db, viewer, found.owner, found.workflow);
 }
 
-export type Referrer = { owner: string; slug: string; title: string; visibility: "public" | "private"; parts: string[] };
+// A workflow whose latest version refers to this one, and the parts of this
+// one it names; `starts` are those of them it names from an outside action,
+// which starts this workflow when the part is its trigger (AWML 0.7). The
+// API's answers leave `starts` out.
+export type Referrer = {
+  owner: string;
+  slug: string;
+  title: string;
+  visibility: "public" | "private";
+  parts: string[];
+  starts?: string[];
+};
 
 async function referrers(db: Db, viewer: Viewer, owner: Owner, w: Workflow): Promise<Referrer[]> {
-  const rows = await db
-    .select({
-      id: workflow.id,
-      owner: ownerSlugSql,
-      slug: workflow.slug,
-      title: workflow.title,
-      visibility: workflow.visibility,
-      part: workflowRef.targetPart,
-    })
-    .from(workflowRef)
-    .innerJoin(version, and(eq(version.id, workflowRef.versionId), isLatest))
-    .innerJoin(workflow, eq(workflow.id, version.workflowId))
-    .where(
-      and(
-        eq(workflowRef.targetOwner, owner.slug),
-        eq(workflowRef.targetSlug, w.slug),
-        ne(workflow.id, w.id),
-        seenBy(db, viewer),
-      ),
-    );
-  const byWorkflow = new Map<string, Referrer>();
-  for (const { id, part, ...r } of rows) {
-    const listed = byWorkflow.get(id) ?? { ...r, parts: [] };
+  // The refs to this workflow from the latest version of each other workflow
+  // the viewer may see.
+  const naming = and(
+    eq(workflowRef.targetOwner, owner.slug),
+    eq(workflowRef.targetSlug, w.slug),
+    ne(workflow.id, w.id),
+    seenBy(db, viewer),
+  );
+  const read = () =>
+    db
+      .select({
+        id: workflow.id,
+        owner: ownerSlugSql,
+        slug: workflow.slug,
+        title: workflow.title,
+        visibility: workflow.visibility,
+        part: workflowRef.targetPart,
+        starts: workflowRef.starts,
+      })
+      .from(workflowRef)
+      .innerJoin(version, and(eq(version.id, workflowRef.versionId), isLatest))
+      .innerJoin(workflow, eq(workflow.id, version.workflowId))
+      .where(naming);
+  let rows = await read();
+  // A ref written before its push stored whether it starts what it names is
+  // worked out once, then read as any other.
+  if (rows.some((r) => r.starts === null)) {
+    await workOutStarts(db, and(naming, isNull(workflowRef.starts))!);
+    rows = await read();
+  }
+  const byWorkflow = new Map<string, Required<Referrer>>();
+  for (const { id, part, starts, ...r } of rows) {
+    const listed = byWorkflow.get(id) ?? { ...r, parts: [], starts: [] };
     if (!listed.parts.includes(part)) listed.parts.push(part);
+    if (starts && !listed.starts.includes(part)) listed.starts.push(part);
     byWorkflow.set(id, listed);
   }
   return [...byWorkflow.values()]
-    .map((r) => ({ ...r, parts: r.parts.sort() }))
+    .map((r) => ({ ...r, parts: r.parts.sort(), starts: r.starts.sort() }))
     .sort((a, b) => `${a.owner}/${a.slug}`.localeCompare(`${b.owner}/${b.slug}`));
+}
+
+// Works out whether each ref `which` picks starts what it names, for refs
+// written before a push stored that (null), and writes it back, so their files
+// are never read again for this. A ref starts what it names when its part is
+// an outside action in its version's file as the engine reads it, converted, so
+// a 0.6 trigger with a ref that convert makes an outside action starts it; the
+// page of the workflow it names checks that the part it names is a trigger.
+async function workOutStarts(db: Db, which: SQL) {
+  const old = await db
+    .select({ ref: workflowRef.id, part: workflowRef.part, file: version.workflow })
+    .from(workflowRef)
+    .innerJoin(version, and(eq(version.id, workflowRef.versionId), isLatest))
+    .innerJoin(workflow, eq(workflow.id, version.workflowId))
+    .where(which);
+  const kinds = new Map<string, Promise<Map<string, string>>>();
+  const kindsOf = (file: string | null) => {
+    if (!file) return Promise.resolve(new Map<string, string>());
+    if (!kinds.has(file))
+      kinds.set(
+        file,
+        asRead({ workflow: file }, "workflow").then((r) => ("file" in r ? partKinds(r.file) : new Map<string, string>())),
+      );
+    return kinds.get(file)!;
+  };
+  for (const r of old) {
+    const starts = (await kindsOf(r.file)).get(r.part) === "outside";
+    await db.update(workflowRef).set({ starts }).where(eq(workflowRef.id, r.ref));
+  }
 }
 
 // A workflow's forks that the viewer may see, of any of its versions: the
@@ -417,7 +492,7 @@ export async function readWorkflow(db: Db, viewer: Viewer, ownerSlug: string, sl
     createdAt: w.createdAt,
     ...(await originOf(db, viewer, w.forkedFrom)),
     versions: await versionList(db, w.id),
-    referredBy: await referrers(db, viewer, owner, w),
+    referredBy: (await referrers(db, viewer, owner, w)).map(({ starts: _, ...r }) => r),
     systems: await systemsOf(db, viewer, w.id),
   };
 }

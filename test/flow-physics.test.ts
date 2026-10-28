@@ -95,20 +95,22 @@ function drag(sim: ReturnType<typeof physicsOf>["sim"], part: string, dx: number
 }
 
 const at = (bodies: Body[], id: string) => bodies.find((b) => b.id === id)!;
-const dinners = example("dinners.mmd");
-const issue = example("flow/issue-to-pull-request.mmd");
-const map = example("flow/factory-map.mmd");
+// The family's dinners as AWML 0.4 wrote them, whose scopes nest three deep, converted.
+const dinners = example("older/dinners-04.graph.json");
+const issue = example("flow/issue-to-pull-request.graph.json");
+const map = example("flow/factory-map.graph.json");
+// The engine's graph says itself whether it is a map.
 const drawings = [
-  ["issue-to-pull-request", issue, false],
-  ["the dinners example, its scopes nested three deep", dinners, false],
-  ["the factory map", map, true],
+  ["issue-to-pull-request", issue],
+  ["the dinners example, its scopes nested three deep", dinners],
+  ["the factory map", map],
 ] as const;
 
 describe("the opening", () => {
-  for (const [name, text, isMap] of drawings)
+  for (const [name, text] of drawings)
     for (const flowOnly of [false, true])
       it(`starts just where the server laid out ${name}${flowOnly ? ", Flow only" : ""}, and tidies it within ${OPENING_REACH} pixels of there, growing less than 10%, overlapping nothing`, async () => {
-        const both = laidOut(await layOut(text, { map: isMap }));
+        const both = laidOut(await layOut(text));
         const d = flowOnly ? both.flow : both.full;
         const { sim, states, now, resting } = physicsOf(d);
         try {
@@ -154,9 +156,9 @@ describe("the opening", () => {
 });
 
 describe("a drag", () => {
-  for (const [name, text, isMap] of drawings)
+  for (const [name, text] of drawings)
     it(`moves nothing else on ${name} when a part is dragged across empty space`, async () => {
-      const { full } = laidOut(await layOut(text, { map: isMap }));
+      const { full } = laidOut(await layOut(text));
       const { sim, now } = opened(full);
       // The part furthest right, dragged further right, where nothing is.
       const before = sim.bodies.map((b) => ({ ...b }));
@@ -193,9 +195,9 @@ describe("a drag", () => {
     expect(overlaps(full, now())).toEqual([]);
   });
 
-  for (const [name, text, isMap] of drawings)
+  for (const [name, text] of drawings)
     it(`on ${name}, dragging each part by (300, 100) and by (-200, 150) moves nothing far from where it is dropped, leaves nothing overlapping, and nothing moves once it is dropped`, async () => {
-      const { full } = laidOut(await layOut(text, { map: isMap }));
+      const { full } = laidOut(await layOut(text));
       for (const part of full.parts.map((p) => p.id).concat(full.scopes.filter((s) => !s.holds).map((s) => s.id)))
         for (const [dx, dy] of [
           [300, 100],

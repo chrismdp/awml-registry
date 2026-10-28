@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ListedCheck } from "@/engine";
 import type { ShownRef } from "@/server/refs";
 import type { FileName } from "@/server/registry";
+import { CURRENT_AWML } from "@/server/awml-file";
 import { count } from "./words";
 
 // One check AWML ran on a file, the mistakes it found, none when it passed,
@@ -20,12 +21,15 @@ export type CheckRow = {
 // the registry runs listed them here. Otherwise the file was checked again
 // here by `awml check`, which gives only the mistakes it finds, so it has
 // one row. A system's member is named as owner/slug, the path the engine is
-// given it at.
+// given it at. A file stored in an older AWML is checked converted, and
+// `notes` holds what converting it noted for its author to do by hand,
+// which fails nothing.
 export type CheckedFile = {
   name: FileName | `${string}/${string}`;
   rows: CheckRow[];
   checkedBy: { tag: string; commit: string };
   listed: "stored" | "now" | false;
+  notes?: string[];
 };
 
 // The mistakes a row found; a listed check that failed found at least one.
@@ -86,6 +90,22 @@ function Refs({ refs }: { refs: ShownRef[] }) {
   );
 }
 
+// What `awml convert` noted, converting a stored file to the AWML the
+// registry reads, for its author to do by hand.
+export function ConvertNotes({ notes }: { notes?: string[] }) {
+  if (!notes?.length) return null;
+  return (
+    <div className="check-warnings convert-notes">
+      <p>Converting it to AWML {CURRENT_AWML}, awml convert noted what to do by hand. Notes don&apos;t fail the check.</p>
+      <ul>
+        {notes.map((n) => (
+          <li key={n}>{n}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 // What checking a version's files found, file by file, and the AWML that
 // checked them. A system's page says itself how they were checked, as `intro`.
 export function Checks({
@@ -126,6 +146,7 @@ export function Checks({
             <h2>{f.name}.yaml</h2>
             <p>Checked by AWML {f.checkedBy.tag}</p>
           </div>
+          <ConvertNotes notes={f.notes} />
           <ul className="check-rows">
             {f.rows.map((row) => (
               <li key={row.listed?.id ?? row.name} data-check={row.listed?.id}>

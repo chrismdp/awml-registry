@@ -1,6 +1,6 @@
 import "./flow.css";
 import type { PartLink } from "@/server/part-links";
-import { destination, NEW_TAB } from "../links";
+import { destination, hrefOf, NEW_TAB } from "../links";
 import type { Drawing, Note } from "./drawing";
 import { Arrowheads, LabelGraphic, LineGraphic, NoteIcon, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import { MAX_ZOOM } from "../viewport";
@@ -50,7 +50,7 @@ export function StaticDrawing({
     >
       {defs && <Arrowheads id={id} />}
       {scopes.map((s) => {
-        const href = hrefs[s.id];
+        const href = hrefOf(hrefs, s.id);
         const graphic = <ScopeGraphic scope={s} href={href} />;
         return (
           <g key={s.id} transform={`translate(${s.x}, ${s.y})`} data-scope={s.id} data-in={s.scope}>
@@ -92,12 +92,13 @@ export function StaticDrawing({
   );
 }
 
-// A part's notes behind its icon, read as a tooltip.
+// A part's notes behind its icon, read as a tooltip; a warning mark when one is a gap.
 function Notes({ notes, at }: { notes: Note[]; at: { x: number; y: number } }) {
+  const gap = notes.some((n) => n.gap);
   return (
-    <g className="flow-note" transform={`translate(${at.x}, ${at.y})`} data-note={notes.map((n) => n.id).join(" ")}>
+    <g className="flow-note" transform={`translate(${at.x}, ${at.y})`} data-note={notes.map((n) => n.id).join(" ")} data-gap={gap || undefined}>
       <title>{notes.map((n) => n.text).join("\n\n")}</title>
-      <NoteIcon count={notes.length} />
+      <NoteIcon count={notes.length} gap={gap} />
     </g>
   );
 }

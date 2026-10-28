@@ -1,10 +1,10 @@
-// A workflow's drawing as a graph the browser lays out itself (issue #62),
-// read from the Mermaid text the engine already gives the registry. The
-// engine writes that text in a regular shape: a subgraph for each scope, a
-// node for each part with a class for its kind, a line for each flow (solid)
-// and each use of data (dotted), and a note as a notched node joined to its
-// part by a plain dotted line. This reads that shape back, and nothing more:
-// it is not a Mermaid parser.
+// A workflow's drawing as a graph the server lays out (issue #62), read from
+// the engine's own model of what it draws: `graph`, which gives the parts,
+// the boxes, the lines and the comments as data, with nothing laid out (AWML
+// 0.7.1, issue #69). Every text field the engine gives is exactly as the file
+// wrote it, unescaped, line breaks included, so it reaches the page only as
+// React text or an attribute React escapes: never as HTML, and never in SVG
+// built from strings.
 
 export type PartKind = "trigger" | "context" | "connection" | "surface" | "outside" | "ai" | "code" | "person" | "part";
 
@@ -12,18 +12,28 @@ export type Part = {
   id: string;
   kind: PartKind;
   label: string;
-  // A step's kind of work, such as "draft" or "sort", when its caption gives one.
+  // A step's kind of work, such as "draft" or "sort", or "review" for a review.
   verb?: string;
-  // An outside action's tier, such as "Allow" or "Ask".
+  // An outside action's tier, such as "Allow" or "Ask under £50".
   tier?: string;
   // The scope or box it is drawn in.
   scope?: string;
+  // Marked untrusted in the file: its text may not be what it seems.
+  untrusted?: boolean;
 };
 
 // A scope (dashed, who may see), a place a platform view puts parts (filled,
 // in the colours the engine gives each place), or a workflow's box on a
-// system's map.
-export type Scope = { id: string; label: string; dashed: boolean; scope?: string; fill?: string; stroke?: string };
+// system's map, which names the workflow as owner/slug.
+export type Scope = {
+  id: string;
+  label: string;
+  dashed: boolean;
+  scope?: string;
+  fill?: string;
+  stroke?: string;
+  workflow?: string;
+};
 
 export type LineStyle = "solid" | "dotted" | "thick";
 
@@ -35,190 +45,167 @@ export type Line = {
   label?: string;
   arrowStart: boolean;
   arrowEnd: boolean;
-  // Drawn red by the engine: a line that breaks a rule.
+  // A line that breaks a rule, which the engine draws red.
   broken?: boolean;
+  // A read the design refuses, which ends in a cross.
+  refused?: boolean;
 };
 
 // A note, and the part (or scope) it belongs to: a note tied to several
 // parts is given once for each, and one tied to none belongs to its scope,
-// or, in none, to the whole drawing.
-export type Note = { id: string; text: string; on?: string };
+// or, in none, to the whole drawing. A gap, a comment saying what is
+// "Missing from the design", is a finding: tied to nothing, it belongs to the
+// whole drawing.
+export type Note = { id: string; text: string; on?: string; gap?: true };
 
 export type Graph = { parts: Part[]; scopes: Scope[]; lines: Line[]; notes: Note[] };
 
-const KINDS: Record<string, PartKind | "note"> = {
-  trig: "trigger",
-  ctx: "context",
-  con: "connection",
-  surf: "surface",
-  out: "outside",
+// The engine's graph, as `awml graph` and the WebAssembly's graphJSON give
+// it (AWML's spec, "awml graph"). A field a part, group or line doesn't have
+// is left out.
+export type EngineGraph = {
+  view: string;
+  groups: { id: string; label: string; in?: string; file?: string; published?: string }[];
+  parts: {
+    id: string;
+    kind: string;
+    label: string;
+    in?: string;
+    decider?: string;
+    op?: string;
+    tier?: string;
+    untrusted?: boolean;
+  }[];
+  lines: {
+    from: string;
+    to: string;
+    kind: string;
+    label?: string;
+    points: string;
+    publishes?: boolean;
+    widens?: string[];
+    breaks?: string[];
+  }[];
+  comments: { id: string; label: string; in?: string; gap: boolean; ties: string[] }[];
+  places: { id: string; fill: string; stroke: string }[];
+};
+
+const KINDS: Record<string, PartKind> = {
+  trigger: "trigger",
+  context: "context",
+  connector: "connection",
+  surface: "surface",
+  outside: "outside",
   ai: "ai",
   code: "code",
   person: "person",
-  gap: "note",
+  review: "person",
+  approval: "person",
 };
 
-// Mermaid's escapes, such as #39; for ' and #quot; for ".
-const NAMED: Record<string, string> = { quot: '"', amp: "&", lt: "<", gt: ">", nbsp: " " };
-function unescape(text: string) {
-  return text.replace(/#(\d+|[a-z]+);/g, (whole, code: string) =>
-    /^\d+$/.test(code) ? String.fromCodePoint(Number(code)) : (NAMED[code] ?? whole),
-  );
+// What a review or a standing approval does, said where a step says its kind of work.
+const VERBS: Record<string, string> = { review: "review", approval: "standing approval" };
+
+// The parts a line is dotted into or out of, since what they hold sits beside
+// the path the work takes, as the engine draws it.
+const BESIDE = new Set(["context", "connector", "surface"]);
+
+// A label as one line: each run of whitespace, line breaks included, one
+// space, as the engine's own drawing folds it.
+const folded = (text: unknown) => String(text ?? "").replace(/\s+/g, " ").trim();
+
+// A colour, when it is one: only a hex colour is taken, so nothing but a
+// colour reaches the page's styles.
+const colour = (value: unknown) => (typeof value === "string" && /^#[0-9a-fA-F]{3,8}$/.test(value) ? value.toLowerCase() : undefined);
+
+// The workflow a map's box is, as owner/slug: the name a ref gives it, or the
+// path the registry gave it at, which ends owner/slug.yaml.
+function workflowOf(group: EngineGraph["groups"][number]) {
+  if (group.published) return group.published;
+  const m = /(?:^|\/)([^/]+)\/([^/]+)\.yaml$/.exec(group.file ?? "");
+  return m ? `${m[1]}/${m[2]}` : undefined;
 }
 
-// A label as plain text: a line break as a space, any other tag left out.
-function plain(html: string) {
-  return unescape(html.replace(/<br\s*\/?>/g, " ").replace(/<[^>]*>/g, ""))
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// A node's text, from any of the shapes the engine draws: (["…"]), {{"…"}},
-// ("…"), >"…"], [("…")], ["…"], or @{ shape: …, label: "…" }.
-function nodeText(rest: string): { text: string; shape?: string } | undefined {
-  const at = /^@\{\s*shape:\s*([\w-]+),\s*label:\s*"([^]*)"\s*\}$/.exec(rest);
-  if (at) return { text: at[2], shape: at[1] };
-  const quoted = /^[[({>]+"([^]*)"[\])}]+$/.exec(rest);
-  return quoted ? { text: quoted[1] } : undefined;
-}
-
-// A colour a style gives, such as fill:#e3ebfa, when it is one: only a hex
-// colour is taken, so nothing but a colour reaches the page's styles.
-function colour(style: string, name: string) {
-  return new RegExp(`(?:^|,)${name}:(#[0-9a-fA-F]{3,8})(?:,|$)`).exec(style)?.[1].toLowerCase();
-}
-
-// The red the engine draws a line that breaks a rule in.
-const BROKEN = "#d0342c";
-
-// A line: a, then <?, then -- or -.- or == with more of the same, then >?,
-// an optional |"label"|, then b.
-const LINE = /^(\w+)\s+(<)?(-{2,}|-\.+-|={2,})(>)?(?:\|"([^]*)"\|)?\s+(\w+)$/;
-
-// The text's rows. The engine doesn't escape a line break in a label, so a
-// label may run over several of the text's lines; it does escape a quote, as
-// #34;, so a row runs on until its quotes are closed. Nothing here matches a
-// label with `.`, which stops at a line break. Each line's quotes are counted
-// once, so a label of many lines takes no longer than its length.
-function rows(body: string) {
-  const out: string[] = [];
-  let row: string[] = [];
-  let quotes = 0;
-  for (const piece of body.split("\n")) {
-    row.push(piece);
-    quotes += piece.split('"').length - 1;
-    if (quotes % 2 === 0) {
-      out.push(row.join("\n"));
-      row = [];
-      quotes = 0;
+// The registry's graph of the engine's: its parts with their kinds, a step's
+// kind of work and an outside action's tier; its scopes with their nesting,
+// a platform view's colours and a map's workflows; the lines drawn, each with
+// its style and which ends have arrows; and the comments as notes on what
+// they are tied to. A tie and a hidden line aren't drawn, and nor is a line
+// one of whose ends isn't.
+export function readGraph(g: EngineGraph): Graph {
+  const groups = new Set(g.groups.map((s) => s.id));
+  const places = new Map(g.places.map((p) => [p.id, p]));
+  const dashed = g.view === "security" || g.view === "untrusted";
+  const scopes: Scope[] = g.groups.map((s) => {
+    const place = places.get(s.id);
+    const fill = colour(place?.fill);
+    const stroke = colour(place?.stroke);
+    const workflow = g.view === "map" ? workflowOf(s) : undefined;
+    return {
+      id: s.id,
+      label: folded(s.label),
+      dashed,
+      ...(s.in && groups.has(s.in) ? { scope: s.in } : {}),
+      ...(fill && stroke ? { fill, stroke } : {}),
+      ...(workflow ? { workflow } : {}),
+    };
+  });
+  const kinds = new Map(g.parts.map((p) => [p.id, p.kind]));
+  const parts: Part[] = g.parts.map((p) => {
+    const part: Part = { id: p.id, kind: Object.hasOwn(KINDS, p.kind) ? KINDS[p.kind] : "part", label: folded(p.label) };
+    const verb = p.kind === "ai" || p.kind === "code" || p.kind === "person" ? p.op : Object.hasOwn(VERBS, p.kind) ? VERBS[p.kind] : undefined;
+    if (verb) part.verb = folded(verb);
+    // An outside action's label ends with its tier, after its last colon:
+    // "Fill the basket: Allow under £180".
+    if (p.tier) {
+      const colon = part.label.lastIndexOf(":");
+      part.tier = colon < 0 ? folded(p.tier) : part.label.slice(colon + 1).trim();
+      if (colon >= 0) part.label = part.label.slice(0, colon).trim();
     }
-  }
-  if (row.length) out.push(row.join("\n"));
-  return out;
-}
-
-export function parseMermaid(text: string): Graph {
-  const body = text.replace(/^---\n[\s\S]*?\n---\n/, "");
-  const nodes = new Map<string, { id: string; raw: string; shape?: string; scope?: string }>();
-  const scopes: Scope[] = [];
-  const scopeById = new Map<string, Scope>();
-  const kinds = new Map<string, string>();
-  // Each line at its index, as linkStyle names it.
+    if (p.in && groups.has(p.in)) part.scope = p.in;
+    if (p.untrusted) part.untrusted = true;
+    return part;
+  });
+  const ends = new Set([...kinds.keys(), ...groups]);
   const lines: Line[] = [];
-  const stack: string[] = [];
-  for (const raw of rows(body)) {
-    const row = raw.trim();
-    if (!row || row.startsWith("%%") || /^(flowchart|graph|direction|classDef)\b/.test(row)) continue;
-    let m: RegExpExecArray | null;
-    if ((m = /^subgraph\s+(\w+)\s*\["([^]*)"\]$/.exec(row))) {
-      const scope: Scope = { id: m[1], label: plain(m[2]), dashed: false, ...(stack.length ? { scope: stack.at(-1) } : {}) };
-      scopes.push(scope);
-      scopeById.set(scope.id, scope);
-      stack.push(m[1]);
-    } else if (row === "end") stack.pop();
-    else if ((m = /^class\s+([\w,]+)\s+(\w+)$/.exec(row))) for (const id of m[1].split(",")) kinds.set(id, m[2]);
-    else if ((m = /^style\s+(\w+)\s+([^]*)$/.exec(row))) {
-      const scope = scopeById.get(m[1]);
-      if (!scope) continue;
-      scope.dashed = m[2].includes("stroke-dasharray");
-      const fill = colour(m[2], "fill");
-      const stroke = colour(m[2], "stroke");
-      if (!scope.dashed && fill && stroke) Object.assign(scope, { fill, stroke });
-    } else if ((m = /^linkStyle\s+([\d,]+)\s+([^]*)$/.exec(row))) {
-      const noEnd = m[2].includes("marker-end:none");
-      const broken = colour(m[2], "stroke") === BROKEN;
-      for (const i of m[1].split(",").map(Number)) {
-        const l = lines[i];
-        if (l && noEnd) l.arrowEnd = false;
-        if (l && broken) l.broken = true;
-      }
-    } else if ((m = LINE.exec(row))) {
-      const [, from, start, stroke, end, label, to] = m;
-      lines.push({
-        id: `line-${lines.length}`,
-        from,
-        to,
-        style: stroke.startsWith("=") ? "thick" : stroke.includes(".") ? "dotted" : "solid",
-        ...(label !== undefined ? { label: plain(label) } : {}),
-        arrowStart: Boolean(start),
-        arrowEnd: Boolean(end),
-      });
-    } else if ((m = /^(\w+)([^]*)$/.exec(row))) {
-      const t = nodeText(m[2]);
-      if (t) nodes.set(m[1], { id: m[1], raw: t.text, shape: t.shape, ...(stack.length ? { scope: stack.at(-1) } : {}) });
-    }
+  for (const l of g.lines) {
+    if (l.kind === "tie" || l.kind === "hidden" || !ends.has(l.from) || !ends.has(l.to)) continue;
+    const said = [folded(l.label), ...(l.widens ?? []).map(folded)].filter(Boolean).join(" · ");
+    const label = [said, ...(l.breaks ?? []).map(folded)].filter(Boolean).join(" · ");
+    const style: LineStyle = l.publishes
+      ? "thick"
+      : BESIDE.has(kinds.get(l.from) ?? "") || BESIDE.has(kinds.get(l.to) ?? "")
+        ? "dotted"
+        : "solid";
+    const refused = l.kind === "refused";
+    lines.push({
+      id: `line-${lines.length}`,
+      from: l.from,
+      to: l.to,
+      style,
+      ...(label ? { label } : {}),
+      arrowStart: l.points === "both",
+      arrowEnd: !refused && (l.points === "to" || l.points === "both"),
+      ...(l.breaks?.length ? { broken: true } : {}),
+      ...(refused ? { refused: true } : {}),
+    });
   }
-
-  const isNote = (id: string) => kinds.get(id) === "gap" || nodes.get(id)?.shape === "notch-rect";
-  // Each line by its ends, so finding a note's lines takes no longer than
-  // there are lines.
-  const byEnd = new Map<string, Line[]>();
-  for (const l of lines)
-    for (const end of l.from === l.to ? [l.from] : [l.from, l.to]) {
-      const at = byEnd.get(end);
-      if (at) at.push(l);
-      else byEnd.set(end, [l]);
-    }
   const notes: Note[] = [];
-  for (const n of nodes.values()) {
-    if (!isNote(n.id)) continue;
-    // A note is joined to each part it is tied to by a dotted line with no arrows.
-    const text = plain(n.raw);
-    const tied = (byEnd.get(n.id) ?? []).filter((l) => !l.arrowStart && !l.arrowEnd);
-    for (const l of tied) notes.push({ id: n.id, on: l.to === n.id ? l.from : l.to, text });
-    if (!tied.length) notes.push({ id: n.id, ...(n.scope ? { on: n.scope } : {}), text });
+  for (const c of g.comments) {
+    const text = folded(c.label);
+    const gap = c.gap ? { gap: true as const } : {};
+    const tied = [...new Set(c.ties)].filter((id) => ends.has(id));
+    for (const on of tied) notes.push({ id: c.id, text, on, ...gap });
+    if (tied.length) continue;
+    // A gap tied to nothing is a finding about the whole drawing.
+    if (!c.gap && c.in && groups.has(c.in)) notes.push({ id: c.id, text, on: c.in });
+    else notes.push({ id: c.id, text, ...gap });
   }
-  const parts: Part[] = [...nodes.values()].filter((n) => !isNote(n.id)).map((n) => partOf(n, kinds.get(n.id)));
-  // A line whose ends aren't both drawn is left out, so the layout never
-  // meets a part it doesn't have.
-  const known = new Set([...parts.map((p) => p.id), ...scopes.map((sc) => sc.id)]);
-  return {
-    parts,
-    scopes,
-    lines: lines.filter((l) => known.has(l.from) && known.has(l.to)),
-    notes: notes.filter((n) => !n.on || known.has(n.on)),
-  };
+  return { parts, scopes, lines, notes };
 }
 
-function partOf(n: { id: string; raw: string; shape?: string; scope?: string }, cls: string | undefined): Part {
-  const kind = (cls && KINDS[cls] !== "note" ? KINDS[cls] : undefined) ?? (n.shape === "win-pane" ? "surface" : "part");
-  const part: Part = { id: n.id, kind: kind as PartKind, label: "" };
-  // A step's caption: who decides it, as an emoji, and its kind of work.
-  const caption = /^<small[^>]*>([^]*?)<\/small><br>([^]*)$/.exec(n.raw);
-  if (caption) {
-    const verb = /([a-z][a-z-]*)\s*$/.exec(unescape(caption[1]))?.[1];
-    if (verb) part.verb = verb;
-    part.label = plain(caption[2]);
-  } else part.label = plain(n.raw);
-  // An outside action ends with its tier: "Fill the basket: Allow under £180".
-  const tier = kind === "outside" ? /^([^]*): ((?:Allow|Ask|Block)\b[^]*)$/.exec(part.label) : null;
-  if (tier) {
-    part.label = tier[1];
-    part.tier = tier[2];
-  }
-  if (n.scope) part.scope = n.scope;
-  return part;
-}
+// The engine's graph JSON as the registry's graph.
+export const graphOf = (json: string) => readGraph(JSON.parse(json) as EngineGraph);
 
 const STEPS: PartKind[] = ["ai", "code", "person"];
 
@@ -237,22 +224,5 @@ export function flowOnly(g: Graph): Graph {
     scopes: g.scopes,
     lines: lines.filter((l) => ids.has(l.from) && ids.has(l.to)),
     notes: g.notes.filter((n) => !n.on || ids.has(n.on)),
-  };
-}
-
-// On a system's map, each trigger drawn inside its workflow's box is drawn
-// outside it instead, with a line into the box (#61). The engine will do this
-// itself (chrismdp/awml#122); until then the registry does.
-export function triggersOutside(g: Graph): Graph {
-  const boxes = new Set(g.scopes.filter((s) => !s.dashed).map((s) => s.id));
-  const moving = g.parts.filter((p) => p.kind === "trigger" && p.scope && boxes.has(p.scope));
-  if (moving.length === 0) return g;
-  return {
-    ...g,
-    parts: g.parts.map((p) => (moving.includes(p) ? { ...p, scope: undefined } : p)),
-    lines: [
-      ...g.lines,
-      ...moving.map((p) => ({ id: `into-${p.id}`, from: p.id, to: p.scope!, style: "solid" as const, arrowStart: false, arrowEnd: true })),
-    ],
   };
 }

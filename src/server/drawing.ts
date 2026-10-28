@@ -1,7 +1,7 @@
 // The registry's drawing of a workflow or a system's map (issue #62): the
-// graph read back from the engine's Mermaid text, laid out here on the
-// server with ELK, and sent to the page with every position worked out, so
-// the browser never loads ELK. The page draws it as plain SVG, which needs no
+// engine's graph of what it draws (issue #69), laid out here on the server
+// with ELK, and sent to the page with every position worked out, so the
+// browser never loads ELK. The page draws it as plain SVG, which needs no
 // scripts, and React Flow takes it over to drag, pan and zoom.
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ElkExtendedEdge, ElkNode } from "elkjs/lib/elk-api";
@@ -25,7 +25,7 @@ import {
   type DrawnScope,
   type Point,
 } from "@/components/flow/drawing";
-import { flowOnly, parseMermaid, triggersOutside, type Graph } from "@/components/flow/graph";
+import { flowOnly, graphOf, type Graph } from "@/components/flow/graph";
 import type { PartLink } from "@/server/part-links";
 
 // ELK, made on first use. Its bundled worker takes itself to be inside a web
@@ -178,6 +178,7 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
     dashed: s.dashed,
     ...(s.fill && s.stroke ? { fill: s.fill, stroke: s.stroke } : {}),
     ...(s.scope ? { scope: s.scope } : {}),
+    ...(s.workflow ? { workflow: s.workflow } : {}),
     holds: holding.has(s.id),
     lines: boxes.get(s.id)?.lines ?? [],
     depth: depth.get(s.id) ?? 0,
@@ -245,6 +246,7 @@ export function tooBig(g: Graph) {
   const ties = g.notes.filter((n) => n.on).length;
   const characters =
     [...g.parts, ...g.scopes, ...g.notes].reduce((n, x) => n + ("label" in x ? x.label : x.text).length, 0) +
+    g.parts.reduce((n, p) => n + (p.tier?.length ?? 0), 0) +
     g.lines.reduce((n, l) => n + (l.label?.length ?? 0), 0);
   return (
     g.parts.length + g.scopes.length + notes > LIMITS.parts ||
@@ -262,37 +264,50 @@ export function nesting(g: Graph) {
   return deepest + 1;
 }
 
+// "a", "a and b", "a, b and c".
+const listed = (names: string[]) => (names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`);
+
 // On a system's map, each part joined to workflows' boxes, such as a trigger
-// one workflow fires and another starts on, or data they share, leads to
-// those workflows, as a part with a ref does (#55, #61). `boxes` are the
-// boxes the viewer may open, by their id in the drawing.
-export function mapLinks(d: Drawing, boxes: Record<string, { title: string; address: string; href: string }>): PartLink[] {
+// that starts a workflow, or data they share, leads to those workflows, as a
+// part with a ref does (#55, #61); and an outside action that starts another
+// workflow, by the line to its trigger, leads to the workflow that starts.
+// `boxes` are the boxes the viewer may open, by their id in the drawing.
+export function mapLinks(d: Drawing, given: Record<string, { title: string; address: string; href: string }>): PartLink[] {
+  // Each box by its id, so an id every object inherits, such as constructor, is no box.
+  const box = new Map(Object.entries(given));
+  const ends = (id: string) => d.lines.flatMap((l) => (l.from === id ? [l.to] : l.to === id ? [l.from] : []));
+  const kinds = new Map(d.parts.map((p) => [p.id, p.kind]));
   return d.parts.flatMap((p) => {
-    const joined = [
-      ...new Set(d.lines.flatMap((l) => (l.from === p.id ? [l.to] : l.to === p.id ? [l.from] : [])).filter((id) => boxes[id])),
-    ];
-    if (!joined.length) return [];
-    const titles = joined.map((id) => boxes[id].title);
-    return [
-      {
-        part: p.id,
-        title: `In ${titles.length < 2 ? titles[0] : `${titles.slice(0, -1).join(", ")} and ${titles.at(-1)}`}`,
-        to: joined.map((id) => ({ label: boxes[id].address, href: boxes[id].href })),
-      },
-    ];
+    const joined = [...new Set(ends(p.id).filter((id) => box.has(id)))];
+    const starts =
+      p.kind === "outside"
+        ? [
+            ...new Set(
+              d.lines
+                .filter((l) => l.from === p.id && kinds.get(l.to) === "trigger")
+                .flatMap((l) => ends(l.to))
+                .filter((id) => box.has(id) && !joined.includes(id)),
+            ),
+          ]
+        : [];
+    if (!joined.length && !starts.length) return [];
+    const title = [
+      ...(joined.length ? [`In ${listed(joined.map((id) => box.get(id)!.title))}`] : []),
+      ...(starts.length ? [`Starts ${listed(starts.map((id) => box.get(id)!.title))}`] : []),
+    ].join("\n");
+    return [{ part: p.id, title, to: [...joined, ...starts].map((id) => ({ label: box.get(id)!.address, href: box.get(id)!.href })) }];
   });
 }
 
-// One drawing of the engine's text, the whole of it or Flow only, kept by the
-// SHA-256 of the text, the switch, whether it is a system's map, and the
-// engine that drew the text (see memo.ts), for the 200 drawings used last.
-// A drawing too big to lay out, or one whose layout fails, is kept as that,
-// so it isn't tried again; LIMITS also bounds what the 200 hold.
-const drawingOf = memoise(async (text: string, flow: boolean, map: boolean, _engine: string): Promise<Drawing | Undrawn> => {
+// One drawing of the engine's graph, the whole of it or Flow only, kept by
+// the SHA-256 of the graph's JSON, the switch, and the engine that gave the
+// graph (see memo.ts), for the 200 drawings used last. A drawing too big to
+// lay out, or one whose layout fails, is kept as that, so it isn't tried
+// again; LIMITS also bounds what the 200 hold.
+const drawingOf = memoise(async (json: string, flow: boolean, _engine: string): Promise<Drawing | Undrawn> => {
   try {
-    const parsed = parseMermaid(text);
-    if (tooBig(parsed)) return { undrawn: "too big" };
-    const graph = map ? triggersOutside(parsed) : parsed;
+    const graph = graphOf(json);
+    if (tooBig(graph)) return { undrawn: "too big" };
     return await layOutGraph(flow ? flowOnly(graph) : graph);
   } catch (e) {
     console.error(`[awml] a drawing could not be laid out: ${(e as Error).message}`);
@@ -300,22 +315,19 @@ const drawingOf = memoise(async (text: string, flow: boolean, map: boolean, _eng
   }
 });
 
-// Both drawings a page may show of the engine's text: the whole drawing, and
-// Flow only. Both are laid out here, so the switch needs nothing more from
-// the server. A system's map draws each trigger outside its workflow's box.
-// Never throws: a drawing that can't be laid out says why.
-export async function layOut(text: string, opts: { map?: boolean } = {}): Promise<Drawings | Undrawn> {
+// Both drawings a page may show of the engine's graph, given as its JSON: the
+// whole drawing, and Flow only. Both are laid out here, so the switch needs
+// nothing more from the server. Never throws: a drawing that can't be laid
+// out says why.
+export async function layOut(json: string): Promise<Drawings | Undrawn> {
   const version = JSON.stringify(engine.version);
-  const [full, flow] = await Promise.all([
-    drawingOf(text, false, Boolean(opts.map), version),
-    drawingOf(text, true, Boolean(opts.map), version),
-  ]);
+  const [full, flow] = await Promise.all([drawingOf(json, false, version), drawingOf(json, true, version)]);
   if ("undrawn" in full) return full;
   if ("undrawn" in flow) return flow;
   return { full, flow };
 }
 
 // The whole drawing alone, as the gallery's cards show it.
-export function layOutWhole(text: string): Promise<Drawing | Undrawn> {
-  return drawingOf(text, false, false, JSON.stringify(engine.version));
+export function layOutWhole(json: string): Promise<Drawing | Undrawn> {
+  return drawingOf(json, false, JSON.stringify(engine.version));
 }

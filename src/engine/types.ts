@@ -14,7 +14,9 @@ export type Named = { file: string; source: string };
 // things have no lists at all; src/server/summary.ts reads both the same.
 export type Summary = {
   steps: { ai: number; code: number; person: number };
-  operations: Record<string, number>;
+  // The Go package writes none as null, as AWML 0.7 does for a workflow whose
+  // steps name no operation.
+  operations: Record<string, number> | null;
   outsideActions: { allow: number; ask: number; block: number };
   triggers: number;
   reviews: number;
@@ -33,6 +35,11 @@ export type Summary = {
   // Given several workflows, each part more than one of them holds, by the
   // ref between them, with the titles of the workflows that hold it.
   shared?: { label: string; kind: string; workflows: string[] }[] | null;
+  // Each part marked untrusted, by its label, with the steps and outside
+  // actions its text reaches and the parts that stop it. Given several
+  // workflows, the text follows an outside action into the workflow it
+  // starts (AWML 0.7). Summaries saved before AWML 0.7 have none.
+  untrusted?: { part: string; steps: string[] | null; outsideActions: string[] | null; stoppedBy: string[] | null }[] | null;
 };
 
 // What `awml fit --json` gives: for each platform, whether the workflow fits
@@ -61,13 +68,14 @@ export type ListedCheck = {
   mistakes: string[];
 };
 
-// A file converted to the AWML the engine reads, and the mistakes its rules
-// find in the result; or why it could not be converted at all.
-export type Converted = { file: string; mistakes: string[] } | { error: string };
+// A file converted to the AWML the engine reads, what converting it noted
+// for its author to do by hand, and the mistakes its rules find in the
+// result; or why it could not be converted at all.
+export type Converted = { file: string; notes: string[]; mistakes: string[] } | { error: string };
 
 export interface Engine {
-  // The AWML it was built from: its release, as `git describe --tags` names
-  // it, and its commit (vendor/awml/VERSION).
+  // The AWML it was built from: its release and its commit, as
+  // vendor/awml/version.json pins them.
   version: { tag: string; commit: string };
   // Starts the engine, if it hasn't started, and says when it has; a page
   // starts it without waiting, so its first start overlaps reading the database.
@@ -91,10 +99,11 @@ export interface Engine {
   checksWith(file: Named, others: Named[]): Promise<ListedCheck[]>;
   // One workflow's summary from its files. The files must pass check.
   summarise(files: Files): Promise<Summary>;
-  // Mermaid text for one file that passes check, which the registry reads its
-  // drawing from (src/server/drawing.ts): its security view, or a workflow's
-  // platform view of one implementation.
-  draw(yaml: string, implementation?: string): Promise<string>;
+  // What one file that passes check draws, as AWML's graph JSON, which the
+  // registry lays its drawing out from (src/server/drawing.ts): its security
+  // view, or a workflow's platform view of one implementation. Its text is
+  // unescaped (src/components/flow/graph.ts).
+  graph(yaml: string, implementation?: string): Promise<string>;
   // Where a workflow can run: its design judged against platform
   // descriptions, each named by its own id. With an implementation, its
   // placement is judged instead, each block against the description it
@@ -112,9 +121,10 @@ export interface Engine {
   // What the workflows' summary counts and names across them all, with the
   // parts they share.
   summariseAcross(files: Named[]): Promise<Summary>;
-  // The map: one box per workflow, the parts they share drawn once. A single
-  // workflow draws its security view.
-  drawMap(files: Named[]): Promise<string>;
+  // The map's graph JSON: one box per workflow, each trigger outside its box,
+  // the parts they share drawn once, and a line from each outside action that
+  // starts a workflow to its trigger. A single workflow gives its security view.
+  graphMap(files: Named[]): Promise<string>;
   // Each platform described judged running every workflow given.
   fitAcross(files: Named[], descriptions: string[]): Promise<FitReport>;
 }

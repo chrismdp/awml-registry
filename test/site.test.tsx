@@ -35,7 +35,7 @@ import { pageRequest, renderPage } from "./pages";
 
 // Most of these pages are shown here for versions stored before the registry
 // took only AWML 0.4 files, a 0.2 pair, which they still show, converted when
-// read; test/one-file.test.tsx shows them for 0.6 files. The dinners pair's
+// read; test/one-file.test.tsx shows them for 0.7 files. The dinners pair's
 // views differ, so only its security view converts; bin day's agree, so its
 // platform view converts too, joined with its security view.
 const security = example("legacy/dinners-security.yaml");
@@ -43,12 +43,15 @@ const platform = example("legacy/dinners-platform.yaml");
 const binDayPair = { security: example("legacy/bin-day-security.yaml"), platform: example("legacy/bin-day-platform.yaml") };
 const dinners = example("dinners.yaml");
 
-// A file stored before 0.4 drawn as the engine reads it, converted.
-async function drawnAsRead(file: string) {
+// The graph of a file stored before 0.4, drawn as the engine reads it, converted.
+async function graphAsRead(file: string) {
   const read = await engine.convert([file]);
   if ("error" in read) throw new Error(read.error);
-  return engine.draw(read.file);
+  return JSON.parse(await engine.graph(read.file));
 }
+
+// A graph the native awml printed, as test/fixtures holds it.
+const printedGraph = (name: string) => JSON.parse(example(name));
 
 const withTitle = (title: string) => security.replace("title: The family's dinners", `title: ${title}`);
 
@@ -126,7 +129,7 @@ function summaryWhenStored(files: { security?: string; platform?: string }) {
 }
 
 // Stores a version of the files given, as a version stored before the
-// registry took only 0.4 files, or pushes a 0.6 workflow.
+// registry took only 0.4 files, or pushes a 0.7 workflow.
 async function push(
   owner: string,
   slug: string,
@@ -391,7 +394,7 @@ describe("a workflow's YAML view", () => {
       `${o} / dinners Dinners <b>&</b> Public · Version 1 of 1 Fork ` +
         `Who may see each part Where each part runs YAML Checks ${"error" in reasons ? reasons.error.split("\n").length : 0} mistakes ` +
         "security.yaml Copy Download security.yaml is AWML 0.2, as it was pushed. " +
-        "The registry draws, checks and fits it converted to AWML 0.6. # The family's dinners",
+        "The registry draws, checks and fits it converted to AWML 0.7. # The family's dinners",
     );
     expect(
       tabs(page.html)
@@ -506,15 +509,19 @@ describe("a workflow's Checks view", () => {
     const platformReasons = "error" in reasons ? reasons.error.split("\n") : [];
     expect(platformReasons.length).toBeGreaterThan(0);
     expect(tabs(page.html)[3]).toEqual({ href: `/${o}/dinners/checks`, label: `Checks ${platformReasons.length} mistakes`, selected: true });
+    // AWML 0.7 warns of parts the converted security view links to no trigger, which fail nothing.
+    const converted = await engine.convert([security]);
+    const warned = "file" in converted ? await engine.warnings(converted.file) : [];
+    expect(warned.length).toBeGreaterThan(0);
     expect(text(page.html)).toContain(
       `${o} / dinners The family's dinners Public · Version 1 of 1 Fork Who may see each part Where each part runs YAML Checks ${platformReasons.length} mistakes ` +
         `${CHECKS_INTRO} ` +
-        `security.yaml Checked by AWML ${engine.version.tag} awml check No mistakes ` +
+        `security.yaml Checked by AWML ${engine.version.tag} awml check No mistakes ${warned.length} warnings Warnings don't fail the check. ${warned.join(" ")} ` +
         `platform.yaml Checked by AWML ${engine.version.tag} awml convert ${platformReasons.length} mistakes ${platformReasons.join(" ")} ` +
         CHECKS_END,
     );
     expect(page.html).toContain(
-      'href="https://github.com/chrismdp/awml/blob/aace113ecf4b462a251a7c436684024a4fe7ad3f/SPEC.md#the-file-format"',
+      `href="https://github.com/chrismdp/awml/blob/${engine.version.commit}/SPEC.md#the-file-format"`,
     );
     expect(page.html).not.toContain("<figure");
     expect(page.html).not.toContain("<pre");
@@ -596,7 +603,7 @@ describe("an organisation's inventory", () => {
     expect(inv.rows[0].summary).toEqual(both);
     expect(inv.totals.steps.code).toBe(both.steps.code + one.steps.code);
     expect(inv.totals.outsideActions.ask).toBe(both.outsideActions.ask + one.outsideActions.ask);
-    expect(inv.totals.operations.do).toBe(both.operations.do + one.operations.do);
+    expect(inv.totals.operations?.do ?? 0).toBe((both.operations?.do ?? 0) + (one.operations?.do ?? 0));
     expect(inv.totals.platforms).toBe(both.platforms + one.platforms);
     expect(inv.totals.publishingLines.count).toBe(both.publishingLines.count + one.publishingLines.count);
     expect(inv.totals.publishingLines.labels).toEqual(["standing rule: dinners to carers"]);
@@ -761,20 +768,25 @@ describe("the tokens page", () => {
 });
 
 describe("the engine", () => {
-  it("names the AWML it was built from: the commit vendor/awml/VERSION gives, and its release", () => {
-    const vendored = fs.readFileSync(path.join("vendor", "awml", "VERSION"), "utf8").split("\n")[0];
-    expect(engine.version).toEqual({ tag: "v0.6.0", commit: vendored.split(" ")[1] });
+  it("names the AWML it was built from: the release and commit vendor/awml/version.json pins, which the build matches", () => {
+    const pinned = JSON.parse(fs.readFileSync(path.join("vendor", "awml", "version.json"), "utf8"));
+    expect(engine.version).toEqual({ tag: "v0.7.1", commit: pinned.commit });
+    const built = JSON.parse(fs.readFileSync(path.join("vendor", "awml", "build.json"), "utf8"));
+    expect(built).toEqual({ tag: pinned.tag, commit: pinned.commit, go: pinned.go.version });
   });
 
-  it("gives the verdict, summary and drawing the native awml gives", async () => {
+  it("gives the verdict, summary and graph of the drawing the native awml gives", async () => {
     expect(await engine.check(dinners)).toEqual([]);
-    expect(await engine.check(example("bad-06.yaml"))).toEqual(
-      example("bad-06.check.txt").trim().split("\n").map((l) => l.replace(/^bad-06\.yaml: /, "")),
+    expect(await engine.check(example("bad-07.yaml"))).toEqual(
+      example("bad-07.check.txt").trim().split("\n").map((l) => l.replace(/^bad-07\.yaml: /, "")),
     );
     expect(await engine.check("- just a list\n")).not.toEqual([]);
     expect(await engine.summarise({ workflow: dinners })).toEqual(JSON.parse(example("dinners.summary.json")));
-    expect(await engine.draw(dinners)).toBe(example("dinners.mmd").replace(/\n$/, ""));
-    expect(await engine.draw(dinners, "home")).toBe(example("dinners-home.mmd").replace(/\n$/, ""));
+    expect(JSON.parse(await engine.graph(dinners))).toEqual(printedGraph("dinners.graph.json"));
+    expect(JSON.parse(await engine.graph(dinners, "home"))).toEqual(printedGraph("dinners-home.graph.json"));
+    // A map: the bakery's stock count starts its supplier order with an outside action.
+    const bakery = ["bakery-stock.yaml", "bakery-order.yaml"].map((file) => ({ file, source: example(file) }));
+    expect(JSON.parse(await engine.graphMap(bakery))).toEqual(printedGraph("bakery-map.graph.json"));
   });
 
   it("gives AWML's own file with mistakes the messages the native awml gives", async () => {
@@ -786,19 +798,19 @@ describe("the engine", () => {
     );
   });
 
-  it("reads only AWML 0.6, and converts the files of versions stored before as the native awml convert does", async () => {
+  it("reads only AWML 0.7, and converts the files of versions stored before as the native awml convert does", async () => {
     expect(await engine.check(security)).toEqual([
       'awml is "0.2", which this release no longer reads: upgrade the file with awml convert',
     ]);
-    expect(await drawnAsRead(security)).toBe(example("legacy/dinners-security.mmd").replace(/\n$/, ""));
+    expect(await graphAsRead(security)).toEqual(printedGraph("legacy/dinners-security.graph.json"));
     const joined = await engine.convert([binDayPair.security, binDayPair.platform]);
     if ("error" in joined) throw new Error(joined.error);
     expect(joined.mistakes).toEqual([]);
-    expect(await engine.draw(joined.file, "default")).toBe(example("legacy/bin-day-platform.mmd").replace(/\n$/, ""));
+    expect(JSON.parse(await engine.graph(joined.file, "default"))).toEqual(printedGraph("legacy/bin-day-platform.graph.json"));
     expect(await engine.convert([platform])).toEqual({
       error: "a platform view converts only with its security view: awml convert security.yaml platform.yaml",
     });
-    expect(await engine.convert([dinners])).toEqual({ file: dinners, mistakes: [] });
+    expect(await engine.convert([dinners])).toEqual({ file: dinners, notes: [], mistakes: [] });
   });
 });
 

@@ -5,6 +5,12 @@ import type { PartLink } from "@/server/part-links";
 
 const PART = /^[A-Za-z][A-Za-z0-9_]*$/;
 
+// Where a part or a box leads, by its id, when it leads anywhere. Only the
+// object's own keys count, so an id such as constructor or toString, which
+// every object inherits, leads nowhere.
+export const hrefOf = (hrefs: Record<string, string>, id: string): string | undefined =>
+  Object.hasOwn(hrefs, id) ? hrefs[id] : undefined;
+
 // Where following a linked part goes: straight to its one workflow, a menu
 // of several, or nowhere.
 export function destination(link: PartLink): string | "menu" | null {

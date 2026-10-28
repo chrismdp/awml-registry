@@ -1,129 +1,170 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { flowOnly, parseMermaid, triggersOutside, type Graph } from "@/components/flow/graph";
+import { parse } from "yaml";
+import { flowOnly, graphOf, readGraph, type EngineGraph, type Graph } from "@/components/flow/graph";
+import { engine } from "@/engine";
 
-// The Mermaid text AWML 0.6.0's engine draws, as the registry gets it: the
-// security view of chrismdp/issue-to-pull-request (version 20 on awml.io),
-// the map of the factory system it is in, and the dinners example's security
-// view, whose scopes nest three deep.
+// The graph AWML 0.7.1's native `awml graph` prints, as the registry gets it from the engine
+// (npm run engine:update writes them): the security view of the registry's own factory,
+// chrismdp/issue-to-pull-request, the map of the factory system it is in, the dinners example's
+// security view and its home implementation, and the bakery's map, where one workflow starts
+// another with an outside action. What each test expects is read from the YAML the graph is of.
 const fixture = (name: string) => fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8");
-const issue = parseMermaid(fixture("flow/issue-to-pull-request.mmd"));
-const map = parseMermaid(fixture("flow/factory-map.mmd"));
-const dinners = parseMermaid(fixture("dinners.mmd"));
+const issueFile = fixture("flow/chrismdp/issue-to-pull-request.yaml");
+const issue = graphOf(fixture("flow/issue-to-pull-request.graph.json"));
+const map = graphOf(fixture("flow/factory-map.graph.json"));
+const dinnersFile = fixture("dinners.yaml");
+const dinners = graphOf(fixture("dinners.graph.json"));
+const bakery = graphOf(fixture("bakery-map.graph.json"));
+
+type Doc = {
+  scopes?: { id: string; label: string; in?: string }[];
+  parts: { id: string; kind: string; label: string; op?: string; in?: string }[];
+  lines: { from: string; to: string; kind: string; label?: string }[];
+};
+const doc = (file: string) => parse(file) as Doc;
 
 const part = (g: Graph, id: string) => g.parts.find((p) => p.id === id);
 const line = (g: Graph, from: string, to: string) => g.lines.find((l) => l.from === from && l.to === to);
+const squash = (s: string) => s.replace(/\s+/g, " ").trim();
 
-describe("reading a drawing's graph from the engine's Mermaid text", () => {
-  it("reads every part with its kind and its label as plain text", () => {
-    expect(issue.parts).toHaveLength(23);
-    expect(part(issue, "comment")).toEqual({ id: "comment", kind: "trigger", label: "The build label is added to an issue", scope: "public" });
-    expect(part(issue, "repo")).toMatchObject({
-      kind: "context",
-      label: "The spec, guide, code, AGENTS.md and REVIEW.md, which says what failure looks like here",
-    });
-    expect(part(issue, "token")).toMatchObject({ kind: "connection", label: "The repository, through its own Actions token" });
-    expect(part(dinners, "screen")).toMatchObject({ kind: "surface", label: "Kitchen screen" });
+// The registry's name for each of AWML's kinds of part.
+const KIND: Record<string, string> = { connector: "connection", review: "person", approval: "person", fork: "part" };
+
+describe("reading a drawing's graph from the engine", () => {
+  it("reads every part but a comment, with its kind, its label and the scope it is in", () => {
+    const parts = doc(issueFile).parts.filter((p) => p.kind !== "comment");
+    expect(issue.parts.map((p) => p.id)).toEqual(parts.map((p) => p.id));
+    for (const p of parts) {
+      const read = part(issue, p.id)!;
+      expect(read.kind, p.id).toBe(KIND[p.kind] ?? p.kind);
+      // A trigger given no scope is drawn beside the part its first line leads to.
+      const first = doc(issueFile).lines.find((l) => l.from === p.id);
+      const beside = parts.find((q) => q.id === first?.to)?.in;
+      expect(read.scope, p.id).toBe(p.in ?? (p.kind === "trigger" ? beside : undefined));
+      expect(read.tier ? `${read.label}: ${read.tier}` : read.label, p.id).toBe(squash(p.label));
+    }
+    expect(part(issue, "comment")?.scope).toBe("public");
   });
 
-  it("reads a step's decider and verb from its caption, and an outside action's tier", () => {
-    expect(part(issue, "build")).toMatchObject({
-      kind: "ai",
-      verb: "draft",
-      label: "Write the change test first, then redraw the examples it alters and picture, before and after, those that look different",
-    });
-    expect(part(issue, "who")).toMatchObject({ kind: "code", verb: "sort", label: "Sort by rule: is the label build?" });
-    expect(part(dinners, "approve")).toMatchObject({ kind: "person", verb: "review", label: "Owen's yes to the exact basket" });
-    // A step whose kind of work isn't given has no verb.
-    expect(part(dinners, "plan")).toEqual({ id: "plan", kind: "ai", label: "Plan next week's dinners", scope: "family" });
+  it("reads a step's kind of work, and an outside action's tier apart from its label", () => {
+    for (const p of doc(issueFile).parts.filter((p) => ["ai", "code", "person"].includes(p.kind)))
+      expect(part(issue, p.id)?.verb, p.id).toBe(p.op);
     expect(part(issue, "status")).toMatchObject({ kind: "outside", label: "Post or edit the build's status comment", tier: "Allow" });
-    expect(part(dinners, "basket")).toMatchObject({ label: "Fill the basket", tier: "Allow under £180" });
+    // A tier with words after it keeps them.
+    const g = readGraph({
+      view: "security",
+      groups: [],
+      parts: [{ id: "basket", kind: "outside", label: "Fill the basket: Allow under £180", tier: "Allow" }],
+      lines: [],
+      comments: [],
+      places: [],
+    });
+    expect(g.parts[0]).toEqual({ id: "basket", kind: "outside", label: "Fill the basket", tier: "Allow under £180" });
   });
 
-  it("reads scopes with their nesting, and which part is in which", () => {
-    expect(issue.scopes).toEqual([{ id: "public", label: "public: anyone who reads the repository", dashed: true }]);
-    expect(dinners.scopes).toEqual([
-      { id: "carers", label: "carers: + June, Beth", dashed: true },
-      { id: "family", label: "family: parents, kids", dashed: true, scope: "carers" },
-      { id: "household", label: "household: parents", dashed: true, scope: "family" },
-    ]);
-    expect(part(dinners, "calendar")?.scope).toBe("carers");
-    expect(part(dinners, "favourites")?.scope).toBe("family");
-    expect(part(dinners, "bank")?.scope).toBe("household");
+  it("reads scopes with their nesting, dashed in a security view", () => {
+    expect(dinners.scopes).toEqual(
+      (doc(dinnersFile).scopes ?? []).map((s) => ({ id: s.id, label: s.label, dashed: true, ...(s.in ? { scope: s.in } : {}) })),
+    );
   });
 
-  it("reads solid, dotted and thick lines, their labels, and which ends have arrows", () => {
-    expect(issue.lines).toHaveLength(37);
-    expect(line(issue, "comment", "who")).toMatchObject({ style: "solid", label: "the label", arrowStart: false, arrowEnd: true });
-    expect(line(issue, "who", "started")).toMatchObject({ label: "[build]" });
-    expect(line(issue, "repo", "build")).toMatchObject({ style: "dotted", arrowStart: false, arrowEnd: true });
-    expect(line(issue, "repo", "build")?.label).toBeUndefined();
-    expect(line(issue, "started", "status")).toMatchObject({ style: "solid", arrowStart: false, arrowEnd: true });
-    // Two-way lines whose end arrow the engine takes off with linkStyle.
-    expect(line(issue, "build", "findings")).toMatchObject({ style: "dotted", label: "what the reviews found", arrowStart: true, arrowEnd: false });
-    expect(line(issue, "token", "status")).toMatchObject({ style: "dotted", arrowStart: true, arrowEnd: false });
-    expect(line(issue, "weigh", "findings")).toMatchObject({ style: "dotted", arrowStart: false, arrowEnd: true });
-    expect(line(dinners, "screen", "mealplan")).toMatchObject({
+  it("draws every line but a tie, each solid, dotted into or out of what holds information, or thick where it publishes", () => {
+    const lines = doc(issueFile).lines.filter((l) => l.kind !== "tie" && l.kind !== "hidden");
+    expect(issue.lines.map((l) => [l.from, l.to])).toEqual(lines.map((l) => [l.from, l.to]));
+    const kinds = new Map(doc(issueFile).parts.map((p) => [p.id, p.kind]));
+    for (const l of lines) {
+      const beside = ["context", "connector", "surface"].some((k) => kinds.get(l.from) === k || kinds.get(l.to) === k);
+      expect(line(issue, l.from, l.to), `${l.from} ${l.to}`).toMatchObject({
+        style: beside ? "dotted" : "solid",
+        arrowStart: false,
+        arrowEnd: true,
+        ...(l.label ? { label: squash(l.label) } : {}),
+      });
+    }
+    // The standing rule publishes: thick, its label followed by what it widens.
+    expect(line(dinners, "mealplan", "screen")).toMatchObject({
       style: "thick",
       label: "standing rule: dinners to carers · adds June and Beth",
-      arrowStart: true,
-      arrowEnd: false,
+      arrowEnd: true,
     });
   });
 
-  it("takes notes out of the drawing, each with the part it belongs to", () => {
-    expect(issue.notes).toHaveLength(8);
-    expect(issue.notes.find((n) => n.id === "strangers")).toEqual({
-      id: "strangers",
-      on: "bring",
-      text: "Anyone can comment, but the bring-in step passes on only the comments of the owner, members and collaborators, so strangers' text never reaches the draft step. AWML can't mark this yet (awml #5)",
-    });
-    // A note drawn outside every scope belongs to its part all the same.
-    expect(issue.notes.find((n) => n.id === "label")?.on).toBe("comment");
-    expect(dinners.notes).toEqual([
-      { id: "screen_gap", on: "screen", text: "Missing from the design: no scheduled task keeps the screen current" },
-    ]);
+  it("puts each comment on the parts it is tied to, and marks a gap, which says what is missing from the design", () => {
+    const comments = doc(issueFile).parts.filter((p) => p.kind === "comment");
+    const ties = doc(issueFile).lines.filter((l) => l.kind === "tie");
+    expect(issue.notes).toHaveLength(ties.length);
+    for (const c of comments) {
+      const on = ties.flatMap((t) => (t.from === c.id ? [t.to] : t.to === c.id ? [t.from] : []));
+      expect(issue.notes.filter((n) => n.id === c.id), c.id).toEqual(on.map((p) => ({ id: c.id, on: p, text: squash(c.label) })));
+    }
     // No note is a part, and no line leads to one.
     const notes = new Set(issue.notes.map((n) => n.id));
     expect(issue.parts.filter((p) => notes.has(p.id))).toEqual([]);
     expect(issue.lines.filter((l) => notes.has(l.from) || notes.has(l.to))).toEqual([]);
+    expect(dinners.notes).toEqual([
+      { id: "screen_gap", on: "screen", text: "Missing from the design: no scheduled task keeps the screen current", gap: true },
+    ]);
   });
 
   it("reads the colours the engine gives each place a platform view puts parts", () => {
-    const home = parseMermaid(fixture("dinners-home.mmd"));
-    expect(home.scopes.find((s) => s.id === "server")).toEqual({
-      id: "server",
-      label: "Server: claude-sonnet-4-5",
-      dashed: false,
-      fill: "#e3ebfa",
-      stroke: "#b9c8e8",
-    });
-    expect(home.scopes.find((s) => s.id === "banking")).toMatchObject({ fill: "#f6e3ea", stroke: "#e3bccb" });
+    const home = graphOf(fixture("dinners-home.graph.json"));
+    expect(home.scopes.find((s) => s.id === "server")).toEqual({ id: "server", label: "Server: claude-sonnet-4-5", dashed: false, fill: "#e3ebfa", stroke: "#b9c8e8" });
+    expect(home.scopes.every((s) => s.fill && s.stroke && !s.dashed)).toBe(true);
     // A security view's scopes are dashed, and keep no colours.
     expect(dinners.scopes.every((s) => s.fill === undefined)).toBe(true);
   });
 
-  it("takes only a colour from a style, and marks a line the engine draws red as breaking a rule", () => {
-    // The registry draws only files that pass check, so no stored drawing has a red line; this
-    // is the style the engine gives one (stroke #d0342c, in vendor/awml/awml.wasm).
-    const g = parseMermaid(
-      'flowchart TB\n  subgraph p["P"]\n    a("A")\n    b("B")\n  end\n  a --> b\n  a -.-> b\n  style p fill:url(javascript:x),stroke:#123456\n  linkStyle 1 stroke:#d0342c,stroke-width:2.5px,color:#b0271f',
-    );
-    expect(g.lines.map((l) => l.broken ?? false)).toEqual([false, true]);
-    expect(g.scopes[0]).toEqual({ id: "p", label: "P", dashed: false });
+  it("takes only a colour for a place, draws a line that breaks a rule red, a refused read with a cross, and no hidden line", () => {
+    // The registry draws only files that pass check, so no stored drawing has a red line yet.
+    const g = readGraph({
+      view: "platform",
+      groups: [{ id: "p", label: "P" }],
+      parts: [
+        { id: "a", kind: "code", label: "A", in: "p", decider: "code", op: "do" },
+        { id: "b", kind: "context", label: "B", in: "p" },
+        { id: "c", kind: "surface", label: "C", in: "p" },
+      ],
+      lines: [
+        { from: "a", to: "b", kind: "data", points: "to", label: "the list", publishes: true, widens: ["adds June"], breaks: ["a do step must not publish"] },
+        { from: "b", to: "a", kind: "refused", points: "to" },
+        { from: "a", to: "c", kind: "hidden", points: "none" },
+      ],
+      comments: [],
+      places: [{ id: "p", fill: "url(javascript:x)", stroke: "#123456" }],
+    });
+    expect(g.scopes).toEqual([{ id: "p", label: "P", dashed: false }]);
+    expect(g.lines).toEqual([
+      { id: "line-0", from: "a", to: "b", style: "thick", label: "the list · adds June · a do step must not publish", arrowStart: false, arrowEnd: true, broken: true },
+      { id: "line-1", from: "b", to: "a", style: "dotted", arrowStart: false, arrowEnd: false, refused: true },
+    ]);
   });
 
-  it("reads a system's map: a box per workflow, and lines to and from the boxes", () => {
-    expect(map.scopes.map((s) => [s.id, s.label, s.dashed])).toEqual([
-      ["w1", "An issue becomes a pull request", false],
-      ["w2", "A pull request lands once CI has run", false],
-      ["w3", "A failed build tries again", false],
+  it("reads a system's map: a box per workflow, named by its owner/slug, each trigger outside its box", () => {
+    expect(map.scopes.map((s) => [s.id, s.label, s.dashed, s.workflow])).toEqual([
+      ["w1", "An issue becomes a pull request", false, "chrismdp/issue-to-pull-request"],
+      ["w2", "A pull request lands once CI has run", false, "chrismdp/land-a-pull-request"],
+      ["w3", "A failed build tries again", false, "chrismdp/retry-a-build"],
     ]);
-    expect(part(map, "w1_comment")).toMatchObject({ kind: "trigger", scope: "w1" });
-    expect(line(map, "s1", "w1")).toMatchObject({ style: "solid" });
-    expect(line(map, "w3", "s1")).toMatchObject({ style: "solid" });
-    expect(map.lines).toHaveLength(20);
+    expect(part(map, "w1_comment")).toMatchObject({ kind: "trigger" });
+    expect(part(map, "w1_comment")?.scope).toBeUndefined();
+    expect(line(map, "w1_comment", "w1")).toMatchObject({ style: "solid", arrowEnd: true });
+    // A line between a workflow and a part it shares points each way it leads.
+    expect(line(map, "w1", "s1")).toMatchObject({ style: "dotted", arrowStart: true, arrowEnd: true });
+    expect(line(map, "w2", "s1")).toMatchObject({ style: "dotted", arrowStart: false, arrowEnd: true });
+  });
+
+  it("draws an outside action that starts another workflow in its own box, with a line to the trigger it starts", () => {
+    expect(part(bakery, "w1_start")).toEqual({ id: "w1_start", kind: "outside", label: "Start the supplier order", tier: "Allow", scope: "w1" });
+    expect(part(bakery, "w2_low")).toEqual({ id: "w2_low", kind: "trigger", label: "Flour, butter or sugar runs low" });
+    expect(line(bakery, "w1_start", "w2_low")).toMatchObject({ style: "solid", arrowEnd: true });
+    expect(line(bakery, "w2_low", "w2")).toMatchObject({ style: "solid", arrowEnd: true });
+    // The engine is given each file at a path ending owner/slug.yaml: here the file's own name.
+    expect(bakery.scopes.map((s) => s.workflow)).toEqual([undefined, undefined]);
+    // On the factory's map, each try that fails starts a retry.
+    expect(line(map, "w1_tryfailed", "w3_tryfailed")).toMatchObject({ style: "solid", arrowEnd: true });
+    expect(line(map, "w2_tryfailed", "w3_tryfailed")).toMatchObject({ style: "solid", arrowEnd: true });
   });
 });
 
@@ -135,14 +176,15 @@ describe("Flow only", () => {
     // Connections are reached only by dotted lines, so none is left.
     expect(flow.parts.filter((p) => p.kind === "connection")).toEqual([]);
     // Every step stays, and every trigger and outside action with a line.
-    expect(flow.parts.filter((p) => ["ai", "code", "person"].includes(p.kind))).toHaveLength(10);
+    const steps = doc(issueFile).parts.filter((p) => ["ai", "code", "person"].includes(p.kind));
+    expect(flow.parts.filter((p) => ["ai", "code", "person"].includes(p.kind))).toHaveLength(steps.length);
     expect(part(flow, "pr")).toBeDefined();
     expect(part(flow, "comment")).toBeDefined();
     expect(flow.lines).toHaveLength(issue.lines.filter((l) => l.style !== "dotted").length);
   });
 
   it("keeps the notes of the parts it keeps", () => {
-    // The GitHub App's note goes with it; the kitchen screen's goes with the screen.
+    // The GitHub App's note goes with it; the kitchen screen's gap goes with the screen.
     expect(flowOnly(issue).notes.map((n) => n.on).sort()).toEqual(["bring", "build", "comment", "gate", "open", "review", "started"]);
     expect(flowOnly(dinners).notes).toEqual([]);
   });
@@ -154,100 +196,86 @@ describe("Flow only", () => {
   });
 });
 
-describe("a map's triggers, outside their workflow's box", () => {
-  it("moves each trigger out of its box, with a line into it", () => {
-    const moved = triggersOutside(map);
-    expect(part(moved, "w1_comment")?.scope).toBeUndefined();
-    expect(line(moved, "w1_comment", "w1")).toMatchObject({ style: "solid", arrowEnd: true });
-    expect(moved.lines).toHaveLength(map.lines.length + 1);
-  });
-
-  it("leaves a drawing with no workflow boxes as it is", () => {
-    expect(triggersOutside(issue)).toEqual(issue);
-  });
-});
-
-describe("labels that break lines", () => {
-  // The engine leaves a line break in a label as it is, inside its quotes, and writes a quote
-  // as #34;, so a row runs on while a quote is open: a label's line that says end, or holds a
-  // line separator, is text.
-  const broken = parseMermaid(
-    [
-      "flowchart TB",
-      '  subgraph home["home#58; the',
-      "end",
-      'family"]',
-      "    direction TB",
-      '    tick(["Every end morning"])',
-      '    step("<small>⚙️ 🛠️ do</small><br>Do\r',
-      'it #34;quoted#34;")',
-      '    c1@{ shape: notch-rect, label: "Tied',
-      'to two" }',
-      "  end",
-      '  c2@{ shape: notch-rect, label: "Tied to nothing" }',
-      '  tick -->|"first',
-      'second"| step',
-      "  step -.- c1",
-      "  tick -.- c1",
-      "  c2 --> step",
-      "  tick --> ghost",
-      "  class tick trig",
-      "  class step code",
-      "  class c1,c2 gap",
-      "  style home fill:transparent,stroke:#8a93a3,stroke-dasharray:6 4,color:#3d434f",
-    ].join("\n"),
-  );
-
-  it("reads a label over several rows, a line that says end in it ending nothing", () => {
-    expect(broken.scopes).toEqual([{ id: "home", label: "home: the end family", dashed: true }]);
-    expect(broken.parts).toEqual([
+describe("text as the file wrote it", () => {
+  // The engine's graph gives every label exactly as the file wrote it, unescaped, line breaks
+  // included: the registry folds each run of whitespace into one space, and escapes nothing
+  // itself, since the page shows text only as text (test/drawing-frame.test.tsx).
+  it("folds line breaks in labels, a line that says end in one ending nothing", async () => {
+    const g = graphOf(await engine.graph(fixture("label-end.yaml")));
+    expect(g.scopes).toEqual([{ id: "home", label: "home: the end family", dashed: true }]);
+    expect(g.parts).toEqual([
       { id: "tick", kind: "trigger", label: "Every end morning", scope: "home" },
       { id: "step", kind: "code", verb: "do", label: 'Do it "quoted"', scope: "home" },
     ]);
-    expect(broken.lines.map((l) => [l.from, l.to, l.label])).toEqual([["tick", "step", "first second"]]);
   });
 
-  it("puts a comment tied to two parts on both, and one tied to nothing on the whole drawing", () => {
-    expect(broken.notes).toEqual([
-      { id: "c1", on: "step", text: "Tied to two" },
-      { id: "c1", on: "tick", text: "Tied to two" },
+  it("puts a comment tied to two parts on both, and one tied to nothing on the whole drawing", async () => {
+    const g = graphOf(await engine.graph(fixture("label-folded.yaml")));
+    expect(g.notes).toEqual([
+      { id: "c1", on: "step", text: "Tied to two parts" },
+      { id: "c1", on: "note", text: "Tied to two parts" },
       { id: "c2", text: "Tied to nothing" },
     ]);
+    expect(g.lines.map((l) => [l.from, l.to, l.label])).toEqual([
+      ["tick", "step", "first second"],
+      ["step", "note", undefined],
+    ]);
     // Flow only keeps the notes of the whole drawing.
-    expect(flowOnly(broken).notes.filter((n) => !n.on)).toEqual([{ id: "c2", text: "Tied to nothing" }]);
+    expect(flowOnly(g).notes.filter((n) => !n.on)).toEqual([{ id: "c2", text: "Tied to nothing" }]);
   });
 
-  it("reads a label of many lines in time growing with its length", () => {
-    const start = performance.now();
-    const many = parseMermaid(`flowchart TB\n  a("${"line\n".repeat(100_000)}end")\n  b("B")\n  a --> b\n  class a,b code`);
-    expect(performance.now() - start).toBeLessThan(1_000);
-    expect(many.parts.map((p) => p.id)).toEqual(["a", "b"]);
-    expect(many.parts[0].label).toBe(`${"line ".repeat(100_000)}end`);
-    expect(many.lines).toHaveLength(1);
+  it("puts a gap tied to nothing on the whole drawing, marked as a gap, even in a scope", () => {
+    const g = readGraph({
+      view: "security",
+      groups: [{ id: "home", label: "home: the family" }],
+      parts: [{ id: "a", kind: "code", label: "A", in: "home", decider: "code", op: "do" }],
+      lines: [],
+      comments: [
+        { id: "gap", label: "Missing from the design: who checks it", in: "home", gap: true, ties: [] },
+        { id: "aside", label: "An aside", in: "home", gap: false, ties: [] },
+      ],
+      places: [],
+    });
+    expect(g.notes).toEqual([
+      { id: "gap", text: "Missing from the design: who checks it", gap: true },
+      { id: "aside", text: "An aside", on: "home" },
+    ]);
   });
 
-  it("reads many notes, each tied to parts, and a style for every line, in time growing with the text", () => {
-    // 20,000 comments, each tied to two parts, and every line given a style: looking up each
-    // note's lines, or each styled line, among all of them took time growing with the square.
+  it("reads a graph of many notes, each tied to parts, in time growing with its size", () => {
     const n = 20_000;
-    const rows = ["flowchart TB", '  a("A")', '  b("B")', "  a --> b"];
-    for (let i = 0; i < n; i++) rows.push(`  c${i}@{ shape: notch-rect, label: "Note ${i}" }`, `  a -.- c${i}`, `  c${i} -.- b`);
-    rows.push("  class a,b code", `  linkStyle ${Array.from({ length: 2 * n + 1 }, (_, i) => i).join(",")} stroke-dasharray:3,marker-end:none`);
+    const g: EngineGraph = {
+      view: "security",
+      groups: [],
+      parts: [
+        { id: "a", kind: "code", label: "A" },
+        { id: "b", kind: "code", label: "B" },
+      ],
+      lines: [{ from: "a", to: "b", kind: "start", points: "to" }],
+      comments: Array.from({ length: n }, (_, i) => ({ id: `c${i}`, label: `Note\n${i}`, gap: false, ties: ["a", "b"] })),
+      places: [],
+    };
     const start = performance.now();
-    const many = parseMermaid(rows.join("\n"));
+    const many = readGraph(g);
     expect(performance.now() - start).toBeLessThan(1_000);
     expect(many.notes).toHaveLength(2 * n);
     expect(many.notes.slice(0, 2)).toEqual([
       { id: "c0", on: "a", text: "Note 0" },
       { id: "c0", on: "b", text: "Note 0" },
     ]);
-    expect(many.lines).toEqual([{ id: "line-0", from: "a", to: "b", style: "solid", arrowStart: false, arrowEnd: false }]);
+    expect(many.lines).toEqual([{ id: "line-0", from: "a", to: "b", style: "solid", arrowStart: false, arrowEnd: true }]);
   });
 
-  it("leaves out a line one of whose ends isn't drawn: from a note, or to nothing the text names", () => {
-    expect(line(broken, "c2", "step")).toBeUndefined();
-    expect(line(broken, "tick", "ghost")).toBeUndefined();
-    const ends = new Set([...broken.parts.map((p) => p.id), ...broken.scopes.map((s) => s.id)]);
-    for (const l of broken.lines) expect(ends.has(l.from) && ends.has(l.to), l.id).toBe(true);
+  it("leaves out a line or a tie one of whose ends isn't drawn", () => {
+    const g = readGraph({
+      view: "security",
+      groups: [],
+      parts: [{ id: "a", kind: "code", label: "A" }],
+      lines: [{ from: "a", to: "ghost", kind: "start", points: "to" }],
+      comments: [{ id: "c", label: "On a ghost", gap: false, ties: ["ghost"] }],
+      places: [],
+    });
+    expect(g.lines).toEqual([]);
+    expect(g.notes).toEqual([{ id: "c", text: "On a ghost" }]);
   });
 });

@@ -25,7 +25,7 @@ import type { PartLink } from "@/server/part-links";
 import { pointAlong, squareRoute, type Drawing, type DrawnLine, type DrawnPart, type DrawnScope, type Note, type Point, type Rect } from "./drawing";
 import { LabelGraphic, LineGraphic, NoteIcon, NOTE_R, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import { startPhysics, type Body, type Physics } from "./physics";
-import { Press } from "../links";
+import { hrefOf, Press } from "../links";
 import { notesBy, wholeNotes } from "./StaticDrawing";
 
 // React Flow drawing what the server laid out, so a dragged part takes its
@@ -248,12 +248,12 @@ function Canvas(p: FlowCanvasProps) {
   const centre = (n: Node) => ({ x: n.position.x + (n.width ?? 0) / 2, y: n.position.y + (n.height ?? 0) / 2 });
   const onNodeClick: NodeMouseHandler<FlowNode> = (e, node) => {
     if (!press.current.followsClick() || (e.target as Element).closest("button, a")) return;
-    const follows = node.type === "part" ? shared.links.has(node.id) : Boolean(shared.hrefs[node.id]);
+    const follows = node.type === "part" ? shared.links.has(node.id) : Boolean(hrefOf(shared.hrefs, node.id));
     if (follows) p.onFollow(node.id, e);
   };
   const onAuxClick = (e: MouseEvent) => {
     const id = (e.target as Element).closest(".react-flow__node")?.getAttribute("data-id");
-    if (e.button !== 1 || !id || (!shared.links.has(id) && !shared.hrefs[id])) return;
+    if (e.button !== 1 || !id || (!shared.links.has(id) && !hrefOf(shared.hrefs, id))) return;
     e.preventDefault();
     p.onFollow(id, e);
   };
@@ -348,8 +348,11 @@ export function labelled(n: FlowNode, shared: Shared): FlowNode {
     const label = n.data.part.lines.join(" ");
     return { ...n, ...a11y(label, shared.links.get(n.id), undefined, shared.menuFor === n.id), data: { ...n.data, ...shared } };
   }
-  if (n.type === "scope" && !n.data.hull && !n.data.scope.holds)
-    return { ...n, ...a11y(n.data.scope.lines.join(" "), undefined, shared.hrefs[n.id], false), data: { ...n.data, ...shared } };
+  // A workflow's box on a map is a link to its page, whether or not it holds the outside actions
+  // that start other workflows, round which it is drawn as the soft box of a scope.
+  const href = hrefOf(shared.hrefs, n.id);
+  if (n.type === "scope" && (href || (!n.data.hull && !n.data.scope.holds)))
+    return { ...n, ...a11y(n.data.scope.lines.join(" ") || n.data.scope.name, undefined, href, false), data: { ...n.data, ...shared } };
   return { ...n, data: { ...n.data, ...shared } } as FlowNode;
 }
 
@@ -426,16 +429,18 @@ function linesOf(d: Drawing, id: string): FlowEdge[] {
 }
 
 // The note marks of a part or a scope: the same icon as the server's SVG, as a
-// button a keyboard reaches. Hovering shows the note; a click or a tap opens it.
+// button a keyboard reaches, a warning mark when one of its notes is a gap.
+// Hovering shows the note; a click or a tap opens it.
 export function NoteButton({ title, notes, at, onNote }: { title: string; notes: Note[]; at: Point; onNote: Shared["onNote"] }) {
   const [tip, setTip] = useState(false);
+  const gap = notes.some((n) => n.gap);
   return (
     <>
       <button
         type="button"
         className="flow-note-mark nodrag nopan"
         style={{ left: at.x - NOTE_R, top: at.y - NOTE_R }}
-        aria-label={`Note on ${title}`}
+        aria-label={`${gap ? "Gap in the design" : "Note"} on ${title}`}
         onClick={(e) => {
           e.stopPropagation();
           setTip(false);
@@ -447,7 +452,7 @@ export function NoteButton({ title, notes, at, onNote }: { title: string; notes:
         onBlur={() => setTip(false)}
       >
         <svg width={2 * NOTE_R + 16} height={2 * NOTE_R} viewBox={`${-NOTE_R} ${-NOTE_R} ${2 * NOTE_R + 16} ${2 * NOTE_R}`} aria-hidden>
-          <NoteIcon count={notes.length} />
+          <NoteIcon count={notes.length} gap={gap} />
         </svg>
       </button>
       <NodeToolbar isVisible={tip} position={Position.Bottom} align="end" offset={6}>
@@ -491,7 +496,7 @@ function ScopeNodeView({ data, width = 0, height = 0 }: NodeProps<ScopeNode>) {
   return (
     <div className="flow-node" style={{ width, height }}>
       <svg className="flow-node-svg" width={width} height={height}>
-        <ScopeGraphic scope={scope} href={data.hrefs[scope.id]} hull={data.hull} />
+        <ScopeGraphic scope={scope} href={hrefOf(data.hrefs, scope.id)} hull={data.hull} />
       </svg>
       <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
       <Handle type="source" position={Position.Bottom} isConnectable={false} className="flow-handle" />

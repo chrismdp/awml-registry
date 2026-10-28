@@ -1,0 +1,17 @@
+# A 0.6 workflow whose do step leads into a trigger with a ref, which 0.7 makes an outside action.
+awml: "0.6"
+title: The bakery's stock count
+scopes:
+  - { id: bakery, label: "bakery: Ana, Sam" }
+parts:
+  - { id: close, kind: trigger, label: "Every day 18:00", wait: PT1H }
+  - { id: count, kind: code, op: bring-in, label: "Work out what the day's baking used", in: bakery }
+  - { id: stock, kind: context, label: "Stock levels", in: bakery }
+  - { id: tell, kind: code, op: do, label: "Start the order when anything runs low", in: bakery }
+  - { id: order, kind: trigger, label: "Start the supplier order", wait: PT1H, untrusted: true, ref: acme/order#low }
+lines:
+  - { from: close, to: count, kind: start }
+  - { from: count, to: stock, kind: data }
+  - { from: count, to: tell, kind: start }
+  - { from: stock, to: tell, kind: data }
+  - { from: tell, to: order, kind: start }

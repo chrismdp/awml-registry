@@ -6,6 +6,6 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["test/**/*.test.ts", "test/**/*.test.tsx", "eslint-rules/**/*.test.mjs"],
-    setupFiles: ["test/setup.ts"],
+    setupFiles: ["test/engine-built.ts", "test/setup.ts"],
   },
 });

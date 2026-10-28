@@ -214,10 +214,12 @@ function NoneDrawn() {
   return <p className="cannot-draw">{NONE_DRAWN}</p>;
 }
 
-// What waits on a person across the workflows, and the parts they share.
+// What waits on a person across the workflows, the outside actions untrusted
+// text reaches across them, and the parts they share.
 function Waits({ summary }: { summary: Summary }) {
   const { people } = names(summary);
   const shared = summary.shared ?? [];
+  const untrusted = summary.untrusted ?? [];
   return (
     <>
       <h2>What waits on a person</h2>
@@ -232,6 +234,27 @@ function Waits({ summary }: { summary: Summary }) {
             </li>
           ))}
         </ul>
+      )}
+      {untrusted.length > 0 && (
+        <>
+          <h2>Where untrusted text reaches</h2>
+          <p className="plain">
+            Text from a part marked untrusted follows an outside action into the workflow it starts.
+          </p>
+          <ul className="waits untrusted">
+            {untrusted.map((u, i) => (
+              <li key={i}>
+                {u.part}
+                <span className="note">
+                  {(u.outsideActions ?? []).length
+                    ? ` · reaches ${(u.outsideActions ?? []).join(", ")}`
+                    : " · reaches no outside action"}
+                  {(u.stoppedBy ?? []).length ? ` · stopped by ${(u.stoppedBy ?? []).join(", ")}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
       {shared.length > 0 && (
         <>

@@ -1,29 +1,40 @@
 // The drawing laid out on the server (src/server/drawing.ts, issue #62): read from the engine's
-// Mermaid text, laid out by ELK, kept once worked out, and sent to the page as positions only, so
-// the browser never loads ELK.
+// graph (issue #69), laid out by ELK, kept once worked out, and sent to the page as positions
+// only, so the browser never loads ELK.
 import fs from "node:fs";
 import path from "node:path";
 import ELK from "elkjs/lib/elk.bundled.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { boxText, headHeight, headWidth, LABEL, partText, SCOPE_PAD, SCOPE_TITLE, SCOPE_WHO, type Drawing } from "@/components/flow/drawing";
-import { parseMermaid } from "@/components/flow/graph";
+import { graphOf } from "@/components/flow/graph";
 import { textWidth, wrap } from "@/components/flow/text";
 import { layOut, mapLinks } from "@/server/drawing";
 import { laidOut } from "./drawn";
 import { example } from "./helpers";
 
 // The drawing laid out, which these tests expect to be.
-const lay = async (text: string, opts?: { map?: boolean }) => laidOut(await layOut(text, opts));
+const lay = async (json: string) => laidOut(await layOut(json));
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const issue = example("flow/issue-to-pull-request.mmd");
-const map = example("flow/factory-map.mmd");
-const dinners = example("dinners.mmd");
+const issue = example("flow/issue-to-pull-request.graph.json");
+const map = example("flow/factory-map.graph.json");
+const dinners = example("dinners.graph.json");
 // A small drawing of its own for each test that counts layouts, so none was laid out before.
-const small = (n: string) => `flowchart TB\n  a${n}(["Start ${n}"])\n  b${n}("<small>⚙️ 🛠️ do</small><br>Work ${n}")\n  a${n} --> b${n}\n  class a${n} trig\n  class b${n} code`;
+const small = (n: string) =>
+  JSON.stringify({
+    view: "security",
+    groups: [],
+    parts: [
+      { id: `a${n}`, kind: "trigger", label: `Start ${n}` },
+      { id: `b${n}`, kind: "code", label: `Work ${n}`, decider: "code", op: "do" },
+    ],
+    lines: [{ from: `a${n}`, to: `b${n}`, kind: "start", points: "to" }],
+    comments: [],
+    places: [],
+  });
 
 const inside = (r: { x: number; y: number; width: number; height: number }, s: typeof r) =>
   r.x >= s.x && r.y >= s.y && r.x + r.width <= s.x + s.width && r.y + r.height <= s.y + s.height;
@@ -48,7 +59,7 @@ describe("laying a drawing out on the server", () => {
   it("places every part inside its scope, every scope inside the one it is in, and routes every line", async () => {
     const { full } = await lay(dinners);
     const scopes = new Map(full.scopes.map((s) => [s.id, s]));
-    expect(full.parts.map((p) => p.id)).toEqual(parseMermaid(dinners).parts.map((p) => p.id));
+    expect(full.parts.map((p) => p.id)).toEqual(graphOf(dinners).parts.map((p) => p.id));
     for (const p of full.parts) if (p.scope) expect(inside(p, scopes.get(p.scope)!), p.id).toBe(true);
     for (const s of full.scopes) if (s.scope) expect(inside(s, scopes.get(s.scope)!), s.id).toBe(true);
     for (const p of full.parts) expect(inside(p, full.box), p.id).toBe(true);
@@ -81,7 +92,17 @@ describe("laying a drawing out on the server", () => {
     // A scope left with a trigger alone is just big enough for it and its heading: no taller
     // for its heading being wide, as ELK made it when given its least width the wrong way round.
     const { flow: one } = await lay(
-      `flowchart TB\n  subgraph people["people ops#58; HR team and the hiring managers"]\n    hire(["A new hire"])\n    rec[("The hire record")]\n  end\n  hire -.-> rec\n  class hire trig\n  class rec ctx\n  style people fill:transparent,stroke:#8a93a3,stroke-dasharray:6 4`,
+      JSON.stringify({
+        view: "security",
+        groups: [{ id: "people", label: "people ops: HR team and the hiring managers" }],
+        parts: [
+          { id: "hire", kind: "trigger", label: "A new hire", in: "people" },
+          { id: "rec", kind: "context", label: "The hire record", in: "people" },
+        ],
+        lines: [{ from: "hire", to: "rec", kind: "data", points: "to" }],
+        comments: [],
+        places: [],
+      }),
     );
     const people = one.scopes[0];
     const hire = one.parts[0];
@@ -92,7 +113,17 @@ describe("laying a drawing out on the server", () => {
   it("puts who a scope is for on lines of its own under its name, inside the scope, with the scope's heading growing to fit (#67)", async () => {
     const who = "anyone who reads the repository, the maintainers who review its pull requests, and the bots";
     const { full } = await lay(
-      `flowchart TB\n  subgraph pub["public#58; ${who}"]\n    a(["Start"])\n    b("<small>⚙️ 🛠️ do</small><br>Work")\n  end\n  a --> b\n  class a trig\n  class b code\n  style pub fill:transparent,stroke:#8a93a3,stroke-dasharray:6 4`,
+      JSON.stringify({
+        view: "security",
+        groups: [{ id: "pub", label: `public: ${who}` }],
+        parts: [
+          { id: "a", kind: "trigger", label: "Start", in: "pub" },
+          { id: "b", kind: "code", label: "Work", in: "pub", decider: "code", op: "do" },
+        ],
+        lines: [{ from: "a", to: "b", kind: "start", points: "to" }],
+        comments: [],
+        places: [],
+      }),
     );
     const pub = full.scopes[0];
     expect(pub.name).toBe("public");
@@ -109,14 +140,15 @@ describe("laying a drawing out on the server", () => {
     expect(top - pub.y).toBe(headHeight(pub.who));
     expect(headHeight(pub.who)).toBeGreaterThan(SCOPE_TITLE.height + pub.who!.length * SCOPE_WHO.line);
     // A scope holding more than SCOPE_WHO.min across breaks them wider, still inside it.
-    const { full: wide } = await lay(dinners.replace("carers#58; #43; June#44; Beth", `carers#58; ${who}`));
+    // The family's dinners as AWML 0.4 wrote them, whose carers scope holds more across, converted.
+    const { full: wide } = await lay(example("older/dinners-04.graph.json").replace('"carers: + June, Beth"', JSON.stringify(`carers: ${who}`)));
     const carers = wide.scopes.find((s) => s.id === "carers")!;
     expect(carers.who!.length).toBeLessThan(pub.who!.length);
     expect(Math.max(...carers.who!.map((l) => textWidth(l, SCOPE_WHO.size)))).toBeGreaterThan(SCOPE_WHO.min);
     for (const line of carers.who!) expect(textWidth(line, SCOPE_WHO.size)).toBeLessThanOrEqual(carers.width - 2 * SCOPE_TITLE.left);
   });
 
-  it("keeps each layout once worked out, by the text, the switch and the engine, so the same drawing isn't laid out twice", async () => {
+  it("keeps each layout once worked out, by the graph, the switch and the engine, so the same drawing isn't laid out twice", async () => {
     const layout = vi.spyOn(ELK.prototype, "layout");
     const first = await lay(small("x"));
     // The whole drawing and Flow only: two layouts.
@@ -127,7 +159,7 @@ describe("laying a drawing out on the server", () => {
     // Each caller gets its own copy.
     again.full.parts[0].x = -1;
     expect((await lay(small("x"))).full.parts[0].x).not.toBe(-1);
-    // Another text is laid out afresh.
+    // Another graph is laid out afresh.
     await lay(small("y"));
     expect(layout).toHaveBeenCalledTimes(4);
   });
@@ -150,7 +182,7 @@ describe("laying a drawing out on the server", () => {
   }, 60_000);
 
   it("sizes each part's box round its label, broken into lines no wider than the box", () => {
-    const part = parseMermaid(issue).parts.find((p) => p.id === "build")!;
+    const part = graphOf(issue).parts.find((p) => p.id === "build")!;
     const t = partText(part);
     expect(t.caption).toBe("AI · draft");
     expect(t.lines.length).toBeGreaterThan(1);
@@ -167,27 +199,37 @@ describe("laying a drawing out on the server", () => {
 });
 
 describe("a system's map, laid out on the server", () => {
-  it("draws each trigger outside its workflow's box, with a line into it", async () => {
-    const { full } = await lay(map, { map: true });
+  it("draws each trigger outside its workflow's box, with a line into it, as the engine gives it", async () => {
+    const { full } = await lay(map);
     const trigger = full.parts.find((p) => p.id === "w1_comment")!;
     expect(trigger.scope).toBeUndefined();
     expect(full.lines.find((l) => l.from === "w1_comment" && l.to === "w1")).toBeDefined();
-    // A workflow's box holds nothing, so it is a box with its name in it.
+    // Each box holds the outside actions that start other workflows, and names its workflow.
+    expect(full.scopes.map((s) => [s.id, s.holds, s.name, s.workflow])).toEqual([
+      ["w1", true, "An issue becomes a pull request", "chrismdp/issue-to-pull-request"],
+      ["w2", true, "A pull request lands once CI has run", "chrismdp/land-a-pull-request"],
+      ["w3", true, "A failed build tries again", "chrismdp/retry-a-build"],
+    ]);
+    expect(full.parts.find((p) => p.id === "w1_tryfailed")?.scope).toBe("w1");
+  });
+
+  it("draws a box that holds nothing as a box with its name in it", async () => {
+    const bakery = example("bakery-map.graph.json");
+    const { full } = await lay(bakery);
     expect(full.scopes.map((s) => [s.id, s.holds, s.lines])).toEqual([
-      ["w1", false, ["An issue becomes a pull", "request"]],
-      ["w2", false, ["A pull request lands once CI", "has run"]],
-      ["w3", false, ["A failed build tries again"]],
+      ["w1", true, []],
+      ["w2", false, ["The bakery's supplier order"]],
     ]);
   });
 
   it("leads each part joined to workflows' boxes to those workflows, and none to a box the viewer may not open", async () => {
-    const { full } = await lay(map, { map: true });
+    const { full } = await lay(map);
     const boxes = {
       w1: { title: "An issue becomes a pull request", address: "chrismdp/issue-to-pull-request", href: "/chrismdp/issue-to-pull-request" },
       w3: { title: "A failed build tries again", address: "chrismdp/retry-a-build", href: "/chrismdp/retry-a-build" },
     };
     const links = mapLinks(full, boxes);
-    // The trigger the retry fires starts the build: it leads to both.
+    // The Actions token the build and the retry both read: it leads to both.
     expect(links.find((l) => l.part === "s1")).toEqual({
       part: "s1",
       title: "In An issue becomes a pull request and A failed build tries again",
@@ -198,8 +240,18 @@ describe("a system's map, laid out on the server", () => {
     });
     // w2 isn't given, so nothing leads to it.
     expect(JSON.stringify(links)).not.toContain("land-a-pull-request");
-    // The app's push joins only w1 and w2: it leads to w1 alone.
-    expect(links.find((l) => l.part === "s9")?.to).toEqual([{ label: "chrismdp/issue-to-pull-request", href: "/chrismdp/issue-to-pull-request" }]);
+    // The GitHub App joins only w1 and w2: it leads to w1 alone.
+    expect(links.find((l) => l.part === "s2")?.to).toEqual([{ label: "chrismdp/issue-to-pull-request", href: "/chrismdp/issue-to-pull-request" }]);
+    // The trigger a failed try starts leads into the retry's box.
+    expect(links.find((l) => l.part === "w3_tryfailed")).toMatchObject({ title: "In A failed build tries again" });
+    // The outside action that starts a retry leads to the retry, by the trigger it starts.
+    expect(links.find((l) => l.part === "w1_tryfailed")).toEqual({
+      part: "w1_tryfailed",
+      title: "Starts A failed build tries again",
+      to: [{ label: "chrismdp/retry-a-build", href: "/chrismdp/retry-a-build" }],
+    });
+    // The one that starts the landing starts a workflow not given, so it leads nowhere.
+    expect(links.find((l) => l.part === "w1_pushed")).toBeUndefined();
   });
 });
 

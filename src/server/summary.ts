@@ -6,12 +6,12 @@ export type Measure = { group: string; label: string; value: (s: Summary) => num
 // The measures for a set of summaries, in a fixed order. Operations are those
 // any of the summaries uses.
 export function measures(summaries: Summary[]): Measure[] {
-  const operations = [...new Set(summaries.flatMap((s) => Object.keys(s.operations)))].sort();
+  const operations = [...new Set(summaries.flatMap((s) => Object.keys(s.operations ?? {})))].sort();
   return [
     { group: "Steps", label: "AI", value: (s) => s.steps.ai },
     { group: "Steps", label: "Code", value: (s) => s.steps.code },
     { group: "Steps", label: "Person", value: (s) => s.steps.person },
-    ...operations.map((op) => ({ group: "Operations", label: op, value: (s: Summary) => s.operations[op] ?? 0 })),
+    ...operations.map((op) => ({ group: "Operations", label: op, value: (s: Summary) => s.operations?.[op] ?? 0 })),
     { group: "Outside actions", label: "Allow", value: (s) => s.outsideActions.allow },
     { group: "Outside actions", label: "Ask", value: (s) => s.outsideActions.ask },
     { group: "Outside actions", label: "Block", value: (s) => s.outsideActions.block },
@@ -33,7 +33,7 @@ export function total(summaries: Summary[]): Summary {
   const sum = (f: (s: Summary) => number) => summaries.reduce((n, s) => n + f(s), 0);
   const operations: Record<string, number> = {};
   for (const s of summaries)
-    for (const [op, n] of Object.entries(s.operations)) operations[op] = (operations[op] ?? 0) + n;
+    for (const [op, n] of Object.entries(s.operations ?? {})) operations[op] = (operations[op] ?? 0) + n;
   return {
     steps: { ai: sum((s) => s.steps.ai), code: sum((s) => s.steps.code), person: sum((s) => s.steps.person) },
     operations,
