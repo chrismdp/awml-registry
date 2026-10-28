@@ -25,6 +25,8 @@ on, through any of those paths.
   visible only to its organisation's members, and the tests for each boundary stay.
 - Run `npm run typecheck`, `npm run lint` and `npm test` once you have resolved the files, and fix
   what this commit's resolution broke.
+- Every untracked file left in the clone goes into the rebase's commit, so delete any scratch file
+  you made before you finish.
 - Don't change anything in `.github/`, Claude Code's own files, an `.npmrc`, a `.yarnrc` or
   `node_modules/`: the app doesn't push a rebased branch that changes them.
 - If you can't resolve a conflict with confidence, leave its markers in place and explain why in the

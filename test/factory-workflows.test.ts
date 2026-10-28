@@ -985,6 +985,10 @@ describe("the factory's workflows", () => {
       expect(squash(readFileSync(join(github, name), "utf8")), name).toContain(
         "Every untracked file left in the tree goes into the pull request, so delete any scratch file you made before you finish.",
       );
+    // The rebase's continue adds every file the session leaves in its clone too.
+    expect(squash(readFileSync(join(github, "resolve-prompt.md"), "utf8"))).toContain(
+      "Every untracked file left in the clone goes into the rebase's commit, so delete any scratch file you made before you finish.",
+    );
   });
 
   it("pin every action to a commit", () => {
