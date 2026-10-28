@@ -271,7 +271,9 @@ function rehearse(
   put(join(bin, "gh"), ghStub(answers));
   chmodSync(join(bin, "gh"), 0o755);
   put(join(root, "step.sh"), script);
-  const ran = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(root, "step.sh")], {
+  // A runner's step starts with SIGPIPE at its default, so a producer writing to a pipe whose reader
+  // has gone dies of it; a test process may start with it ignored, which would hide that.
+  const ran = spawnSync("env", ["--default-signal=PIPE", "bash", "--noprofile", "--norc", "-eo", "pipefail", join(root, "step.sh")], {
     cwd,
     encoding: "utf8",
     env: {
@@ -912,14 +914,23 @@ describe("the factory's workflows", () => {
     }
   });
 
-  it.runIf(canRehearse)("finds a match first in a 200,000-line producer, under pipefail", () => {
-    const quiet = spawnSync("bash", ["-c", 'set -o pipefail; if seq 1 2000000 | grep -q "^1$"; then echo matched; fi'], { encoding: "utf8" });
-    expect(quiet.stdout, "the quiet grep this guards against no longer fails here").toBe("");
+  // The rehearsals run with SIGPIPE at its default, as a runner's steps do, or no early pipe could
+  // fail in them.
+  it.runIf(canRehearse)("rehearse with SIGPIPE at its default", () => {
     const root = scratch();
-    put(join(root, "guard.sh"), 'seq 1 200000 > "$1/names"\nif grep -q "^1$" "$1/names"; then echo matched; fi\n');
-    const whole = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(root, "guard.sh"), root], { encoding: "utf8" });
-    expect(whole.status).toBe(0);
-    expect(whole.stdout).toBe("matched\n");
+    const run = rehearse('set +e\nseq 1 200000 | head -n 1 > /dev/null\necho "status=${PIPESTATUS[0]}"\n', { root });
+    expect(run.printed).toBe("status=141\n");
+  });
+
+  // A 200,000-line producer with the match first: piped into grep -q under pipefail it dies of
+  // SIGPIPE and the match reads as none; written to a file that grep -q reads, it matches.
+  it.runIf(canRehearse)("finds a match first in a 200,000-line producer, under pipefail", () => {
+    const root = scratch();
+    const piped = rehearse('if seq 1 200000 | grep -q "^1$"; then echo matched; else echo missed; fi\n', { root });
+    expect(piped.printed, "the shape this guards against no longer fails here").toBe("missed\n");
+    const filed = rehearse('seq 1 200000 > "$RUNNER_TEMP/names"\nif grep -q "^1$" "$RUNNER_TEMP/names"; then echo matched; else echo missed; fi\n', { root });
+    expect(filed.failed, filed.printed).toBe(false);
+    expect(filed.printed).toBe("matched\n");
   });
 
   // Whether someone may write is one check, compared exactly, everywhere it's asked.
