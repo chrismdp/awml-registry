@@ -71,7 +71,11 @@ while IFS=$'\t' read -r number _; do
   if GIT_EDITOR=true safe_git -C "$work" -c core.editor=true rebase --continue > /dev/null 2>&1; then
     echo "#$number's rebase went on to its end, or to its next conflict."
   fi
+  # What git has now written, for the next round's checks: its commits, refs, HEAD and index, and
+  # which protected paths the replayed commits put in the tree, which are the branch's, not
+  # placeholders.
   bash "$HOST_DIR/main/git-state.sh" "$work" > "$baseline/git-state-$number"
+  bash "$HOST_DIR/main/placeholders.sh" record "$work" "$baseline/protected-$number"
   if [ -d "$work/.git/rebase-merge" ] || [ -d "$work/.git/rebase-apply" ]; then
     safe_git -C "$work" diff --name-only --no-ext-diff --no-textconv --diff-filter=U > "$HOST_DIR/conflicted-$number.txt"
     if [ ! -s "$HOST_DIR/conflicted-$number.txt" ]; then

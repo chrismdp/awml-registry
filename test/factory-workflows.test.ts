@@ -3889,6 +3889,7 @@ ${permissionStub}
     expect(check).toBeGreaterThan(-1);
     expect(check).toBeLessThan(resume.indexOf("safe_git -C"));
     expect(resume.lastIndexOf('git-state.sh" "$work" > "$baseline/git-state-$number"')).toBeGreaterThan(resume.indexOf("rebase --continue"));
+    expect(resume.lastIndexOf('placeholders.sh" record "$work" "$baseline/protected-$number"')).toBeGreaterThan(resume.indexOf("rebase --continue"));
   });
 
   it("runs no git in a session's step, and lets the session run none that writes", () => {
@@ -3958,7 +3959,8 @@ ${permissionStub}
   describe("resolve-continue.sh", () => {
     // A branch of two commits, each clashing with main, in a clone rebased until it stops at the
     // first, with its baseline kept.
-    const midRebase = () => {
+    // secondAdds names files, with their content, the branch's second commit adds beside its clash.
+    const midRebase = (secondAdds: Record<string, string> = {}) => {
       const root = scratch();
       const clone = join(root, "runner/pr/5/work");
       mkdirSync(clone, { recursive: true });
@@ -3971,7 +3973,9 @@ ${permissionStub}
       put(join(clone, "a.txt"), "branch\n");
       git(clone, "commit", "-qam", "first");
       put(join(clone, "b.txt"), "branch\n");
-      git(clone, "commit", "-qam", "second");
+      for (const [file, text] of Object.entries(secondAdds)) put(join(clone, file), text);
+      git(clone, "add", "-A");
+      git(clone, "commit", "-qm", "second");
       git(clone, "switch", "-q", "main");
       put(join(clone, "a.txt"), "main\n");
       put(join(clone, "b.txt"), "main\n");
@@ -4107,6 +4111,28 @@ ${permissionStub}
       expect(gaveUp(root), run.printed).toBe(false);
       // The next round's session starts from what git left.
       expect(left(root, "baseline/git-state-5")).toBe(execFileSync("bash", [join(github, "git-state.sh"), clone], { encoding: "utf8" }));
+    });
+
+    // The continue replays more of the branch between rounds, so a protected path a replayed commit
+    // adds is the branch's, not a placeholder: the next round's clear must leave it, and still take
+    // the placeholders away.
+    it.runIf(canRehearse)("leaves a protected file a replayed commit added, in the next round", () => {
+      const { root, clone } = midRebase({ ".npmrc": "registry=https://registry.npmjs.org/\n" });
+      put(join(clone, "a.txt"), "both\n");
+      const first = resume(root);
+      expect(gaveUp(root), first.printed).toBe(false);
+      expect(readFileSync(join(clone, ".npmrc"), "utf8")).toBe("registry=https://registry.npmjs.org/\n");
+      // Round 2's session step keeps the rebase's state; its session resolves b.txt and leaves
+      // Claude Code's placeholders.
+      execFileSync("bash", [join(github, "rebase-state.sh"), "snapshot", clone, join(root, "runner/rebase-state-5")]);
+      put(join(clone, "b.txt"), "both\n");
+      for (const file of [".yarnrc", ".env", ".git/config.lock"]) put(join(clone, file), "");
+      const second = resume(root);
+      expect(second.failed, second.printed).toBe(false);
+      expect(gaveUp(root), second.printed).toBe(false);
+      expect(existsSync(join(clone, ".git/rebase-merge")), "the rebase finished").toBe(false);
+      expect(readFileSync(join(clone, ".npmrc"), "utf8")).toBe("registry=https://registry.npmjs.org/\n");
+      for (const file of [".yarnrc", ".env", ".git/config.lock"]) expect(existsSync(join(clone, file)), file).toBe(false);
     });
 
     it.runIf(canRehearse)("gives up on a clone whose conflicts still hold markers", () => {
