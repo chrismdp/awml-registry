@@ -126,17 +126,15 @@ export function evaluate(repo: string, config: Config, judged: Judged = {}): Ver
   // The reasons that mean ask, and those that mean at least show.
   const reasons: string[] = [];
   const shows: string[] = [];
-  let start: Verdict["verdict"] = "ship";
 
   if (judged.classified !== undefined) {
     if (judged.classified === "missing") {
-      start = "ask";
       reasons.push("Classify gave no verdict.");
-    } else if ((verdicts as readonly string[]).includes(judged.classified)) {
-      start = judged.classified as Verdict["verdict"];
-      if (start === "ask") reasons.push("Classify said ask.");
-      if (start === "show") shows.push("Classify said show.");
-    } else {
+    } else if (judged.classified === "ask") {
+      reasons.push("Classify said ask.");
+    } else if (judged.classified === "show") {
+      shows.push("Classify said show.");
+    } else if (!(verdicts as readonly string[]).includes(judged.classified)) {
       throw new Error(`Classify gave an unknown verdict ${JSON.stringify(judged.classified)}`);
     }
   }
@@ -212,7 +210,7 @@ export function evaluate(repo: string, config: Config, judged: Judged = {}): Ver
 
   if (reasons.length > 0) return { verdict: "ask", reasons };
   if (shows.length > 0) return { verdict: "show", reasons: shows };
-  return { verdict: start, reasons: ["No review rule matched this change."] };
+  return { verdict: "ship", reasons: ["No review rule matched this change."] };
 }
 
 // The branch's commits from base to head. The base must be under the head. A commit is the

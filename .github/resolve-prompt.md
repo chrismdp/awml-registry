@@ -12,8 +12,7 @@ You only edit the files. You run no git that changes anything: once you end, the
 files you resolved and continues the rebase itself, and if the next commit conflicts, a fresh
 session like you resolves that one.
 
-The working tree is a clone of its own, made for you alone, with its dependencies installed at the
-branch's head. Every command you run runs in a sandbox with no network, which can't write
+The working tree is a clone of its own, made for you alone, with main's dependencies installed. Every command you run runs in a sandbox with no network, which can't write
 package.json, package-lock.json, node_modules/.bin, scripts/ or .github/, so add no dependency. Edit
 the conflicted files with your own tools; the workflow's git, run after you end, carries the rebase
 on, through any of those paths.

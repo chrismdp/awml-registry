@@ -132,13 +132,13 @@ esac
 `;
 
 // Stands in for claude in a rehearsal: it logs, as a line of JSON, the home it starts in and whether
-// that home is empty, whether it could change REVIEW_DIR, and what it was started with, and writes
+// that home is empty, whether it could change INPUT_DIR, and what it was started with, and writes
 // nothing else.
 const claudeStub = `#!/bin/bash
 empty=no
 [ -n "$(ls -A "$HOME" 2> /dev/null)" ] || empty=yes
 changes=no
-if touch "$REVIEW_DIR/planted" 2> /dev/null || [ -w "$REVIEW_DIR/REVIEW.md" ]; then changes=yes; fi
+if touch "$INPUT_DIR/planted" 2> /dev/null || [ -w "$INPUT_DIR/REVIEW.md" ]; then changes=yes; fi
 args="$(printf '%s\\0' "$@" | jq -Rsc 'split("\\u0000") | .[:-1]')"
 jq -nc --arg home "$HOME" --arg empty "$empty" --arg changes "$changes" --argjson args "$args" \\
   '{home: $home, empty: $empty, changes: $changes, args: $args}' >> "$CLAUDE_LOG"
@@ -353,6 +353,23 @@ function commandsIn(printed: string): string[] {
   }
   return commands;
 }
+
+// A pull request the factory's app opened from build/issue-7, and a stranger's newer one from the
+// same branch, at the same head, which GitHub lists first.
+const appPull = (head: string, repository = "owner/repo") => ({
+  number: 12,
+  user: { login: "awml-factory[bot]", type: "Bot" },
+  author_association: "NONE",
+  head: { sha: head, ref: "build/issue-7", repo: { full_name: repository } },
+  base: { ref: "main" },
+});
+const strangerPull = (head: string) => ({
+  number: 99,
+  user: { login: "stranger", type: "User" },
+  author_association: "NONE",
+  head: { sha: head, ref: "build/issue-7", repo: { full_name: "owner/repo" } },
+  base: { ref: "main" },
+});
 
 // A path that would end its line and start a workflow command of its own if printed as it is.
 const forgedPath = "a\n::notice title=Verdict::ship\nb";
@@ -1078,7 +1095,6 @@ describe("ci.yml", () => {
       FINDINGS: "bugs.json",
       CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-      REVIEW_DIR: input,
     });
     expect(run.failed, run.printed).toBe(false);
     expect(started).toHaveLength(1);
@@ -1311,6 +1327,12 @@ describe("review-findings.sh", () => {
       { review: "bug", severity: "Nit", file: "src/a.ts", line: 3, title: "Clearer", detail: "Why." },
       { review: "security", severity: "Pre-existing", file: "src/a.ts", line: 3, title: "Old", detail: "Why." },
     ]);
+  });
+
+  // GitHub gives an annotation with no file the path .github, which names no file of the change.
+  it.runIf(canRehearse)("gives a finding with no file of its own no file, and keeps a real one under .github/", () => {
+    const run = read("findings", [note("warning", "Nit: Somewhere", "m", ".github", 1), note("warning", "Nit: There", "m", ".github/x.sh", 2)], []);
+    expect(JSON.parse(run.printed).map((finding: { file: string }) => finding.file)).toEqual(["", ".github/x.sh"]);
   });
 
   // An annotation whose level doesn't match its rank isn't one the post step made.
@@ -1567,7 +1589,6 @@ describe("build.yml", () => {
     put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
     const { run, started } = sessions(draft.run ?? "", root, {
       INPUT_DIR: input,
-      REVIEW_DIR: input,
       CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     });
@@ -1799,18 +1820,22 @@ describe("build.yml", () => {
   };
 
   it.runIf(canRehearse)("gives an open pull request the try's title and description before the push", () => {
-    const run = pullStep("edit", '[{"number": 12}]');
+    const run = pullStep("edit", JSON.stringify([strangerPull("a".repeat(40)), appPull("a".repeat(40))]));
     expect(run.failed, run.printed).toBe(false);
     expect(run.calls).toContain("pr edit 12 --repo owner/repo --title Fix the page --body-file");
     expect(run.calls).not.toContain("pr create");
     expect(pullStep("edit", "[]").calls).not.toMatch(/pr (edit|create)/);
+    // A stranger's pull request from the branch is never given the build's title and text.
+    expect(pullStep("edit", JSON.stringify([strangerPull("a".repeat(40))])).calls).not.toMatch(/pr (edit|create)/);
   });
 
   it.runIf(canRehearse)("opens a pull request that closes the issue after the push, unless one is open from the branch", () => {
     const run = pullStep("pull", "[]");
     expect(run.failed, run.printed).toBe(false);
     expect(run.calls).toContain("pr create --repo owner/repo --base main --head build/issue-7 --title Fix the page --body-file");
-    expect(pullStep("pull", '[{"number": 12}]').calls).not.toMatch(/pr (edit|create)/);
+    expect(pullStep("pull", JSON.stringify([appPull("a".repeat(40))])).calls).not.toMatch(/pr (edit|create)/);
+    // A stranger's pull request from the branch doesn't stand in for the app's own.
+    expect(pullStep("pull", JSON.stringify([strangerPull("a".repeat(40))])).calls).toContain("pr create");
   });
 
   it.runIf(canRehearse)("posts Claude's message, escaped, when it changed nothing", () => {
@@ -1923,7 +1948,7 @@ describe("land.yml", () => {
         CHECK_SUITE: "300",
       },
       answers: `
-  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([{ number: 12, head: { sha: pullHead, ref: "build/issue-7", repo: { full_name: pullRepository } }, base: { ref: "main" } }])}' ;;
+  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(head), appPull(pullHead, pullRepository)])}' ;;
   *"commits/${head}/check-runs"*) answer <<< '${JSON.stringify(checks)}' ;;
   *"issues/7/events"*) answer <<< '${JSON.stringify([
     { event: "labeled", label: { name: "build" }, actor: { login: "someone-earlier", type: "User" } },
@@ -1945,6 +1970,13 @@ describe("land.yml", () => {
     const run = ready({ checks: checkRuns({ Classify: { conclusion } }) });
     expect(run.failed, run.printed).toBe(false);
     expect(run.outputs.go).toBe("true");
+  });
+
+  // Anyone can open a pull request from the build's branch, so only the app's is landed.
+  it.runIf(canRehearse)("lands only the pull request the app opened, never a stranger's from the same branch", () => {
+    const run = ready();
+    expect(run.outputs.pr).toBe("12");
+    expect(stepWithId(jobs.find, "ready").run).toContain('.user.login == "awml-factory[bot]" and .user.type == "Bot"');
   });
 
   it.runIf(canRehearse)("asks the owner when the app added the label", () => {
@@ -1972,7 +2004,7 @@ describe("land.yml", () => {
   // The rule judges the head commit itself, read with git into a worktree at the commit of main
   // the branch starts from, never a patch from an artifact, with Classify's verdict and the Nits
   // read from the checks of CI's run.
-  const judge = (classifyConclusion: string) => {
+  const judge = (classifyConclusion: string, mainChangesCi = false) => {
     const root = scratch();
     const origin = join(root, "origin");
     mkdirSync(origin);
@@ -1981,6 +2013,7 @@ describe("land.yml", () => {
     put(join(origin, ".github/build-rules.yml"), "review_paths: [docs/SPEC.md]\nmax_changed_lines: 400\n");
     put(join(origin, ".github/review-findings.sh"), readFileSync(join(github, "review-findings.sh"), "utf8"));
     put(join(origin, "scripts/build-rule.ts"), readFileSync(join(__dirname, "../scripts/build-rule.ts"), "utf8"));
+    put(join(origin, ".github/workflows/ci.yml"), "name: CI\n");
     git(origin, "add", "-A");
     git(origin, "commit", "-qm", "main");
     git(origin, "switch", "-q", "-c", "build/issue-7");
@@ -1989,6 +2022,10 @@ describe("land.yml", () => {
     git(origin, "-c", "user.name=awml-factory[bot]", "-c", "user.email=1+awml-factory[bot]@users.noreply.github.com", "commit", "-qm", "Build #7");
     const sha = git(origin, "rev-parse", "HEAD");
     git(origin, "switch", "-q", "main");
+    if (mainChangesCi) {
+      put(join(origin, ".github/workflows/ci.yml"), "name: CI\n# main's newer reviews\n");
+      git(origin, "commit", "-qam", "main changes CI");
+    }
     const work = join(root, "work");
     git(root, "clone", "-q", origin, work);
     const jobsList = JSON.stringify({
@@ -2024,6 +2061,15 @@ describe("land.yml", () => {
     expect(run.printed).toContain("The reviews left 1 Nit unfixed.");
     expect(readFileSync(join(work, "README.md"), "utf8")).toBe("A registry\n");
     expect(existsSync(join(work, "src/page.tsx")), "the branch's files reached main's working tree").toBe(false);
+  });
+
+  // GitHub ran the pull request's own ci.yml, so if it isn't main's, the reviews and Classify the
+  // head passed weren't main's.
+  it.runIf(canRehearse)("asks when the head's ci.yml isn't main's", () => {
+    const { run } = judge("success", true);
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.verdict).toBe("ask");
+    expect(run.printed).toContain("CI ran this pull request's own .github/workflows/ci.yml, which isn't main's.");
   });
 
   it.runIf(canRehearse)("asks when Classify's job didn't succeed, whatever verdict it left", () => {
@@ -2140,12 +2186,27 @@ describe("fix.yml", () => {
     fixes = 0,
     pullRepository = "owner/repo",
     files = ["src/page.tsx"],
-  }: Partial<{ event: string; repository: string; pullHead: string; test: string; bug: string; security: string; fixes: number; pullRepository: string; files: string[] }> = {}) => {
+    important = true,
+    twoLines = false,
+  }: Partial<{
+    event: string;
+    repository: string;
+    pullHead: string;
+    test: string;
+    bug: string;
+    security: string;
+    fixes: number;
+    pullRepository: string;
+    files: string[];
+    important: boolean;
+    twoLines: boolean;
+  }> = {}) => {
     const root = scratch();
     const origin = join(root, "origin");
     mkdirSync(origin);
     git(origin, "init", "-q");
     put(join(origin, "README.md"), "A registry\n");
+    put(join(origin, ".github/review-findings.sh"), readFileSync(join(github, "review-findings.sh"), "utf8"));
     git(origin, "add", "-A");
     git(origin, "commit", "-qm", "main");
     git(origin, "switch", "-q", "-c", "build/issue-7");
@@ -2155,7 +2216,8 @@ describe("fix.yml", () => {
     for (let at = 0; at < fixes; at++) {
       put(join(origin, `fix-${at}.txt`), "fixed\n");
       git(origin, "add", "-A");
-      git(origin, "commit", "-qm", `Fix the review findings\n\nFactory-Fix: https://github.com/owner/repo/actions/runs/${at}`);
+      const line = `Factory-Fix: https://github.com/owner/repo/actions/runs/${at}`;
+      git(origin, "commit", "-qm", `Fix the review findings\n\n${line}${twoLines ? `\n${line}` : ""}`);
     }
     const sha = git(origin, "rev-parse", "HEAD");
     git(origin, "switch", "-q", "main");
@@ -2166,8 +2228,20 @@ describe("fix.yml", () => {
       cwd: work,
       env: { BRANCH: "build/issue-7", HEAD_SHA: sha, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77" },
       answers: `
-  *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: test }, { name: "Bug review", conclusion: bug }, { name: "Security review", conclusion: security }, { name: "Classify", conclusion: "success" }] })}' ;;
-  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([{ number: 12, head: { sha: pullHead ?? sha, ref: "build/issue-7", repo: { full_name: pullRepository } }, base: { ref: "main" } }])}' ;;`,
+  *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({
+    jobs: [
+      { name: "test", conclusion: test },
+      { name: "Bug review", conclusion: bug, check_run_url: "https://api.github.com/repos/owner/repo/check-runs/11" },
+      { name: "Security review", conclusion: security, check_run_url: "https://api.github.com/repos/owner/repo/check-runs/12" },
+      { name: "Classify", conclusion: "success" },
+    ],
+  })}' ;;
+  *"check-runs/11/annotations"*) answer <<< '${JSON.stringify(important && bug === "failure" ? [{ annotation_level: "failure", title: "Important: Wrong", message: "m", path: "src/a.ts", start_line: 1 }] : [])}' ;;
+  *"check-runs/12/annotations"*) answer <<< '${JSON.stringify(important && security === "failure" ? [{ annotation_level: "failure", title: "Important: Hole", message: "m", path: "src/a.ts", start_line: 1 }] : [])}' ;;
+  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([
+    strangerPull(pullHead ?? sha),
+    { ...appPull(pullHead ?? sha, pullRepository), user: { login: "maintainer", type: "User" }, author_association: "MEMBER" },
+  ])}' ;;`,
     });
     return { ...run, sha };
   };
@@ -2190,6 +2264,24 @@ describe("fix.yml", () => {
       expect(run.outputs).toMatchObject({ outcome: "fix", pr: "12", head_sha: run.sha, branch: "build/issue-7" });
     }
     expect(decide({ bug: "success", security: "failure" }).outputs.outcome).toBe("fix");
+  });
+
+  it.runIf(canRehearse)("fixes the pull request of the repository's own people, never a stranger's from the same branch", () => {
+    expect(decide().outputs.pr).toBe("12");
+    expect(stepWithId(jobs.decide, "ready").run).toMatch(/select\(\.head\.ref == \$branch[^)]*author_association \| IN\("OWNER", "MEMBER", "COLLABORATOR"\)[^]*\| first/);
+  });
+
+  // A review that failed without an Important finding, having refused the patch or run out of
+  // time, leaves nothing to fix: a person must look at its check.
+  it.runIf(canRehearse)("gives up, naming the review, when a review failed with no Important finding", () => {
+    const run = decide({ important: false });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.outcome).toBe("noimportant");
+    expect(run.outputs.failed).toBe("Bug review");
+  });
+
+  it.runIf(canRehearse)("counts a fix commit once, however many fix lines it carries", () => {
+    expect(decide({ fixes: 1, twoLines: true }).outputs.outcome).toBe("fix");
   });
 
   it.runIf(canRehearse)("gives up after two fix commits", () => {
@@ -2231,7 +2323,6 @@ describe("fix.yml", () => {
     put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
     const { run, started } = sessions(draft.run ?? "", root, {
       INPUT_DIR: input,
-      REVIEW_DIR: input,
       CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     });
@@ -2316,6 +2407,12 @@ describe("fix.yml", () => {
       const run = guard({ OUTCOME: "npmfiles" });
       expect(run.outputs.result).toBe("done");
       expect(run.calls).toMatch(/> .*\.npmrc/);
+    });
+
+    it.runIf(canRehearse)("names the failed review in a new comment when it left no Important finding", () => {
+      const run = guard({ OUTCOME: "noimportant", FAILED_REVIEWS: "Bug review" });
+      expect(run.outputs.result).toBe("done");
+      expect(run.calls).toMatch(/> .*Bug review failed with no Important finding/);
     });
 
     it.runIf(canRehearse)("gives up in a new comment when the session made no fix", () => {
@@ -2418,7 +2515,7 @@ describe("retry.yml", () => {
       env: { BRANCH: "build/issue-7", HEAD_SHA: head, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77" },
       answers: `
   *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: test }, { name: "Bug review", conclusion: bug }] })}' ;;
-  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([{ number: 12, head: { sha: pullHead, ref: "build/issue-7", repo: { full_name: pullRepository } } }])}' ;;
+  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(head), appPull(pullHead, pullRepository)])}' ;;
   *"actions/workflows/ci.yml/runs"*) answer <<< '${JSON.stringify(ciRuns)}' ;;
   *"actions/runs/70/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: "failure" }] })}' ;;
   *"api graphql"*) answer <<< '${JSON.stringify({
@@ -2466,6 +2563,12 @@ describe("retry.yml", () => {
     expect(run.calls).toContain("issue comment 7 --repo owner/repo --body-file");
     expect(run.calls).toMatch(/> .*three times/);
     expect(run.calls).toContain("https://github.com/owner/repo/actions/runs/77");
+  });
+
+  it.runIf(canRehearse)("names the app's pull request in its comments, never a stranger's", () => {
+    const run = tries({ builds: 3 });
+    expect(run.calls).toContain("#12");
+    expect(run.calls).not.toContain("#99");
   });
 
   // The comment is posted once: only by the first CI run whose tests failed after the third build
@@ -2635,6 +2738,7 @@ describe("resolve.yml", () => {
       'safe_git -C "$root/work" config user.name "awml-factory[bot]"',
       '(cd "$root/work" && npm ci --ignore-scripts --no-audit --no-fund)',
       'safe_git -C "$root/work" rebase -q "$MAIN_SHA"',
+      'bash "$RUNNER_TEMP/main/check-lockfile.sh" "$root/work"',
       'cp "$root/work/.git/config" "$RUNNER_TEMP/baseline/git-config-$number"',
       'stat -c %d:%i "$root/work" "$root/work/.git" > "$RUNNER_TEMP/baseline/clone-$number"',
       'stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$RUNNER_TEMP/baseline/workspace"',
@@ -2643,6 +2747,12 @@ describe("resolve.yml", () => {
       expect(text).toContain(want);
     expect(prepare.env).toMatchObject(hostNpm);
     expect(text).toContain("select(.clean == false and .guarded == false)");
+    // The rebase stops before the install, so the clone installs main's lockfile, which the branch
+    // left alone or it would have been held back.
+    const rebase = text.indexOf('safe_git -C "$root/work" rebase -q "$MAIN_SHA"');
+    expect(rebase).toBeLessThan(text.indexOf('bash "$RUNNER_TEMP/main/check-lockfile.sh" "$root/work"'));
+    expect(rebase).toBeLessThan(text.indexOf("npm ci --ignore-scripts"));
+    expect(squash(readFileSync(join(github, "resolve-prompt.md"), "utf8"))).toContain("with main's dependencies installed");
   });
 
   it("runs no git in a session's step, and lets the session run none that writes", () => {
@@ -2677,7 +2787,7 @@ describe("resolve.yml", () => {
       CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
       GITHUB_WORKSPACE: workspace,
-      REVIEW_DIR: join(root, "runner/pr/1/in"),
+      INPUT_DIR: join(root, "runner/pr/1/in"),
     });
     expect(run.failed, run.printed).toBe(false);
     expect(started).toHaveLength(1);

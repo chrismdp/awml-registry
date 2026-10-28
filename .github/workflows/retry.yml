@@ -57,7 +57,8 @@ jobs:
             leave "CI's tests didn't fail."
           pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" |
             jq -r --arg repository "$GITHUB_REPOSITORY" --arg branch "$BRANCH" --arg head "$HEAD_SHA" \
-              '[.[] | select(.head.ref == $branch and .head.repo.full_name == $repository and .head.sha == $head)]
+              '[.[] | select(.head.ref == $branch and .head.repo.full_name == $repository and .head.sha == $head
+                and .user.login == "awml-factory[bot]" and .user.type == "Bot")]
                 | first | .number // empty')"
           [ -n "$pr" ] || leave "No open pull request on $BRANCH is at CI's commit, so a newer CI result decides."
 

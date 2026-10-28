@@ -216,12 +216,14 @@ jobs:
             safe_git log --oneline "$base..$MAIN_SHA" > "$root/in/main-log.txt"
             cp "$RUNNER_TEMP/main/AGENTS.md" "$root/in/"
             gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '"# " + .title + "\n\n" + (.body // "")' > "$root/in/pull-request.md"
-            bash "$RUNNER_TEMP/main/check-lockfile.sh" "$root/work"
-            (cd "$root/work" && npm ci --ignore-scripts --no-audit --no-fund)
             if safe_git -C "$root/work" rebase -q "$MAIN_SHA" > /dev/null 2>&1; then
               echo "#$number rebased cleanly here after all."
             fi
             safe_git -C "$root/work" diff --name-only --no-ext-diff --no-textconv --diff-filter=U > "$root/in/conflicted-files.txt"
+            # The rebase stopped at its conflict on top of main, and find held back any branch that
+            # changes its dependencies, so this installs main's lockfile.
+            bash "$RUNNER_TEMP/main/check-lockfile.sh" "$root/work"
+            (cd "$root/work" && npm ci --ignore-scripts --no-audit --no-fund)
             chmod -R a-w "$root/in"
             cp "$root/work/.git/config" "$RUNNER_TEMP/baseline/git-config-$number"
             stat -c %d:%i "$root/work" "$root/work/.git" > "$RUNNER_TEMP/baseline/clone-$number"

@@ -668,7 +668,7 @@ jobs:
       # CI's run for the push reads the pull request as it is when the push lands, so an open pull
       # request gets this try's title and description first. gh pr view finds a branch's closed or
       # merged pull request when it has no open one, so only GitHub's list of the branch's open pull
-      # requests decides.
+      # requests decides, and only the app's: anyone can open one from the branch.
       - name: Give an open pull request this try's title and description, before the push
         id: edit
         if: steps.guard.outputs.result == 'push'
@@ -677,7 +677,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           number="$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" \
-            --jq '[.[] | .number] | first // empty')"
+            --jq '[.[] | select(.user.login == "awml-factory[bot]" and .user.type == "Bot") | .number] | first // empty')"
           case "$number" in *[!0-9]*) echo "The open pull request's number isn't a number: $number"; exit 1 ;; esac
           if [ -n "$number" ]; then
             gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --title "$(cat "$RUNNER_TEMP/title.txt")" \
@@ -746,7 +746,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           number="$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" \
-            --jq '[.[] | .number] | first // empty')"
+            --jq '[.[] | select(.user.login == "awml-factory[bot]" and .user.type == "Bot") | .number] | first // empty')"
           case "$number" in *[!0-9]*) echo "The open pull request's number isn't a number: $number"; exit 1 ;; esac
           if [ -z "$number" ]; then
             gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \

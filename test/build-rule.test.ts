@@ -454,8 +454,12 @@ describe("judging the branch's commits since main", () => {
   it("refuses a head the base isn't under", () => {
     const { repo, base } = branch();
     commitAs(repo, bot, "src/app/page.tsx", "Build #7");
+    const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    git(repo, "switch", "-q", "-c", "side", base);
+    commitAs(repo, bot, "src/app/side.tsx", "Side");
+    const side = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
-    expect(() => evaluate(repo, plain, { classified: "ship", base, head: "f".repeat(40), factory })).toThrow();
+    expect(() => evaluate(repo, plain, { classified: "ship", base: side, head, factory })).toThrow();
   });
 });
 
@@ -463,5 +467,7 @@ describe("counting fix commits", () => {
   it("counts the commits whose message carries the fix line", () => {
     expect(countFixCommits(["Build #7", "Fix\n\nFactory-Fix: https://x/runs/1", "Factory-Fix: in the subject"])).toBe(2);
     expect(countFixCommits(["Fix\n\nsee Factory-Fix: elsewhere"])).toBe(0);
+    // A try is a commit, so one that carries the line twice is still one.
+    expect(countFixCommits(["Fix\n\nFactory-Fix: https://x/runs/1\nFactory-Fix: https://x/runs/2"])).toBe(1);
   });
 });

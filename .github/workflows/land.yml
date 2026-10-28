@@ -55,8 +55,9 @@ jobs:
       # fork's branch can carry a build's name. The pull request must be open from the branch with
       # CI's commit as its head, every check on that commit must have finished, and test, Bug review
       # and Security review must have passed in CI's own run. A Classify that ended without success,
-      # timed out or lost its runner, goes on to the rule as no verdict, which means ask. Whoever last added the
-      # issue's build label is asked; if the app added it, the owner is.
+      # timed out or lost its runner, goes on to the rule as no verdict, which means ask. Anyone can
+      # open a pull request from the build's branch, so only the one the factory's app opened is
+      # landed. Whoever last added the issue's build label is asked; if the app added it, the owner is.
       - name: Check the pull request is open at CI's commit, with every check passed
         id: ready
         env:
@@ -78,6 +79,7 @@ jobs:
           pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" |
             jq -r --arg repository "$GITHUB_REPOSITORY" --arg branch "$BRANCH" --arg head "$HEAD_SHA" \
               '[.[] | select(.base.ref == "main" and .head.ref == $branch and .head.repo.full_name == $repository
+                and .user.login == "awml-factory[bot]" and .user.type == "Bot"
                 and .head.sha == $head)] | first | .number // empty')"
           case "$pr" in *[!0-9]*) leave "The pull request's number isn't a number." ;; esac
           [ -n "$pr" ] || leave "No open pull request on $BRANCH is at CI's commit, so a newer CI result decides."
@@ -145,11 +147,23 @@ jobs:
             -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
             fetch --no-tags origin "$HEAD_SHA"
           base="$(git merge-base HEAD "$HEAD_SHA")"
+          # GitHub ran the pull request's own ci.yml, so the reviews and Classify the head passed are
+          # main's only if that file is.
+          ci_head="$(git rev-parse -q --verify "$HEAD_SHA:.github/workflows/ci.yml" || echo none)"
+          ci_main="$(git rev-parse -q --verify "HEAD:.github/workflows/ci.yml" || echo none)"
           git worktree add -q --detach "$RUNNER_TEMP/judged" "$base"
           git -C "$RUNNER_TEMP/judged" read-tree "$HEAD_SHA"
           node --experimental-strip-types "$RUNNER_TEMP/build-rule.mts" --repo "$RUNNER_TEMP/judged" \
             --rules "$RUNNER_TEMP/build-rules.yml" --classified "$classified" --nits "$nits" \
             --base "$base" --head "$HEAD_SHA" --factory 'awml-factory[bot]' > "$RUNNER_TEMP/verdict.txt"
+          if [ "$ci_head" != "$ci_main" ]; then
+            {
+              echo ask
+              echo "CI ran this pull request's own .github/workflows/ci.yml, which isn't main's."
+              tail -n +2 "$RUNNER_TEMP/verdict.txt" | grep -vxF "No review rule matched this change." || true
+            } > "$RUNNER_TEMP/verdict.ci"
+            mv "$RUNNER_TEMP/verdict.ci" "$RUNNER_TEMP/verdict.txt"
+          fi
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
           cat "$RUNNER_TEMP/verdict.txt"

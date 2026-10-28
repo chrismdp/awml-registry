@@ -37,6 +37,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: read
+      checks: read
       contents: read
       pull-requests: read
     outputs:
@@ -44,6 +45,7 @@ jobs:
       pr: ${{ steps.ready.outputs.pr }}
       head_sha: ${{ steps.ready.outputs.head_sha }}
       branch: ${{ steps.ready.outputs.branch }}
+      failed: ${{ steps.ready.outputs.failed }}
     steps:
       # main, to read the branch against with git. Nothing from it runs.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -78,10 +80,18 @@ jobs:
             leave "Neither review failed."
           pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" |
             jq -r --arg repository "$GITHUB_REPOSITORY" --arg branch "$BRANCH" --arg head "$HEAD_SHA" \
-              '[.[] | select(.head.ref == $branch and .head.repo.full_name == $repository and .head.sha == $head)]
+              '[.[] | select(.head.ref == $branch and .head.repo.full_name == $repository and .head.sha == $head
+                and ((.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) or
+                  (.user.login == "awml-factory[bot]" and .user.type == "Bot")))]
                 | first | .number // empty')"
           case "$pr" in *[!0-9]*) leave "The pull request's number isn't a number." ;; esac
           [ -n "$pr" ] || leave "No open pull request on $BRANCH is at the reviewed commit, so there's nothing to fix."
+          # A review that failed without an Important finding refused the patch or ran out of time,
+          # so there's nothing for a session to fix: a person must look at its check. The names are
+          # the reviews', from a fixed list.
+          important="$(bash .github/review-findings.sh findings "$CI_RUN" | jq '[.[] | select(.severity == "Important")] | length')"
+          case "$important" in ''|*[!0-9]*) echo "The Important findings couldn't be counted: $important"; exit 1 ;; esac
+          failed="$(jq -r '[.[] | select((.name | IN("Bug review", "Security review")) and .conclusion == "failure") | .name] | unique | join(" and ")' "$RUNNER_TEMP/jobs.json")"
           # The branch's commits and files since main, read with git: GitHub's compare lists at most
           # 300 files. Git runs here on data alone, with hooks, fsmonitor and global config off.
           safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
@@ -96,7 +106,9 @@ jobs:
           # or its package.json or lockfile, is never installed beside the Claude token: the fixer
           # only ever installs main's dependencies.
           held='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)package(-lock)?\.json$'
-          if safe_git diff --name-only --no-renames --no-ext-diff --no-textconv -z "$base" "$HEAD_SHA" | grep -zqE "$held"; then
+          if [ "$important" -eq 0 ]; then
+            outcome=noimportant
+          elif safe_git diff --name-only --no-renames --no-ext-diff --no-textconv -z "$base" "$HEAD_SHA" | grep -zqE "$held"; then
             outcome=npmfiles
           elif [ "$fixes" -ge 2 ]; then outcome=giveup; else outcome=fix; fi
           {
@@ -104,6 +116,7 @@ jobs:
             echo "pr=$pr"
             echo "head_sha=$HEAD_SHA"
             echo "branch=$BRANCH"
+            echo "failed=$failed"
           } | tee -a "$GITHUB_OUTPUT"
 
   # Claude fixes every finding of both reviews here, with a read-only token, and hands back a patch.
@@ -283,7 +296,7 @@ jobs:
   # on what it posts, so a moved head or a closed pull request posts nothing.
   write:
     needs: [decide, fix]
-    if: ${{ !cancelled() && (needs.decide.outputs.outcome == 'fix' || needs.decide.outputs.outcome == 'giveup' || needs.decide.outputs.outcome == 'npmfiles') }}
+    if: ${{ !cancelled() && (needs.decide.outputs.outcome == 'fix' || needs.decide.outputs.outcome == 'giveup' || needs.decide.outputs.outcome == 'npmfiles' || needs.decide.outputs.outcome == 'noimportant') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -325,6 +338,7 @@ jobs:
           OUTCOME: ${{ needs.decide.outputs.outcome }}
           FIXED: ${{ needs.fix.result }}
           CHANGED: ${{ needs.fix.outputs.changed }}
+          FAILED_REVIEWS: ${{ needs.decide.outputs.failed }}
         run: |
           case "$PR_NUMBER" in ''|*[!0-9]*) echo "The pull request must be a number: $PR_NUMBER"; exit 1 ;; esac
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -347,6 +361,8 @@ jobs:
             exit 0
           }
           [ "$OUTCOME" != giveup ] || give_up "This branch already carries two fix commits, so the fixer has stopped."
+          case "$FAILED_REVIEWS" in "Bug review"|"Security review"|"Bug review and Security review") ;; *) FAILED_REVIEWS="A review" ;; esac
+          [ "$OUTCOME" != noimportant ] || give_up "$FAILED_REVIEWS failed with no Important finding: it may have refused the patch or run out of time, so there's nothing for the fixer to fix."
           [ "$OUTCOME" != npmfiles ] || give_up "This branch changes its dependencies (\`package.json\` or \`package-lock.json\`), an \`.npmrc\`, a \`.yarnrc\` or \`node_modules/\`, so the fixer won't install it beside its login token."
           # The fix job can fail after its session too, on a changed config, a nested repository or a
           # token, so a failed job isn't put down to the session.
