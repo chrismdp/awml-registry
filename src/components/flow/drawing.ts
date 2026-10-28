@@ -241,34 +241,38 @@ export function squareRoute(s: Rect, t: Rect): { points: Point[]; label: Point }
   return { points: [at(a, sv), at(mid, sv), at(mid, tv), at(b, tv)], label: at(mid, (sv + tv) / 2) };
 }
 
-// Where a label of `size` goes on a line along `points`: the place nearest
-// halfway along it where it covers none of `clear`, or halfway when there is
-// none. The places tried are 8 pixels apart.
-export function labelAt(points: Point[], size: { width: number; height: number }, clear: Rect[]): Point {
-  const lengths = points.slice(1).map((q, i) => Math.hypot(q.x - points[i].x, q.y - points[i].y));
-  const total = lengths.reduce((a, b) => a + b, 0);
-  const along = (d: number): Point => {
-    for (const [i, l] of lengths.entries()) {
-      if (d <= l || i === lengths.length - 1) {
-        const k = l ? Math.min(1, d / l) : 0;
-        return { x: points[i].x + (points[i + 1].x - points[i].x) * k, y: points[i].y + (points[i + 1].y - points[i].y) * k };
-      }
-      d -= l;
+// How long each stretch of a line through `points` is.
+const stretches = (points: Point[]) => points.slice(1).map((q, i) => Math.hypot(q.x - points[i].x, q.y - points[i].y));
+
+// The point a fraction `t` of the way along a line through `points`.
+export function pointAlong(points: Point[], t: number): Point {
+  const lengths = stretches(points);
+  let d = Math.max(0, Math.min(1, t)) * lengths.reduce((a, b) => a + b, 0);
+  for (const [i, l] of lengths.entries()) {
+    if (d <= l || i === lengths.length - 1) {
+      const k = l ? Math.min(1, d / l) : 0;
+      return { x: points[i].x + (points[i + 1].x - points[i].x) * k, y: points[i].y + (points[i + 1].y - points[i].y) * k };
     }
-    return points[0];
-  };
-  const middle = along(total / 2);
-  const free = (p: Point) =>
-    clear.every(
-      (r) => p.x + size.width / 2 <= r.x || p.x - size.width / 2 >= r.x + r.width || p.y + size.height / 2 <= r.y || p.y - size.height / 2 >= r.y + r.height,
-    );
-  if (points.length < 2 || free(middle)) return middle;
-  for (let step = 8; step <= total / 2; step += 8)
-    for (const d of [total / 2 - step, total / 2 + step]) {
-      const p = along(d);
-      if (free(p)) return p;
-    }
-  return middle;
+    d -= l;
+  }
+  return points[0];
+}
+
+// How far along a line through `points` the place nearest `p` is, as a
+// fraction of its length, and how long it is.
+export function fractionAt(points: Point[], p: Point): { t: number; length: number } {
+  const lengths = stretches(points);
+  const length = lengths.reduce((a, b) => a + b, 0);
+  let best = { d: 0, gap: Infinity };
+  let before = 0;
+  for (const [i, l] of lengths.entries()) {
+    const [a, b] = [points[i], points[i + 1]];
+    const k = l ? Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / (l * l))) : 0;
+    const gap = Math.hypot(a.x + (b.x - a.x) * k - p.x, a.y + (b.y - a.y) * k - p.y);
+    if (gap < best.gap) best = { d: before + k * l, gap };
+    before += l;
+  }
+  return { t: length ? best.d / length : 0.5, length };
 }
 
 // The outline of each kind of part, drawn at its size: the corners stay the

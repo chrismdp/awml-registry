@@ -48,6 +48,19 @@ function elkHere() {
 // ELK's layered algorithm, top to bottom, each scope a box round what it
 // holds, with lines crossing scopes laid out together (hierarchical). Solid
 // lines, the workflow's own flow, decide the layers before dotted ones.
+// The room between what ELK lays out, which each scope is given too: ELK
+// reads it from the node that holds what it spaces, so the drawing's own
+// spacing never reached inside a scope (#78).
+const SPACING = {
+  "elk.layered.spacing.nodeNodeBetweenLayers": "64",
+  "elk.layered.spacing.edgeNodeBetweenLayers": "28",
+  "elk.layered.spacing.edgeEdgeBetweenLayers": "14",
+  "elk.spacing.nodeNode": "40",
+  "elk.spacing.edgeNode": "24",
+  "elk.spacing.edgeEdge": "14",
+  "elk.spacing.edgeLabel": "6",
+  "elk.spacing.componentComponent": "56",
+};
 const OPTIONS = {
   "elk.algorithm": "layered",
   "elk.direction": "DOWN",
@@ -57,14 +70,7 @@ const OPTIONS = {
   "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
   "elk.layered.nodePlacement.bk.fixedAlignment": "BALANCED",
   "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
-  "elk.layered.spacing.nodeNodeBetweenLayers": "64",
-  "elk.layered.spacing.edgeNodeBetweenLayers": "28",
-  "elk.layered.spacing.edgeEdgeBetweenLayers": "14",
-  "elk.spacing.nodeNode": "40",
-  "elk.spacing.edgeNode": "24",
-  "elk.spacing.edgeEdge": "14",
-  "elk.spacing.edgeLabel": "6",
-  "elk.spacing.componentComponent": "56",
+  ...SPACING,
   "elk.edgeLabels.placement": "CENTER",
   "elk.layered.edgeLabels.sideSelection": "SMART_DOWN",
 };
@@ -111,6 +117,7 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
           id: s.id,
           children: childrenOf(s.id),
           layoutOptions: {
+            ...SPACING,
             "elk.padding": `[top=${headHeight(heading.who)},left=${SCOPE_PAD},bottom=${SCOPE_PAD},right=${SCOPE_PAD}]`,
             // At least as wide as its heading. Laying the scopes out nested
             // together (INCLUDE_CHILDREN), top to bottom, ELK reads a scope's
