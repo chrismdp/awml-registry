@@ -251,7 +251,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         run: |
-          bash "$RUNNER_TEMP/main/resolve-session.sh" 1
+          { STEP_SCRIPT="$0" bash "$RUNNER_TEMP/main/resolve-session.sh" 1; exit; }
       - name: Continue each rebase, round 1
         id: continue1
         if: ${{ !cancelled() }}
@@ -267,7 +267,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         run: |
-          bash "$RUNNER_TEMP/main/resolve-session.sh" 2
+          { STEP_SCRIPT="$0" bash "$RUNNER_TEMP/main/resolve-session.sh" 2; exit; }
       - name: Continue each rebase, round 2
         id: continue2
         if: ${{ !cancelled() }}
@@ -283,7 +283,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         run: |
-          bash "$RUNNER_TEMP/main/resolve-session.sh" 3
+          { STEP_SCRIPT="$0" bash "$RUNNER_TEMP/main/resolve-session.sh" 3; exit; }
       - name: Continue each rebase, round 3
         id: continue3
         if: ${{ !cancelled() }}

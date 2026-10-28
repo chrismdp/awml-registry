@@ -86,6 +86,11 @@ jobs:
                 | first | .number // empty')"
           case "$pr" in *[!0-9]*) leave "The pull request's number isn't a number." ;; esac
           [ -n "$pr" ] || leave "No open pull request on $BRANCH is at the reviewed commit, so there's nothing to fix."
+          # A stranger's pull request from the branch, at the same head, gets a CI run of its own, so
+          # the run must be this pull request's own, by GitHub's record of the run.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN" |
+            jq -e --argjson pr "$pr" 'any(.pull_requests[]?; .number == $pr)' > /dev/null ||
+            leave "CI's run isn't #$pr's own."
           # A review that failed without an Important finding refused the patch or ran out of time,
           # so there's nothing for a session to fix: a person must look at its check. The names are
           # the reviews', from a fixed list.
@@ -216,11 +221,14 @@ jobs:
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
           INPUT_DIR: ${{ runner.temp }}/input
         run: |
+          {
+          # One group, which bash reads whole before claude starts, so nothing a command in
+          # the session writes to this script, which is denied to it, can run after it.
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/fix"
           rm -rf "$session"
           mkdir -p "$session/out"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write ./.git --deny-write "$RUNNER_TEMP/baseline" \
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write ./.git --deny-write "$RUNNER_TEMP/baseline" \
             --deny-write "$RUNNER_TEMP/fix"
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/fix-prompt.md")"
           status=0
@@ -238,6 +246,7 @@ jobs:
           cat "$session/log"
           echo "::$stop::"
           exit "$status"
+          }
 
       # Git reads the tree the session wrote, so it runs nothing the session's commands could have
       # set: the workspace and its .git must be the ones the session started in, git's config byte

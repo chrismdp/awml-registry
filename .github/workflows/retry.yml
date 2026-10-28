@@ -61,6 +61,11 @@ jobs:
                 and .user.login == "awml-factory[bot]" and .user.type == "Bot")]
                 | first | .number // empty')"
           [ -n "$pr" ] || leave "No open pull request on $BRANCH is at CI's commit, so a newer CI result decides."
+          # A stranger's pull request from the branch, at the same head, gets a CI run of its own, so
+          # the run must be this pull request's own, by GitHub's record of the run.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN" |
+            jq -e --argjson pr "$pr" 'any(.pull_requests[]?; .number == $pr)' > /dev/null ||
+            leave "CI's run isn't #$pr's own."
 
           # shellcheck disable=SC2016 # The query's variables are GraphQL's.
           gh api graphql -F owner="$GITHUB_REPOSITORY_OWNER" -f name="${GITHUB_REPOSITORY#*/}" -F number="$issue" -f query='

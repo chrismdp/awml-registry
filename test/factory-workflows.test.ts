@@ -139,6 +139,25 @@ empty=no
 [ -n "$(ls -A "$HOME" 2> /dev/null)" ] || empty=yes
 changes=no
 if touch "$INPUT_DIR/planted" 2> /dev/null || [ -w "$INPUT_DIR/REVIEW.md" ]; then changes=yes; fi
+# A command in the session could rewrite the script that started it, which bash reads as it goes, so
+# for each script it's told of, the stub finds where the shell running it has read up to, from
+# /proc, and writes a line there, which must never run.
+IFS=: read -r -a rewrite <<< "\${REWRITE:-}"
+for script in "\${rewrite[@]}"; do
+  [ -n "$script" ] || continue
+  pid=$PPID
+  while [ "$pid" -gt 1 ]; do
+    for fd in /proc/$pid/fd/*; do
+      if [ "$(readlink "$fd")" = "$script" ]; then
+        pos="$(awk '/^pos:/ { print $2 }' "/proc/$pid/fdinfo/\${fd##*/}")"
+        truncate -s "$pos" "$script"
+        printf '\ntouch "%s"\n' "$PWNED" >> "$script"
+        break 2
+      fi
+    done
+    pid="$(awk '{ print $4 }' "/proc/$pid/stat")"
+  done
+done
 args="$(printf '%s\\0' "$@" | jq -Rsc 'split("\\u0000") | .[:-1]')"
 jq -nc --arg home "$HOME" --arg empty "$empty" --arg changes "$changes" --argjson args "$args" \\
   '{home: $home, empty: $empty, changes: $changes, args: $args}' >> "$CLAUDE_LOG"
@@ -160,7 +179,13 @@ function sessions(script: string, root: string, env: Record<string, string>): { 
   const bin = join(root, "bin");
   put(join(bin, "claude"), claudeStub);
   chmodSync(join(bin, "claude"), 0o755);
-  const run = rehearse(script, { root, env: { CLAUDE_LOG: join(root, "claude.log"), ...env } });
+  const pwned = join(root, "pwned");
+  const run = rehearse(script, {
+    root,
+    env: { CLAUDE_LOG: join(root, "claude.log"), PWNED: pwned, ...env, REWRITE: [join(root, "step.sh"), env.REWRITE ?? ""].join(":") },
+  });
+  // Whatever the session appended to a script that started it never runs.
+  expect(existsSync(pwned), "a line the session appended to its script ran").toBe(false);
   const started = readIfThere(join(root, "claude.log"))
     .split("\n")
     .filter(Boolean)
@@ -526,6 +551,32 @@ describe("the factory's workflows", () => {
       }
     }
     expect(found.sort()).toEqual(["build.yml draft", "ci.yml classify", "ci.yml review", "fix.yml fix", "resolve.yml draft"]);
+  });
+
+  // bash reads a step's script, and any script it runs, as it goes, so a command in the session could
+  // rewrite what follows claude and run it outside the sandbox, beside the token. Each step that
+  // holds the token, and each script that starts claude, is one group, parsed whole before claude
+  // starts, that ends by exiting; and the scripts are denied to the session.
+  it("parse every step and script that starts claude whole before it starts, and deny them to the session", () => {
+    const steps_: string[] = [];
+    for (const [file, id, job] of everyJob())
+      for (const each of steps(job)) {
+        if (!(each.env && "CLAUDE_CODE_OAUTH_TOKEN" in each.env)) continue;
+        steps_.push(`${file} ${id} ${each.id}`);
+        const body = (each.run ?? "").trim();
+        expect(body.startsWith("{"), `${file} ${each.id}`).toBe(true);
+        expect(body.endsWith("}"), `${file} ${each.id}`).toBe(true);
+        expect(body.slice(0, -1).trim().split("\n").pop() ?? "", `${file} ${each.id}`).toMatch(/(^|; )exit( "\$status")?;?$/);
+        if (/claude-settings\.sh/.test(body)) expect(body, `${file} ${each.id}`).toContain('--deny-write "$0"');
+        else expect(body, `${file} ${each.id}`).toMatch(/^\{ STEP_SCRIPT="\$0" bash "\$RUNNER_TEMP\/main\/resolve-session\.sh" [123]; exit; \}$/);
+      }
+    expect(steps_.length).toBe(7);
+    const session = readFileSync(join(github, "resolve-session.sh"), "utf8");
+    const body = session.slice(session.indexOf("set -euo pipefail\n") + "set -euo pipefail\n".length).trim();
+    expect(body.startsWith("{")).toBe(true);
+    expect(body.endsWith("}")).toBe(true);
+    expect(body.slice(0, -1).trim().split("\n").pop()?.trim()).toBe("exit 0");
+    expect(session).toContain('--deny-write "$0" --deny-write "$STEP_SCRIPT"');
   });
 
   it("scrub the token from Claude's commands, and hold it only where Claude starts", () => {
@@ -1242,6 +1293,25 @@ describe("ci.yml", () => {
     for (const id of ["review", "classify"]) expect(stepWithId(jobs[id], "bring").env?.PR_NUMBER, id).toBe("${{ github.event.pull_request.number }}");
   });
 
+  it.runIf(canRehearse)("starts Classify in a home of its own, editing only its verdict", () => {
+    const root = scratch();
+    const input = join(root, "runner/input");
+    put(join(input, "change.patch"), "diff --git a/a b/a\n");
+    put(join(root, "runner/main/classify-prompt.md"), "Read INPUT_DIR/change.patch. Write OUT_DIR/classification.json.\n");
+    put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
+    const { run, started } = sessions(stepWithId(jobs.classify, "session").run ?? "", root, {
+      INPUT_DIR: input,
+      CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(started).toHaveLength(1);
+    const out = join(dirname(started[0].home), "out");
+    expect(flagValues(started[0].args, "--allowedTools")).toEqual(["Read(./**)", `Read(/${input}/**)`, `Edit(/${out}/classification.json)`]);
+    const denied = JSON.parse(readFileSync(join(started[0].home, ".claude/settings.json"), "utf8")).sandbox.filesystem.denyWrite;
+    expect(denied).toContain(join(root, "step.sh"));
+  });
+
   // The job's own check carries the findings, as annotations GitHub keeps on it, and fails on an
   // Important finding. Text the review wrote can't break out of an annotation or start a workflow
   // command, and nothing like a token is posted.
@@ -1665,7 +1735,7 @@ describe("build.yml", () => {
     const out = join(dirname(session.home), "out");
     const settings = JSON.parse(readFileSync(join(session.home, ".claude/settings.json"), "utf8"));
     expect(settings.sandbox.network.allowedDomains).toEqual([]);
-    expect(settings.sandbox.filesystem.denyWrite[0]).toBe("./.git");
+    expect(settings.sandbox.filesystem.denyWrite).toContain("./.git");
     expect(flagValues(session.args, "--permission-mode")).toEqual(["default"]);
     expect(flagValues(session.args, "--disallowedTools")).toEqual(["Read(//proc/**)", "Edit(./.git/**)", "Write(./.git/**)"]);
     const allowed = flagValues(session.args, "--allowedTools");
@@ -2286,7 +2356,9 @@ describe("fix.yml", () => {
     files = ["src/page.tsx"],
     important = true,
     twoLines = false,
+    runPulls = [12],
   }: Partial<{
+    runPulls: number[];
     event: string;
     repository: string;
     pullHead: string;
@@ -2336,6 +2408,7 @@ describe("fix.yml", () => {
   })}' ;;
   *"check-runs/11/annotations"*) answer <<< '${JSON.stringify(important && bug === "failure" ? [{ annotation_level: "failure", title: "Important: Wrong", message: "m", path: "src/a.ts", start_line: 1 }] : [])}' ;;
   *"check-runs/12/annotations"*) answer <<< '${JSON.stringify(important && security === "failure" ? [{ annotation_level: "failure", title: "Important: Hole", message: "m", path: "src/a.ts", start_line: 1 }] : [])}' ;;
+  *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })) })}' ;;
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([
     strangerPull(pullHead ?? sha),
     { ...appPull(pullHead ?? sha, pullRepository), user: { login: "maintainer", type: "User" }, author_association: "MEMBER" },
@@ -2386,6 +2459,14 @@ describe("fix.yml", () => {
     expect(run.failed, run.printed).toBe(false);
     expect(run.outputs.outcome).toBe("noimportant");
     expect(run.outputs.failed).toBe("Bug review");
+  });
+
+  // A stranger's pull request from the same branch, at the same head, gets a CI run of its own, so
+  // the run must be the pull request's own, by GitHub's record of the run.
+  it.runIf(canRehearse)("exits quietly on a CI run that isn't the pull request's own", () => {
+    const run = decide({ runPulls: [99] });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.outcome).toBe("none");
   });
 
   it.runIf(canRehearse)("counts a fix commit once, however many fix lines it carries", () => {
@@ -2447,7 +2528,7 @@ describe("fix.yml", () => {
     const [session] = started;
     const settings = JSON.parse(readFileSync(join(session.home, ".claude/settings.json"), "utf8"));
     expect(settings.sandbox.network.allowedDomains).toEqual([]);
-    expect(settings.sandbox.filesystem.denyWrite[0]).toBe("./.git");
+    expect(settings.sandbox.filesystem.denyWrite).toContain("./.git");
     expect(flagValues(session.args, "--permission-mode")).toEqual(["default"]);
     expect(flagValues(session.args, "--allowedTools").filter((rule) => rule.startsWith("Read("))).toEqual(["Read(./**)", `Read(/${input}/**)`]);
     const prompt = session.args[session.args.indexOf("-p") + 1];
@@ -2623,6 +2704,7 @@ describe("retry.yml", () => {
     builds = 1,
     pullRepository = "owner/repo",
     earlierFailure = false as boolean | "review",
+    runPulls = [12],
   } = {}) => {
     const root = scratch();
     const runs_ = Array.from({ length: builds }, (_, at) => ({
@@ -2645,6 +2727,7 @@ describe("retry.yml", () => {
       env: { BRANCH: "build/issue-7", HEAD_SHA: head, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77" },
       answers: `
   *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: test }, { name: "Bug review", conclusion: bug }] })}' ;;
+  *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })) })}' ;;
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(head), appPull(pullHead, pullRepository)])}' ;;
   *"actions/workflows/ci.yml/runs"*) answer <<< '${JSON.stringify(ciRuns)}' ;;
   *"actions/runs/70/jobs"*) answer <<< '${JSON.stringify({
@@ -2698,6 +2781,12 @@ describe("retry.yml", () => {
     expect(run.calls).toContain("issue comment 7 --repo owner/repo --body-file");
     expect(run.calls).toMatch(/> .*three times/);
     expect(run.calls).toContain("https://github.com/owner/repo/actions/runs/77");
+  });
+
+  it.runIf(canRehearse)("exits quietly on a CI run that isn't the app's pull request's own", () => {
+    const run = tries({ runPulls: [99] });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.calls).not.toMatch(/workflow run|issue comment/);
   });
 
   it.runIf(canRehearse)("names the app's pull request in its comments, never a stranger's", () => {
@@ -2861,7 +2950,7 @@ describe("resolve.yml", () => {
     const ids = steps(jobs.draft).map((each) => each.id).filter(Boolean);
     expect(ids).toEqual(["prepare", "session1", "continue1", "session2", "continue2", "session3", "continue3", "check"]);
     for (const round of [1, 2, 3]) {
-      expect(stepWithId(jobs.draft, `session${round}`).run).toBe(`bash "$RUNNER_TEMP/main/resolve-session.sh" ${round}\n`);
+      expect(stepWithId(jobs.draft, `session${round}`).run).toBe(`{ STEP_SCRIPT="$0" bash "$RUNNER_TEMP/main/resolve-session.sh" ${round}; exit; }\n`);
       const resume = stepWithId(jobs.draft, `continue${round}`);
       expect(resume.run).toBe(`bash "$RUNNER_TEMP/main/resolve-continue.sh"\n`);
       expect(resume.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
@@ -2928,7 +3017,10 @@ describe("resolve.yml", () => {
   it.runIf(canRehearse)("starts a session only where a rebase waits on a conflict, each round in a home of its own", () => {
     const root = sessionRoot([1, 3], [3]);
     const workspace = join(root, "workspace");
-    const { run, started } = sessions(script("resolve-session.sh", ["2"]), root, {
+    const copy = join(root, "resolve-session.sh");
+    put(copy, readFileSync(join(github, "resolve-session.sh"), "utf8"));
+    const { run, started } = sessions(`{ STEP_SCRIPT="$0" bash ${copy} 2; exit; }\n`, root, {
+      REWRITE: copy,
       CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
       GITHUB_WORKSPACE: workspace,

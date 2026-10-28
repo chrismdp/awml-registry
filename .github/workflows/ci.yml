@@ -166,11 +166,14 @@ jobs:
           PROMPT: ${{ matrix.review.prompt }}
           FINDINGS: ${{ matrix.review.findings }}
         run: |
+          {
+          # One group, which bash reads whole before claude starts, so nothing a command in
+          # the session writes to this script, which is denied to it, can run after it.
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/review"
           rm -rf "$session"
           mkdir -p "$session/out"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home"
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0"
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/$PROMPT")"
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 100 --permission-mode default \
@@ -183,6 +186,7 @@ jobs:
           cat "$session/log"
           echo "::$stop::"
           exit "$status"
+          }
 
       - name: Post the findings on this job's check
         env:
@@ -259,11 +263,14 @@ jobs:
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
           INPUT_DIR: ${{ runner.temp }}/input
         run: |
+          {
+          # One group, which bash reads whole before claude starts, so nothing a command in
+          # the session writes to this script, which is denied to it, can run after it.
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/classify"
           rm -rf "$session"
           mkdir -p "$session/out"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home"
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0"
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/classify-prompt.md")"
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 100 --permission-mode default \
@@ -276,6 +283,7 @@ jobs:
           cat "$session/log"
           echo "::$stop::"
           exit "$status"
+          }
 
       # The verdict is a notice on this job's check, titled with it, which land reads back. Its
       # reasons can't break out of the notice, and a verdict that carries anything like a token is
