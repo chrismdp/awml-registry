@@ -379,8 +379,10 @@ jobs:
       # the ones the sessions started beside and in, the clone's git config is as it was, no
       # repository is nested in it, its rebase finished and wasn't given up on, and the out folder
       # is reached through no symbolic link. Every commit since main is tested against the held-back
-      # pattern, not only the net change, so a change added and then reverted still counts. It must sit on main, carry no conflict marker, and
-      # change nothing the app never pushes. The lines its resolution adds, beyond those the branch
+      # pattern, not only the net change, so a change added and then reverted still counts. It must
+      # sit on main as one straight line of commits, each with one parent, the one before it, so no
+      # commit carries a parent a session chose; carry no conflict marker; and change nothing the
+      # app never pushes. The lines its resolution adds, beyond those the branch
       # already added, and Claude's note, must carry nothing like a token. The digest of what's kept
       # is the job's output, which the push job checks it against.
       - name: Check each rebase, read into a fresh repository
@@ -458,6 +460,9 @@ jobs:
               safe_git -C "$fresh" bundle verify -q "$bundle" > /dev/null 2>&1 &&
               safe_git -C "$fresh" fetch -q "$bundle" "HEAD:refs/rebased" &&
               safe_git -C "$fresh" merge-base --is-ancestor "$MAIN_SHA" refs/rebased &&
+              safe_git -C "$fresh" rev-list --reverse --parents "$MAIN_SHA..refs/rebased" > "$HOST_DIR/check/$number.parents" &&
+              awk -v main="$MAIN_SHA" 'BEGIN { prev = main } NF != 2 || $2 != prev { bad = 1 } { prev = $1 } END { exit bad }' \
+                "$HOST_DIR/check/$number.parents" &&
               ! safe_git -C "$fresh" grep -qE '^(<<<<<<<|>>>>>>>)( |$)' refs/rebased -- &&
               safe_git -C "$fresh" log --format= --name-only --no-renames -z "$MAIN_SHA..refs/rebased" > "$HOST_DIR/check/$number.names" &&
               ! grep -qzE "$guarded" "$HOST_DIR/check/$number.names"; then
@@ -471,7 +476,7 @@ jobs:
                 echo "The resolution of #$number adds what looks like a token, so it isn't kept."
               fi
             else
-              echo "The session on #$number left no rebase that sits on main without conflict markers or files the app never pushes."
+              echo "The session on #$number left no rebase that sits on main in one line of single-parent commits, without conflict markers or files the app never pushes."
             fi
             if [ -f "$out/message.md" ] && [ ! -L "$out/message.md" ]; then
               head -c 20000 "$out/message.md" > "$HOST_DIR/check/$number.md"

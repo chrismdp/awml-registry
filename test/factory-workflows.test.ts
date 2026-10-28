@@ -4070,6 +4070,14 @@ ${permissionStub}
       ["moves HEAD", (clone: string) => git(clone, "update-ref", "--no-deref", "HEAD", git(clone, "rev-parse", "HEAD~1"))],
       ["adds a ref", (clone: string) => git(clone, "update-ref", "refs/heads/extra", git(clone, "rev-parse", "HEAD"))],
       ["sets ORIG_HEAD", (clone: string) => git(clone, "update-ref", "ORIG_HEAD", git(clone, "rev-parse", "HEAD~1"))],
+      // The commit git's continue makes would take a second parent the session chose.
+      ["writes MERGE_HEAD to a commit it made", (clone: string) => {
+        const tree = git(clone, "rev-parse", "HEAD^{tree}");
+        const made = git(clone, "commit-tree", tree, "-m", "the session's");
+        writeFileSync(join(clone, ".git/MERGE_HEAD"), `${made}\n`);
+      }],
+      ["writes CHERRY_PICK_HEAD", (clone: string) => writeFileSync(join(clone, ".git/CHERRY_PICK_HEAD"), `${git(clone, "rev-parse", "HEAD~1")}\n`)],
+      ["starts a sequencer", (clone: string) => put(join(clone, ".git/sequencer/todo"), "pick 0000000 x\n")],
       ["stages a file", (clone: string) => {
         put(join(clone, "c.txt"), "the session's\n");
         git(clone, "add", "c.txt");
@@ -4184,6 +4192,14 @@ ${permissionStub}
       ["a change to .github/", (work: string) => put(join(work, ".github/workflows/x.yml"), "on: push\n")],
       ["a change to an .npmrc", (work: string) => put(join(work, ".npmrc"), "registry=https://example.com/\n")],
       ["a change to the dependencies", (work: string) => put(join(work, "package.json"), '{"dependencies": {"c": "git+ssh://x"}}\n')],
+      // A MERGE_HEAD the session wrote gives the last commit a second parent, the session's own.
+      [
+        "a commit with a second parent",
+        (work: string) => {
+          const made = git(work, "commit-tree", git(work, "rev-parse", "HEAD^{tree}"), "-m", "the session's");
+          writeFileSync(join(work, ".git/MERGE_HEAD"), `${made}\n`);
+        },
+      ],
       // A session could add a change and revert it in a later commit, leaving none in the net diff.
       [
         "a workflow added and taken out again",
