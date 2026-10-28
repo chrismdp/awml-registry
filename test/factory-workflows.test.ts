@@ -4396,3 +4396,77 @@ done
     }
   });
 });
+
+// A pull request's own ci.yml runs main's copies of the scripts it calls, copied out of main's
+// tree, so until a change to one of those scripts is on main, the branch's ci.yml must still
+// work with main's copy. Each of ci.yml's steps that calls a main-copied script is rehearsed here
+// with origin/main's copy of every one, which CI's test job fetches.
+describe("ci.yml with main's copies of its scripts", () => {
+  const jobs = readJobs("ci.yml");
+  const mainCopied = ["claude-settings.sh", "bring-patch.sh", "scan-tokens.sh", "post-findings.sh", "review-findings.sh", "check-out.sh"];
+  const fromMain = (root: string) => {
+    for (const name of mainCopied)
+      put(join(root, "runner/main", name), execFileSync("git", ["show", `origin/main:.github/${name}`], { cwd: join(__dirname, ".."), encoding: "utf8" }));
+  };
+  // A pull request's patch against main, as GitHub serves it.
+  const patched = (root: string) => {
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q");
+    put(join(repo, "README.md"), "A registry\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-qm", "main");
+    const main = git(repo, "rev-parse", "HEAD");
+    put(join(repo, "README.md"), "Changed\n");
+    git(repo, "add", "-A");
+    put(join(root, "change.patch"), git(repo, "diff", "--cached") + "\n");
+    git(repo, "reset", "-q", "--hard");
+    return { repo, answers: `
+  *"pulls/12"*) answer <<< '{"title": "A title", "body": "A description"}' ;;
+  *"merge_base_commit"*) echo ${main} ;;
+  *"application/vnd.github.diff"*) cat ${join(root, "change.patch")} ;;
+  *"actions/runs/1000/jobs"*) answer <<< '{"jobs": []}' ;;` };
+  };
+  const pull = { HEAD_SHA: "b".repeat(40), PR_NUMBER: "12" };
+
+  it("fetches main in CI's test job", () => {
+    expect(steps(jobs.test)[0].with).toMatchObject({ "fetch-depth": 0 });
+  });
+
+  it("can read origin/main", () => {
+    expect(spawnSync("git", ["rev-parse", "--verify", "-q", "origin/main"], { cwd: join(__dirname, "..") }).status, "CI's test job must fetch origin/main").toBe(0);
+  });
+
+  it.runIf(canRehearse).each(["review", "classify"])("runs %s's steps with main's copies", (id) => {
+    const root = scratch();
+    fromMain(root);
+    const { repo, answers } = patched(root);
+    const bring = rehearse(stepWithId(jobs[id], "bring").run ?? "", { root, cwd: repo, env: pull, answers });
+    expect(bring.failed, bring.printed).toBe(false);
+    const prompt = id === "review" ? "review-bugs-prompt.md" : "classify-prompt.md";
+    const findings = id === "review" ? "bugs.json" : "classification.json";
+    put(join(root, "runner/main", prompt), `Read INPUT_DIR/change.patch. Write OUT_DIR/${findings}.\n`);
+    const { run } = sessions(stepWithId(jobs[id], "session").run ?? "", root, {
+      INPUT_DIR: join(root, "runner/input"),
+      PROMPT: prompt,
+      FINDINGS: findings,
+      CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+    });
+    expect(run.failed, run.printed).toBe(false);
+    const out = join(root, `runner/sessions/${id}/out`);
+    if (id === "review") {
+      put(join(out, "bugs.json"), "[]");
+      const post = rehearse(stepWithId(jobs.review, "post").run ?? "", {
+        root,
+        env: { UNREAD: "0", FINDINGS: "bugs.json", REVIEW_NAME: "Bug review", GITHUB_STEP_SUMMARY: join(root, "summary.md") },
+      });
+      expect(post.failed, post.printed).toBe(false);
+    } else {
+      put(join(out, "classification.json"), JSON.stringify({ verdict: "show", reasons: ["It changes a page."] }));
+      const verdict = rehearse(stepWithId(jobs.classify, "verdict").run ?? "", { root, env: { GITHUB_STEP_SUMMARY: join(root, "summary.md") } });
+      expect(verdict.failed, verdict.printed).toBe(false);
+      expect(verdict.printed).toContain("::notice title=Verdict%3A show::It changes a page.");
+    }
+  });
+});
