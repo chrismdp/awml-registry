@@ -232,7 +232,7 @@ jobs:
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 100 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
-            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" "Bash" \
+            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Bash" \
             --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(/$session/out/$FINDINGS)" \
             > "$log" 2>&1 || status=$?
           stop="$(openssl rand -hex 16)"
@@ -358,7 +358,7 @@ jobs:
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 100 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
-            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" "Bash" \
+            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Bash" \
             --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(/$session/out/classification.json)" \
             > "$log" 2>&1 || status=$?
           stop="$(openssl rand -hex 16)"

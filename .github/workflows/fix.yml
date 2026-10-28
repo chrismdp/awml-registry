@@ -300,12 +300,12 @@ jobs:
           # The log goes to the host-only folder, which the session can't write, so it can't turn
           # it into a link for the host's cat to follow. The inputs are denied too.
           log="$HOST_DIR/logs/fix.log"
-          bash "$HOST_DIR/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR" --deny-write ./.git
+          bash "$HOST_DIR/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR"
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$HOST_DIR/main/fix-prompt.md")"
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
-            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" \
+            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" \
             --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(./**)" "Write(./**)" \
               "Edit(/$session/out/**)" "Write(/$session/out/**)" \
               "Bash(npm run:*)" "Bash(npm test:*)" \

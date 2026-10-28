@@ -271,6 +271,7 @@ function rehearse(
   put(join(bin, "gh"), ghStub(answers));
   chmodSync(join(bin, "gh"), 0o755);
   put(join(root, "step.sh"), script);
+  mkdirSync(join(root, "runner/_runner_file_commands"), { recursive: true });
   // A runner's step starts with SIGPIPE at its default, so a producer writing to a pipe whose reader
   // has gone dies of it; a test process may start with it ignored, which would hide that.
   const ran = spawnSync("env", ["--default-signal=PIPE", "bash", "--noprofile", "--norc", "-eo", "pipefail", join(root, "step.sh")], {
@@ -283,7 +284,9 @@ function rehearse(
       // The host-only folder is RUNNER_TEMP itself unless a test says otherwise, so a rehearsal's
       // files sit where they always have.
       HOST_DIR: join(root, "runner"),
-      GITHUB_OUTPUT: join(root, "output"),
+      // Where the runner keeps its file commands, so their folder, which every session's sandbox
+      // denies, isn't the rehearsal's whole root.
+      GITHUB_OUTPUT: join(root, "runner/_runner_file_commands/output"),
       GITHUB_REPOSITORY: "owner/repo",
       GITHUB_REPOSITORY_OWNER: "owner",
       GITHUB_SERVER_URL: "https://github.com",
@@ -306,7 +309,7 @@ function rehearse(
       .filter(Boolean)
       .map((line) => JSON.parse(line) as Record<string, unknown>),
     outputs: Object.fromEntries(
-      readIfThere(join(root, "output"))
+      readIfThere(env.GITHUB_OUTPUT ?? join(root, "runner/_runner_file_commands/output"))
         .split("\n")
         .filter((line) => line.includes("="))
         .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
@@ -654,7 +657,9 @@ describe("the factory's workflows", () => {
           expect(script.match(flag)?.length ?? 0, `${where} ${flag}`).toBe(count);
         expect(script, where).toContain('"Read(//proc/**)"');
         expect(script, where).toContain('"Edit(./.git/**)"');
-        expect(script, where).toContain('"Write(./.git/**)"');
+        // Claude Code reads only Edit rules for file edits, Write ones never, so a Write deny would
+        // only look like one.
+        expect(script, where).not.toMatch(/--disallowedTools[^\n]*"Write\(/);
         expect(script, where).not.toMatch(/"(Read|Glob|Grep)"/);
       });
     }
@@ -1024,9 +1029,10 @@ describe("claude-settings.sh", () => {
   it.runIf(canRehearse)("writes the session's user settings with the sandbox on and no network", () => {
     const root = scratch();
     const home = join(root, "home");
+    mkdirSync(join(root, "host"));
     const run = rehearse(
-      script("claude-settings.sh", [home, "--deny-write", "./.git"]),
-      { root, env: { RUNNER_TOOL_CACHE: "/opt/hostedtoolcache", HOME: "/home/runner" } },
+      script("claude-settings.sh", [home, "--deny-write", "./.git/rebase-merge"]),
+      { root, env: { RUNNER_TOOL_CACHE: "/opt/hostedtoolcache", HOME: "/home/runner", HOST_DIR: join(root, "host") } },
     );
     expect(run.failed, run.printed).toBe(false);
     const settings = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
@@ -1042,7 +1048,7 @@ describe("claude-settings.sh", () => {
         filesystem: {
           allowWrite: [],
           denyWrite: expect.arrayContaining([
-            "./.git",
+            "./.git/rebase-merge",
             join(root, "runner/_runner_file_commands"),
             "/opt/hostedtoolcache",
             "/home/runner/actions-runner",
@@ -1068,8 +1074,43 @@ describe("claude-settings.sh", () => {
     });
     expect(run.failed, run.printed).toBe(false);
     const denied = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")).sandbox.filesystem.denyWrite;
-    for (const want of [tools, join(tools, "node/22.0.0/x64/bin"), "/usr/local/bin", "/usr/bin", join(root, "bin")]) expect(denied).toContain(want);
+    for (const want of [tools, "/usr/local/bin", "/usr/bin", join(root, "bin")]) expect(denied).toContain(want);
     expect(denied).not.toContain("");
+    // The tool cache covers its bin folders: no denied path sits inside another.
+    expect(denied).not.toContain(join(tools, "node/22.0.0/x64/bin"));
+  });
+
+  // bwrap can't make a mount point inside a folder it has already made read-only, so a denied path
+  // inside another breaks every command: none may be.
+  it.runIf(canRehearse)("denies no path inside another denied path", () => {
+    const root = scratch();
+    const tools = join(root, "toolcache");
+    mkdirSync(join(tools, "node/22.0.0/x64/bin"), { recursive: true });
+    const runnerHome = join(root, "runner-home");
+    mkdirSync(join(runnerHome, ".local/bin"), { recursive: true });
+    const home = join(root, "home");
+    mkdirSync(join(root, "host"));
+    const run = rehearse(script("claude-settings.sh", [home, "--deny-write", join(root, "runner/pr/2"), "--deny-write", join(root, "runner/pr/2/in")]), {
+      root,
+      env: { HOST_DIR: join(root, "host"), HOME: runnerHome, RUNNER_TOOL_CACHE: tools, PATH: `${join(runnerHome, ".local/bin")}:/usr/bin:${process.env.PATH}` },
+    });
+    expect(run.failed, run.printed).toBe(false);
+    const denied: string[] = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")).sandbox.filesystem.denyWrite;
+    for (const outer of denied)
+      for (const inner of denied) if (outer !== inner) expect(inner.startsWith(`${outer.replace(/\/$/, "")}/`), `${inner} inside ${outer}`).toBe(false);
+    expect(denied).toContain(join(runnerHome, ".local"));
+    expect(denied).toContain(join(root, "runner/pr/2"));
+  });
+
+  // The scrub makes its own mount points in the .git of the folder a session starts in, and of the
+  // workspace, so no session denies either, or a folder above one.
+  it("deny no session the .git the scrub guards, or a folder above it", () => {
+    const texts = everyJob().flatMap(([, , job]) => steps(job).map(runOf));
+    for (const text of texts) {
+      expect(text).not.toContain("--deny-write ./.git ");
+      expect(text).not.toMatch(/--deny-write \.\/\.git(\s|$)/);
+      expect(text).not.toContain('--deny-write "$GITHUB_WORKSPACE"');
+    }
   });
 
   // A command that appended to the runner's file commands could set BASH_ENV, GIT_CONFIG_* or PATH
@@ -1423,7 +1464,6 @@ describe("ci.yml", () => {
     expect(flagValues(session.args, "--disallowedTools")).toEqual([
       "Read(//proc/**)",
       "Edit(./.git/**)",
-      "Write(./.git/**)",
       "Bash",
     ]);
     expect(flagValues(session.args, "--allowedTools")).toEqual(["Read(./**)", `Read(/${input}/**)`, `Edit(/${out}/bugs.json)`]);
@@ -2081,9 +2121,11 @@ ${permissionStub}`,
     const out = join(dirname(session.home), "out");
     const settings = JSON.parse(readFileSync(join(session.home, ".claude/settings.json"), "utf8"));
     expect(settings.sandbox.network.allowedDomains).toEqual([]);
-    expect(settings.sandbox.filesystem.denyWrite).toContain("./.git");
+    // bwrap makes the scrub's own mount points in .git, such as .git/config.lock, so no folder
+    // above them is denied: the scrub guards .git, and the checks after the session the rest.
+    expect(settings.sandbox.filesystem.denyWrite).not.toContain("./.git");
     expect(flagValues(session.args, "--permission-mode")).toEqual(["default"]);
-    expect(flagValues(session.args, "--disallowedTools")).toEqual(["Read(//proc/**)", "Edit(./.git/**)", "Write(./.git/**)"]);
+    expect(flagValues(session.args, "--disallowedTools")).toEqual(["Read(//proc/**)", "Edit(./.git/**)"]);
     const allowed = flagValues(session.args, "--allowedTools");
     expect(allowed.filter((rule) => rule.startsWith("Read("))).toEqual(["Read(./**)", `Read(/${input}/**)`]);
     expect(allowed).toContain(`Edit(/${out}/**)`);
@@ -3104,7 +3146,7 @@ ${permissionStub}`,
     const [session] = started;
     const settings = JSON.parse(readFileSync(join(session.home, ".claude/settings.json"), "utf8"));
     expect(settings.sandbox.network.allowedDomains).toEqual([]);
-    expect(settings.sandbox.filesystem.denyWrite).toContain("./.git");
+    expect(settings.sandbox.filesystem.denyWrite).not.toContain("./.git");
     expect(flagValues(session.args, "--permission-mode")).toEqual(["default"]);
     expect(flagValues(session.args, "--allowedTools").filter((rule) => rule.startsWith("Read("))).toEqual(["Read(./**)", `Read(/${input}/**)`]);
     const prompt = session.args[session.args.indexOf("-p") + 1];
@@ -3699,19 +3741,19 @@ ${permissionStub}
   // its inputs, the host-only folder, the workspace or its clone's .git.
   const sessionRoot = (rebasing: number[], gaveUp: number[] = []) => {
     const root = scratch();
-    put(join(root, "runner/pulls.tsv"), `1\t${"a".repeat(40)}\n2\t${"b".repeat(40)}\n3\t${"c".repeat(40)}\n`);
+    put(join(root, "host/pulls.tsv"), `1\t${"a".repeat(40)}\n2\t${"b".repeat(40)}\n3\t${"c".repeat(40)}\n`);
     for (const n of [1, 2, 3]) {
       mkdirSync(join(root, `runner/pr/${n}/work/.git`), { recursive: true });
       mkdirSync(join(root, `runner/pr/${n}/out`), { recursive: true });
       mkdirSync(join(root, `runner/pr/${n}/in`), { recursive: true });
-      put(join(root, `runner/conflicted-${n}.txt`), `conflicted-${n}.txt\n`);
+      put(join(root, `host/conflicted-${n}.txt`), `conflicted-${n}.txt\n`);
     }
     mkdirSync(join(root, "tmp"));
     for (const n of rebasing) mkdirSync(join(root, `runner/pr/${n}/work/.git/rebase-merge`));
-    for (const n of gaveUp) put(join(root, `runner/baseline/gave-up-${n}`), "");
-    put(join(root, "runner/main/resolve-prompt.md"), readFileSync(join(github, "resolve-prompt.md"), "utf8"));
-    put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
-    put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
+    for (const n of gaveUp) put(join(root, `host/baseline/gave-up-${n}`), "");
+    put(join(root, "host/main/resolve-prompt.md"), readFileSync(join(github, "resolve-prompt.md"), "utf8"));
+    put(join(root, "host/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
+    put(join(root, "host/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
     return root;
   };
 
@@ -3727,6 +3769,7 @@ ${permissionStub}
       GITHUB_WORKSPACE: workspace,
       INPUT_DIR: join(root, "runner/pr/1/in"),
       TMPDIR: join(root, "tmp"),
+      HOST_DIR: join(root, "host"),
     });
     expect(run.failed, run.printed).toBe(false);
     expect(started).toHaveLength(1);
@@ -3737,10 +3780,13 @@ ${permissionStub}
     expect(started[0].args[started[0].args.indexOf("-p") + 1]).toMatch(/conflict now, one a line:\n\nconflicted-1\.txt$/);
     expect(flagValues(started[0].args, "--permission-mode")).toEqual(["default"]);
     const denied = JSON.parse(readFileSync(join(started[0].home, ".claude/settings.json"), "utf8")).sandbox.filesystem.denyWrite;
-    expect(denied).toContain("./.git");
+    // The rebase's own state, which the token-free continue reads, and nothing above .git's own
+    // files, where the scrub makes its mount points.
+    expect(denied).not.toContain("./.git");
+    expect(denied).toContain("./.git/rebase-merge");
     for (const want of ["pr/2", "pr/3", "pr/1/in"]) expect(denied).toContain(join(root, "runner", want));
-    expect(denied).toContain(join(root, "runner"));
-    expect(denied).toContain(workspace);
+    expect(denied).toContain(join(root, "host"));
+    expect(denied).not.toContain(workspace);
     expect(denied).not.toContain(join(root, "runner/pr/1"));
     expect(denied).not.toContain(join(root, "runner/pr/1/out"));
   });
@@ -3852,6 +3898,7 @@ ${permissionStub}
       put(join(root, "runner/baseline/git-config-5"), readFileSync(join(work, ".git/config"), "utf8"));
       put(join(root, "runner/pulls.tsv"), `5\t${head}\n`);
       put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", ws, join(ws, ".git")], { encoding: "utf8" }));
+      put(join(root, "runner/baseline/workspace-git-config"), readFileSync(join(ws, ".git/config"), "utf8"));
       put(join(root, "runner/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", work, join(work, ".git")], { encoding: "utf8" }));
       put(join(root, "runner/main/scan-tokens.sh"), readFileSync(join(github, "scan-tokens.sh"), "utf8"));
       put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
@@ -4098,7 +4145,7 @@ done
   const poisoned = (root: string, job: Job, ids: string[], { cwd = root, env = {} }: { cwd?: string; env?: Record<string, string> }) => {
     put(join(root, "bin/claude"), poisonStub);
     chmodSync(join(root, "bin/claude"), 0o755);
-    mkdirSync(join(root, "runner/_runner_file_commands"));
+    mkdirSync(join(root, "runner/_runner_file_commands"), { recursive: true });
     mkdirSync(join(root, "host"), { recursive: true });
     mkdirSync(join(root, "tmp"));
     const ran: Rehearsal[] = [];

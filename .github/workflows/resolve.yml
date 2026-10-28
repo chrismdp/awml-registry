@@ -270,6 +270,7 @@ jobs:
             printf '%s\t%s\n' "$number" "$head_sha" >> "$HOST_DIR/pulls.tsv"
           done < <(jq -r '.[] | select(.clean == false and .guarded == false) | [.number, .head_sha] | @tsv' <<< "$PULLS")
           stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$HOST_DIR/baseline/workspace"
+          cp "$GITHUB_WORKSPACE/.git/config" "$HOST_DIR/baseline/workspace-git-config"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
@@ -367,6 +368,13 @@ jobs:
             echo "The workspace or its .git isn't the one the sessions started beside, so nothing is read from it."
             exit 1
           fi
+          # No session is denied the workspace, whose .git holds the scrub's own mount points, so its
+          # config, which git's fetch from it reads, must be as it was, and only commits are taken
+          # from it, by their ids, never a branch a session could have moved.
+          if ! cmp -s "$GITHUB_WORKSPACE/.git/config" "$HOST_DIR/baseline/workspace-git-config"; then
+            echo "The workspace's git config changed during the sessions, so nothing is read from it."
+            exit 1
+          fi
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
           resolved="$HOST_DIR/resolved"
           mkdir -p "$resolved" "$HOST_DIR/check"
@@ -397,7 +405,7 @@ jobs:
               safe_git -C "$work" bundle create -q "$bundle" "$MAIN_SHA..HEAD" || true
             fi
             safe_git init -q "$fresh"
-            safe_git -C "$fresh" fetch -q --no-tags "$GITHUB_WORKSPACE" "$MAIN_SHA" "refs/heads/factory-rebase-$number"
+            safe_git -C "$fresh" fetch -q --no-tags "$GITHUB_WORKSPACE" "$MAIN_SHA" "$head_sha"
             if [ -f "$bundle" ] && [ ! -L "$bundle" ] &&
               safe_git -C "$fresh" bundle verify -q "$bundle" > /dev/null 2>&1 &&
               safe_git -C "$fresh" fetch -q "$bundle" "HEAD:refs/rebased" &&
