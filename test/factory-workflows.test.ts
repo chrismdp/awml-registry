@@ -3871,7 +3871,8 @@ ${permissionStub}
   });
 
   // Each session may edit its own clone and write its note, and nothing of another pull request's,
-  // its inputs, the host-only folder, the workspace or its clone's .git.
+  // its inputs, the host-only folder, or its rebase's state in its clone's .git. The rest of that
+  // .git is guarded by the scrub, as .git/config and its hooks are, and checked after the session.
   const sessionRoot = (rebasing: number[], gaveUp: number[] = []) => {
     const root = scratch();
     put(join(root, "host/pulls.tsv"), `1\t${"a".repeat(40)}\n2\t${"b".repeat(40)}\n3\t${"c".repeat(40)}\n`);
@@ -4538,9 +4539,11 @@ done
 // A pull request's own ci.yml runs main's copies of the scripts it calls, copied out of main's
 // tree, so until a change to one of those scripts is on main, the branch's ci.yml must still
 // work with main's copy. Each of ci.yml's steps that calls a main-copied script is rehearsed here
-// with origin/main's copy of every one, which CI's test job fetches.
+// with origin/main's copy of every one, which CI's test job fetches. Elsewhere, such as a resolve
+// session's clone, which has no origin/main, the rehearsals are skipped.
 describe("ci.yml with main's copies of its scripts", () => {
   const jobs = readJobs("ci.yml");
+  const hasMain = canRehearse && spawnSync("git", ["rev-parse", "--verify", "-q", "origin/main"], { cwd: join(__dirname, "..") }).status === 0;
   const mainCopied = ["claude-settings.sh", "bring-patch.sh", "scan-tokens.sh", "post-findings.sh", "review-findings.sh", "check-out.sh"];
   const fromMain = (root: string) => {
     for (const name of mainCopied)
@@ -4571,11 +4574,7 @@ describe("ci.yml with main's copies of its scripts", () => {
     expect(steps(jobs.test)[0].with).toMatchObject({ "fetch-depth": 0 });
   });
 
-  it("can read origin/main", () => {
-    expect(spawnSync("git", ["rev-parse", "--verify", "-q", "origin/main"], { cwd: join(__dirname, "..") }).status, "CI's test job must fetch origin/main").toBe(0);
-  });
-
-  it.runIf(canRehearse).each(["review", "classify"])("runs %s's steps with main's copies", (id) => {
+  it.runIf(hasMain).each(["review", "classify"])("runs %s's steps with main's copies", (id) => {
     const root = scratch();
     fromMain(root);
     const { repo, answers } = patched(root);
