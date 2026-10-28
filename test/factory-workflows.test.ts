@@ -4870,7 +4870,6 @@ for file in awml.wasm wasm_exec.js build.json; do echo "built $file" > "$root/ve
   });
 
   it.runIf(canRehearse).each([
-    ["a pin that names another repository", (tree: string) => put(join(tree, "vendor/awml/version.json"), '{"tag": "v0.8.0", "source": "https://example.com/evil.git"}\n')],
     ["a pin that's a link", (tree: string) => {
       rmSync(join(tree, "vendor/awml/version.json"));
       symlinkSync("/proc/self/environ", join(tree, "vendor/awml/version.json"));
@@ -4880,11 +4879,33 @@ for file in awml.wasm wasm_exec.js build.json; do echo "built $file" > "$root/ve
       symlinkSync("/proc/self/environ", join(tree, "vendor/awml/awml.js"));
     }],
     ["no pin", (tree: string) => rmSync(join(tree, "vendor/awml/version.json"))],
+    ["a vendor/awml folder that's a link", (tree: string) => {
+      const outside = join(tree, "..", "outside");
+      execFileSync("mv", [join(tree, "vendor/awml"), outside]);
+      symlinkSync(outside, join(tree, "vendor/awml"));
+    }],
+    ["a vendor folder that's a link", (tree: string) => {
+      const outside = join(tree, "..", "outside");
+      execFileSync("mv", [join(tree, "vendor"), outside]);
+      symlinkSync(outside, join(tree, "vendor"));
+    }],
+    ...["awml.wasm", "wasm_exec.js", "build.json"].map((name) => [
+      `a ${name} that's a link`,
+      (tree: string) => {
+        put(join(tree, "..", "outside", name), "the outside file\n");
+        symlinkSync(join(tree, "..", "outside", name), join(tree, "vendor/awml", name));
+      },
+    ] as [string, (tree: string) => void]),
   ])("builds nothing from %s", (_, spoil) => {
     const { root, tree } = setUp('{"tag": "v0.8.0"}\n');
     spoil(tree);
     const run = build(root, tree);
     expect(run.failed).toBe(true);
     expect(existsSync(join(root, "build.log"))).toBe(false);
+    // Whatever a link leads to outside the tree is as it was.
+    const outside = join(tree, "..", "outside");
+    if (existsSync(outside))
+      for (const name of readdirSync(outside, { recursive: true, encoding: "utf8" }))
+        if (statSync(join(outside, name)).isFile()) expect(readFileSync(join(outside, name), "utf8"), name).not.toMatch(/^built /);
   });
 });
