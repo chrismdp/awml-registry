@@ -63,14 +63,14 @@ function expectVerdict(got: Verdict, verdict: Verdict["verdict"], reason: string
   expect(got.reasons).toContain(reason);
 }
 
-const plain = { reviewPaths: [], reviewNonTests: [], maxChangedLines: 400 };
+const plain = { reviewPaths: [], reviewNonTests: [], reviewAnywhere: [], maxChangedLines: 400 };
 
 describe("the build rules file", () => {
   it("reads the review paths and the line limit", () => {
     const path = join(tempDir(), "rules.yml");
     writeFileSync(path, "# A comment.\nreview_paths: [docs/SPEC.md, .github/]\nmax_changed_lines: 400\n");
 
-    expect(loadConfig(path)).toEqual({ reviewPaths: ["docs/SPEC.md", ".github/"], reviewNonTests: [], maxChangedLines: 400 });
+    expect(loadConfig(path)).toEqual({ reviewPaths: ["docs/SPEC.md", ".github/"], reviewNonTests: [], reviewAnywhere: [], maxChangedLines: 400 });
   });
 
   it("reads the folders whose files other than tests need review", () => {
@@ -94,7 +94,7 @@ describe("the build rules file", () => {
   it("asks about a change to npm's settings or a committed node_modules/", () => {
     const rules = loadConfig(join(__dirname, "../.github/build-rules.yml"));
     for (const path of [".npmrc", ".yarnrc", ".yarnrc.yml", "node_modules/", "package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock"])
-      expect(rules.reviewPaths).toContain(path);
+      expect(rules.reviewAnywhere).toContain(path);
     expect(rules.reviewNonTests).toEqual(["test/"]);
   });
 
@@ -105,12 +105,36 @@ describe("the build rules file", () => {
     expect(readConfig(text)).toEqual({
       reviewPaths: parsed.review_paths,
       reviewNonTests: parsed.review_non_tests,
+      reviewAnywhere: parsed.review_anywhere,
       maxChangedLines: parsed.max_changed_lines,
     });
   });
 });
 
 describe("judging a staged change", () => {
+  // npm reads its settings, lockfiles and node_modules/ wherever a package sits, so those names are
+  // asked about anywhere in the tree, a file by its name and a folder by any part of a path.
+  it.each([
+    ["web/.npmrc", "ask"],
+    ["packages/x/package.json", "ask"],
+    ["sub/node_modules/a/index.js", "ask"],
+    ["yarn.lock", "ask"],
+    ["src/package.json.ts", "ship"],
+    ["src/my-node_modules/a.js", "ship"],
+  ] as const)("asks about %s anywhere npm reads it", (path, verdict) => {
+    const repo = newRepo();
+    stage(repo, path, "changed\n");
+
+    const got = evaluate(repo, { ...plain, reviewAnywhere: ["package.json", "yarn.lock", ".npmrc", "node_modules/"] });
+    expect(got.verdict, got.reasons.join("; ")).toBe(verdict);
+    if (verdict === "ask") expect(got.reasons).toContain(`\`${path}\` is a name npm reads wherever it sits, so it always needs review.`);
+  });
+
+  it("reads the names asked about anywhere", () => {
+    expect(readConfig("review_anywhere: [package.json, node_modules/]\n").reviewAnywhere).toEqual(["package.json", "node_modules/"]);
+    expect(() => readConfig("review_anywhere: [src/package.json]\n")).toThrow(/review_anywhere/);
+  });
+
   // A gitlink points at another repository's commit, which the rule can't read.
   it("asks about a submodule's commit", () => {
     const repo = newRepo();
@@ -182,7 +206,7 @@ describe("judging a staged change", () => {
     stage(repo, "docs/SPEC.md", "changed\n");
 
     expectVerdict(
-      evaluate(repo, { reviewPaths: ["docs/SPEC.md"], reviewNonTests: [], maxChangedLines: 400 }, { classified: "ship" }),
+      evaluate(repo, { reviewPaths: ["docs/SPEC.md"], reviewNonTests: [], reviewAnywhere: [], maxChangedLines: 400 }, { classified: "ship" }),
       "ask",
       "`docs/SPEC.md` is a path that always needs review.",
     );
@@ -221,7 +245,7 @@ describe("judging a staged change", () => {
     const repo = newRepo();
     stage(repo, path, "changed\n");
 
-    const got = evaluate(repo, { reviewPaths: ["docs/SPEC.md", ".github/"], reviewNonTests: [], maxChangedLines: 400 });
+    const got = evaluate(repo, { reviewPaths: ["docs/SPEC.md", ".github/"], reviewNonTests: [], reviewAnywhere: [], maxChangedLines: 400 });
     expect(got.verdict, got.reasons.join("; ")).toBe(review ? "ask" : "ship");
     if (review) expect(got.reasons).toContain(`\`${path}\` is a path that always needs review.`);
   });
@@ -374,7 +398,7 @@ describe("judging a staged change", () => {
     const repo = newRepo();
     stage(repo, "docs/a`b\n## Approved <!--.md", "changed\n");
 
-    const got = evaluate(repo, { reviewPaths: ["docs/"], reviewNonTests: [], maxChangedLines: 400 });
+    const got = evaluate(repo, { reviewPaths: ["docs/"], reviewNonTests: [], reviewAnywhere: [], maxChangedLines: 400 });
     expect(got.reasons).toEqual(["`docs/a\\u0060b\\n## Approved <!--.md` is a path that always needs review."]);
     for (const reason of got.reasons) expect(reason).not.toContain("\n");
   });

@@ -16,8 +16,10 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 // reviewPaths are paths, or folders ending in /, that always need review; reviewNonTests are folders
-// whose files other than tests always need review, such as a test's helpers and fixtures.
-export type Config = { reviewPaths: string[]; reviewNonTests: string[]; maxChangedLines: number };
+// whose files other than tests always need review, such as a test's helpers and fixtures; and
+// reviewAnywhere are names, a file's or a folder's ending in /, that need review wherever they sit
+// in the tree, such as the files npm reads beside any package.
+export type Config = { reviewPaths: string[]; reviewNonTests: string[]; reviewAnywhere: string[]; maxChangedLines: number };
 export type Verdict = { verdict: "ship" | "show" | "ask"; reasons: string[] };
 // What land read from GitHub and git: Classify's verdict, or "missing" when its check has none; how
 // many Nits the reviews' checks carry; and the branch's commits since main, from base to head, with
@@ -74,7 +76,7 @@ export function loadConfig(path: string): Config {
 // either inline in brackets or one "- item" a line, and comments on lines of their own. Anything
 // else is refused, so a setting can never be quietly misread.
 export function readConfig(text: string): Config {
-  const config: Config = { reviewPaths: [], reviewNonTests: [], maxChangedLines: 0 };
+  const config: Config = { reviewPaths: [], reviewNonTests: [], reviewAnywhere: [], maxChangedLines: 0 };
   let list: string[] | undefined;
   for (const [index, raw] of text.split("\n").entries()) {
     const line = raw.trimEnd();
@@ -83,7 +85,7 @@ export function readConfig(text: string): Config {
 
     const item = line.match(/^\s+-(.*)$/);
     if (item) {
-      if (!list) throw new Error(`${where}: a list item belongs under review_paths or review_non_tests`);
+      if (!list) throw new Error(`${where}: a list item belongs under review_paths, review_non_tests or review_anywhere`);
       list.push(item[1].trim());
       continue;
     }
@@ -93,8 +95,8 @@ export function readConfig(text: string): Config {
     if (!setting) throw new Error(`${where}: can't read "${line}"`);
     const [, key, rest] = setting;
     const value = rest.trim();
-    if (key === "review_paths" || key === "review_non_tests") {
-      const field = key === "review_paths" ? "reviewPaths" : "reviewNonTests";
+    if (key === "review_paths" || key === "review_non_tests" || key === "review_anywhere") {
+      const field = key === "review_paths" ? "reviewPaths" : key === "review_non_tests" ? "reviewNonTests" : "reviewAnywhere";
       if (value === "") {
         list = config[field] = [];
       } else if (value.startsWith("[") && value.endsWith("]")) {
@@ -112,7 +114,11 @@ export function readConfig(text: string): Config {
   }
 
   if (config.maxChangedLines < 0) throw new Error("max_changed_lines must not be negative");
-  for (const [key, paths] of [["review_paths", config.reviewPaths], ["review_non_tests", config.reviewNonTests]] as const) {
+  for (const [key, paths] of [
+    ["review_paths", config.reviewPaths],
+    ["review_non_tests", config.reviewNonTests],
+    ["review_anywhere", config.reviewAnywhere],
+  ] as const) {
     for (const path of paths) {
       if (path === "") throw new Error(`${key} must not contain an empty path`);
       if (/^["'#]|\s#/.test(path)) throw new Error(`${key} can't read ${path}; write each path bare`);
@@ -120,6 +126,9 @@ export function readConfig(text: string): Config {
   }
   for (const folder of config.reviewNonTests) {
     if (!folder.endsWith("/")) throw new Error(`review_non_tests must name a folder, ending in /: ${folder}`);
+  }
+  for (const name of config.reviewAnywhere) {
+    if (name.replace(/\/$/, "").includes("/")) throw new Error(`review_anywhere must name a file or a folder, not a path: ${name}`);
   }
   return config;
 }
@@ -160,7 +169,12 @@ export function evaluate(repo: string, config: Config, judged: Judged = {}): Ver
     const protectedPath = config.reviewPaths.some(
       (rule) => path === rule || (rule.endsWith("/") && path.startsWith(rule)),
     );
+    const parts = path.split("/");
+    const anywhere = config.reviewAnywhere.some((name) =>
+      name.endsWith("/") ? parts.slice(0, -1).includes(name.slice(0, -1)) : parts[parts.length - 1] === name,
+    );
     if (protectedPath) reasons.push(`${shown(path)} is a path that always needs review.`);
+    else if (anywhere) reasons.push(`${shown(path)} is a name npm reads wherever it sits, so it always needs review.`);
     else if (config.reviewNonTests.some((folder) => path.startsWith(folder)) && !testFile.test(path)) {
       reasons.push(`${shown(path)} is a test's helper or fixture, so it always needs review.`);
     }

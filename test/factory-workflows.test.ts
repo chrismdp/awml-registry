@@ -1410,6 +1410,15 @@ describe("ci.yml", () => {
       expect(post([finding("Nit")]).failed).toBe(false);
     });
 
+    // GitHub keeps ten annotations of a level a step, so the unread Nit comes first, before any
+    // other Nit, and the others make room for it.
+    it.runIf(canRehearse)("keeps the unread binaries' Nit among the ten warnings GitHub keeps", () => {
+      const run = post(Array.from({ length: 12 }, (_, n) => finding("Nit", `Nit ${n}`)), "1");
+      const warnings = run.printed.split("\n").filter((line) => line.startsWith("::warning"));
+      expect(warnings[0]).toMatch(/^::warning title=Nit%3A The review could not read 1 binary images or fonts::/);
+      expect(warnings).toHaveLength(10);
+    });
+
     it.runIf(canRehearse)("counts binary files it couldn't read as a Nit", () => {
       const run = post([], "2");
       expect(run.failed).toBe(false);
@@ -2102,6 +2111,17 @@ ${permissionStub}`,
     expect(needs(jobs.stopped).sort()).toEqual(["draft", "open", "pictures", "start"]);
     expect(jobs.stopped.if).toBe("${{ failure() && needs.start.outputs.go == 'true' }}");
     expect(runs(jobs.stopped)).toContain("gh issue comment");
+  });
+
+  it.runIf(canRehearse).each([
+    ["the draft failed", { DRAFT: "failure", OPEN: "skipped" }, true],
+    ["the open job failed", { DRAFT: "success", OPEN: "failure" }, true],
+    ["only the pictures failed", { DRAFT: "success", OPEN: "success" }, false],
+  ])("comments when %s", (_, env, comments) => {
+    const root = scratch();
+    const run = rehearse(steps(jobs.stopped)[0].run ?? "", { root, env: { ISSUE: "7", ...env }, answers: `  *"issue comment"*) ;;` });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.calls.includes("issue comment 7 --repo owner/repo"), run.calls).toBe(comments);
   });
 });
 
@@ -3057,6 +3077,17 @@ ${permissionStub}
     const run = tries({ edited: "2026-10-01T11:00:00Z" });
     expect(run.calls).not.toContain("workflow run");
     expect(run.calls).toMatch(/> .*edited since the build label/);
+  });
+
+  // Said once, by the same test as the other comments: an earlier run whose tests failed since the
+  // edit said it already. A person's takeover is told first.
+  it.runIf(canRehearse)("says the issue was edited only once, and after a takeover, not at all", () => {
+    const again = tries({ edited: "2026-10-01T11:00:00Z", earlierFailure: true });
+    expect(again.calls).not.toMatch(/workflow run|issue comment/);
+    expect(again.calls).toContain("created=>=2026-10-01T11:00:00Z");
+    const taken = tries({ edited: "2026-10-01T11:00:00Z", personCommits: true });
+    expect(taken.calls).toMatch(/> .*a person has taken it over/);
+    expect(taken.calls).not.toMatch(/> .*edited since the build label/);
   });
 
   it.runIf(canRehearse).each([

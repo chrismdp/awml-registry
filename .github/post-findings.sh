@@ -10,7 +10,8 @@
 # The review's text can't break out of its annotation or start a workflow command of its own, and a
 # file of findings that carries anything like a token posts nothing. The job's summary lists the
 # findings for people, with < escaped and mentions broken. GitHub keeps at most ten annotations of
-# each level a step, so the summary says when there are more.
+# each level a step, so the summary says when there are more, and the unread binaries' Nit comes
+# first, with the other Nits making room for it.
 set -euo pipefail
 
 findings="$1"
@@ -39,9 +40,9 @@ jq -r --argjson unread "$unread" '
   def prop: data | gsub(":"; "%3A") | gsub(","; "%2C");
   def level: {"Important": "error", "Nit": "warning", "Pre-existing": "notice"}[.];
   def where: (if .file | test("^[A-Za-z0-9._/@+-]{1,200}$") then "file=\(.file)," + (if .line >= 1 then "line=\(.line | floor)," else "" end) else "" end);
-  (group_by(.severity) | map(.[0:10]) | add // [] | .[]
-    | "::\(.severity | level) \(where)title=\("\(.severity): \(.title | .[0:200])" | prop)::\(.detail | .[0:2000] | data)"),
-  (if $unread > 0 then "::warning title=\("Nit: The review could not read \($unread) binary images or fonts" | prop)::A person should look at them." else empty end)
+  (if $unread > 0 then "::warning title=\("Nit: The review could not read \($unread) binary images or fonts" | prop)::A person should look at them." else empty end),
+  (group_by(.severity) | map(.[0:(if .[0].severity == "Nit" and $unread > 0 then 9 else 10 end)]) | add // [] | .[]
+    | "::\(.severity | level) \(where)title=\("\(.severity): \(.title | .[0:200])" | prop)::\(.detail | .[0:2000] | data)")
 ' "$findings"
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then

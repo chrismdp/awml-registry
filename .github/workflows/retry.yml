@@ -171,6 +171,10 @@ jobs:
             exit 0
           fi
           if [ -n "$edited" ] && [[ "$edited" > "$labelled" ]]; then
+            # Said once, as the other comments are: an earlier run whose tests failed since the edit
+            # said it already.
+            [[ "$edited" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || leave "The issue's last edit has no time."
+            ! told_since "$edited" || leave "An earlier CI run's tests failed since the issue was edited, and that run said so."
             {
               echo "**CI's tests failed on #$pr, and this issue was edited since the build label was last added, so the build won't try again from it.**"
               echo
