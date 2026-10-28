@@ -1,31 +1,46 @@
-# Type checks, lints and tests every push and pull request: npm ci, typecheck, lint and test. The
-# build and rebase workflows push and merge with the repository's GitHub App, so their pushes start
-# it as a person's would. Deploying is up to whoever runs a registry: scripts/deploy.sh deploys to
-# Cloudflare.
+# CI for the factory, drawn in .github/drawings/ci-a-commit.yaml (A commit is checked). Every pull
+# request is checked each time it's opened or pushed to, and every commit that lands on main is
+# checked, so each commit has one run: on pull_request for every branch but main, and on push only
+# for main. A push to main runs the tests only.
+#
+# On a pull request from a branch of this repository, opened by its own people or the factory's app,
+# the tests, Bug review and Security review run side by side as jobs of one run, and on a factory
+# branch, build/issue-*, Classify runs once both reviews have ended. Each job's result is its own
+# check on the commit, so the commit as pushed has one judge, and land.yml, fix.yml and retry.yml
+# read that judge's verdict from GitHub when this run finishes. A fork's pull request, or one a
+# stranger opened, gets the tests only: its author could steer the sessions, which hold the
+# maintainer's login token.
+#
+# The review jobs and Classify check out main, never the branch, copy main's prompts, AGENTS.md,
+# REVIEW.md and scripts out, and bring in the pull request's patch as data, applied to the commit of
+# main it started from. Each starts one fresh Claude session in a home of its own, which reads the
+# patch and its inputs, runs nothing, and may edit only its own findings file. A review's findings
+# become annotations on its own job's check, which fails on an Important finding. Classify reads both
+# reviews' findings back from their checks and posts its verdict, ship, show or ask, with its
+# reasons, on its own check, which always passes. No job holds a token that writes, and nothing
+# passes between jobs.
 #
 # When a check fails on main, a last job reports it. This is the workflow drawn at
 # https://awml.io/chrismdp/fix-failing-main. If an issue labelled failing-main is already open, it
 # adds this run to that issue and starts nothing, so a main that fails on several pushes starts one
 # build. Otherwise the app opens an issue with the end of the failing output, labelled failing-main
-# and build, and GitHub starts the build from that label as it would from a person's. The build
-# retries and merges by the same rules as any other. The report job checks out nothing and runs none
-# of the code it reports on: it reads the failed jobs' log with gh. It mints the app's token, for
-# this repository alone, only to open the issue, and comments with the Actions token.
+# and build, and GitHub starts the build from that label as it would from a person's. The report job
+# checks out nothing and runs none of the code it reports on: it reads the failed jobs' log with gh.
+# It mints the app's token, for this repository alone, only to open the issue, and comments with
+# the Actions token.
 #
-# Before it works, a repository needs the GitHub App and its two secrets that build.yml lists, and:
+# Before it works, a repository needs the GitHub App and the secrets that build.yml lists, and:
 # - failing-main and build labels, which the report job puts on its issue;
-# - a ruleset on main that requires the test job to pass, so that nothing merges, by hand or by
-#   itself, until CI has passed on the branch.
+# - a ruleset on main that requires the test, Bug review and Security review checks, so that
+#   nothing merges until the tests and both reviews have passed on the head commit.
 name: CI
 
 on:
-  push:
-    # The factory-media branch holds only the build's pictures.
-    branches-ignore: [factory-media]
   pull_request:
-  # For running the checks by hand.
-  workflow_dispatch:
+  push:
+    branches: [main]
 
+# A push to a pull request replaces the run of the commit before it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -45,6 +60,211 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+
+  # Two fresh Claude sessions, one a job, review the patch side by side, one for bugs and one for
+  # security. Neither runs the change's code: each reads the patch, applied to main, with no tool
+  # that runs anything. The job's own check is the review: failed on an Important finding.
+  review:
+    name: ${{ matrix.review.name }}
+    # Anyone who can read the repository can open a pull request between two of its branches, so
+    # the opener must be the owner, a member, a collaborator or the factory's app, whose bot GitHub
+    # counts only as a contributor.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) ||
+      github.event.pull_request.user.login == 'awml-factory[bot]')
+    strategy:
+      fail-fast: false
+      matrix:
+        review:
+          - { name: Bug review, prompt: review-bugs-prompt.md, findings: bugs.json }
+          - { name: Security review, prompt: review-security-prompt.md, findings: security.json }
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      # Only for Claude Code. Nothing here installs the registry's dependencies or runs its code.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Copy main's prompts, scripts, AGENTS.md and REVIEW.md out
+        run: |
+          mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
+          cp .github/review-bugs-prompt.md .github/review-security-prompt.md .github/claude-settings.sh \
+            .github/scan-tokens.sh .github/post-findings.sh .github/bring-patch.sh "$RUNNER_TEMP/main/"
+          cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
+
+      - name: Bring in the pull request's patch against main
+        id: bring
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash "$RUNNER_TEMP/main/bring-patch.sh" "$RUNNER_TEMP/input"
+
+      # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
+      # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
+      # them on this throwaway machine, and check bubblewrap works before Claude starts.
+      - name: Install Claude Code and bubblewrap
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --dev-bind / / --unshare-pid true
+          npm install -g @anthropic-ai/claude-code
+
+      # The session keeps the login token from its commands (chrismdp/awml#121), loads only the
+      # settings claude-settings.sh writes in its own empty home and no MCP servers, and reads only
+      # the working tree and the inputs, never /proc, where its own environment holds the token. It
+      # may edit only its own findings, in a folder of its own, and runs nothing, not even git. Its
+      # log is printed with workflow commands stopped, so nothing in it can add to the check.
+      - name: Review the patch
+        id: session
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+          INPUT_DIR: ${{ runner.temp }}/input
+          PROMPT: ${{ matrix.review.prompt }}
+          FINDINGS: ${{ matrix.review.findings }}
+        run: |
+          chmod -R a-w "$INPUT_DIR"
+          session="$RUNNER_TEMP/sessions/review"
+          rm -rf "$session"
+          mkdir -p "$session/out"
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home"
+          prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/$PROMPT")"
+          status=0
+          HOME="$session/home" claude -p "$prompt" --model opus --max-turns 100 --permission-mode default \
+            --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
+            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" "Bash" \
+            --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(/$session/out/$FINDINGS)" \
+            > "$session/log" 2>&1 || status=$?
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
+          cat "$session/log"
+          echo "::$stop::"
+          exit "$status"
+
+      - name: Post the findings on this job's check
+        env:
+          UNREAD: ${{ steps.bring.outputs.unread }}
+          FINDINGS: ${{ matrix.review.findings }}
+        run: |
+          bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/sessions/review/out"
+          bash "$RUNNER_TEMP/main/post-findings.sh" "$RUNNER_TEMP/sessions/review/out/$FINDINGS" "$UNREAD"
+
+  # On a factory branch, once both reviews have ended, a third session sorts the change by risk,
+  # reading the patch and both reviews' findings from their checks: ship, show or ask. Its verdict
+  # and reasons are this job's own check, which always passes, so the verdict never wakes the fixer.
+  # If it can't read the patch or leaves no readable verdict, the verdict is ask.
+  classify:
+    name: Classify
+    needs: review
+    if: ${{ !cancelled() && needs.review.result != 'skipped' && startsWith(github.head_ref, 'build/issue-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Copy main's prompts, scripts, AGENTS.md and REVIEW.md out
+        run: |
+          mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
+          cp .github/classify-prompt.md .github/claude-settings.sh .github/scan-tokens.sh \
+            .github/review-findings.sh .github/bring-patch.sh "$RUNNER_TEMP/main/"
+          cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
+
+      - name: Bring in the patch and both reviews' findings
+        id: bring
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          bash "$RUNNER_TEMP/main/bring-patch.sh" "$RUNNER_TEMP/input"
+          bash "$RUNNER_TEMP/main/review-findings.sh" findings "$GITHUB_RUN_ID" > "$RUNNER_TEMP/input/findings.json"
+
+      - name: Install Claude Code and bubblewrap
+        if: steps.bring.outcome == 'success'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --dev-bind / / --unshare-pid true
+          npm install -g @anthropic-ai/claude-code
+
+      # The classifier starts as each review did: in an empty home of its own, reading inputs it
+      # can't change, editing only its verdict, in a folder of its own.
+      - name: Sort the change by risk
+        id: session
+        if: steps.bring.outcome == 'success'
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+          INPUT_DIR: ${{ runner.temp }}/input
+        run: |
+          chmod -R a-w "$INPUT_DIR"
+          session="$RUNNER_TEMP/sessions/classify"
+          rm -rf "$session"
+          mkdir -p "$session/out"
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home"
+          prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/classify-prompt.md")"
+          status=0
+          HOME="$session/home" claude -p "$prompt" --model opus --max-turns 100 --permission-mode default \
+            --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
+            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" "Bash" \
+            --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(/$session/out/classification.json)" \
+            > "$session/log" 2>&1 || status=$?
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
+          cat "$session/log"
+          echo "::$stop::"
+          exit "$status"
+
+      # The verdict is a notice on this job's check, titled with it, which land reads back. Its
+      # reasons can't break out of the notice, and a verdict that carries anything like a token is
+      # refused, as is any that isn't ship, show or ask with one to five reasons: then it says ask.
+      - name: Post the verdict on this job's check
+        id: verdict
+        run: |
+          file="$RUNNER_TEMP/sessions/classify/out/classification.json"
+          verdict=ask
+          reasons="Classify left no readable verdict."
+          if [ -f "$file" ] && bash "$RUNNER_TEMP/main/scan-tokens.sh" "$file" &&
+            jq -e '(.verdict | IN("ship", "show", "ask")) and
+              (.reasons | type == "array" and length >= 1 and length <= 5 and all(.[]; type == "string"))' \
+              "$file" > /dev/null 2>&1; then
+            verdict="$(jq -r .verdict "$file")"
+            reasons="$(jq -r '[.reasons[] | .[0:500]] | join(" ") | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A")' "$file")"
+          fi
+          echo "::notice title=Verdict%3A $verdict::$reasons"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "## Classify says $verdict"
+              echo
+              printf '%s\n' "$reasons" | sed -e 's/%0A/ /g' -e 's/%0D//g' -e 's/%25/%/g' -e 's/</\&lt;/g' -e 's/@\([A-Za-z0-9]\)/@\xe2\x80\x8b\1/g'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   report:
     needs: test
@@ -115,7 +335,7 @@ jobs:
           {
             cat "$here/failure.md"
             echo
-            echo "The build label starts a build of this issue. A fix the build rule finds straightforward merges by itself once CI passes."
+            echo "The build label starts a build of this issue. A fix the build rule passes lands once CI has judged it."
             echo
             echo "[The run]($run_url)"
           } > "$here/issue.md"

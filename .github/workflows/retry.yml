@@ -1,48 +1,26 @@
-# The build or land-a-pull-request starts this when a try fails, by a check, by CI or by a review's
-# Important finding. It starts the build again, up to three tries in all, each time telling Claude
-# why the last one failed. After three, why it failed is commented on the issue. A draft in which
-# Claude changed nothing isn't tried again: it comments with Claude's message, which may be a
-# question for the maintainer.
-# Drawn at https://awml.io/chrismdp/retry-a-build
+# The factory's retry, drawn in .github/drawings/retry-a-build.yaml (A failed build tries again).
+# When CI's tests fail on a build's pull request, whatever else failed, this starts the build again
+# for the branch's issue, up to three builds since the label was last added. The tests own a run
+# where both they and a review failed, so this acts then and the fixer doesn't, and a fix commit
+# that breaks a test lands here too. It reads only GitHub: the CI run that woke it, the pull request,
+# the build runs named for the issue, the label's events and the issue's last edit. It hands the
+# build nothing but the issue's number, and the build reads why the last try failed from CI itself.
+# After three builds, or if the issue was edited since the label went on, a new comment on the issue
+# says a person must act.
 name: Retry a build
-# GitHub names each retry run for its issue and the try that failed, so the next build can check
-# the run it reads is the one it means.
-run-name: ${{ format('Retry of issue {0}, try {1}', inputs.issue, inputs.attempt) }}
 
-# build.yml and land.yml start this by dispatch with the Actions token, so only they, or a person
-# with write access, can. It checks out nothing and runs only gh, so it runs nothing from the
-# change. The run it's given must be this repository's build of the issue, or CI on the issue's
-# branch, and everything it reads from that run is data: the check's result and output, the
-# reviews' findings, the open job's record, or CI's failed log. It needs what build.yml lists.
+# GitHub runs this from main's copy. It checks out nothing and runs only gh. The Actions token
+# starts the build, which GitHub allows for workflow_dispatch, and comments. It needs what build.yml
+# lists.
 on:
-  workflow_dispatch:
-    inputs:
-      issue:
-        description: The number of the issue whose build failed
-        required: true
-      attempt:
-        description: Which try failed, from 1 to 3
-        required: true
-      requested_by:
-        description: The person who added the build label, who is asked to review
-        default: ""
-      run:
-        description: The run whose failure it was, a build or CI on the build's branch
-        required: true
-      asked:
-        description: The sha256 of the first try's record of the issue as labelled, which the next try checks
-        default: ""
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: ["build/issue-*"]
 
 concurrency:
-  group: retry-issue-${{ inputs.issue }}
+  group: retry-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
-
-env:
-  ISSUE: ${{ inputs.issue }}
-  ATTEMPT: ${{ inputs.attempt }}
-  REQUESTED_BY: ${{ inputs.requested_by }}
-  FAILED_RUN: ${{ inputs.run }}
-  ASKED: ${{ inputs.asked }}
 
 jobs:
   retry:
@@ -51,187 +29,78 @@ jobs:
     permissions:
       actions: write
       issues: write
+      pull-requests: read
     steps:
-      # Writes why the try failed as failed/reason.txt, one line for the status comment, and
-      # failed/failed.md, the reason with the failing output or the findings, which the next try's
-      # draft reads. A draft that changed nothing isn't tried again. What the try's records say
-      # reaches the issue, so the reason, the findings and Claude's message can't hide the rest of a
-      # comment, take over the build's status comment, or mention anyone. The failing output stays
-      # inside its fence, without the status comment's mark and with its < escaped.
-      - name: Bring in why it failed
-        id: bring
+      # Only a pull_request run, which runs once a commit, from a branch of this repository, since a
+      # fork's branch can carry a build's name, at the head of the branch's open pull request. A try
+      # is a build.yml run for the issue, by its name, since the build label was last added; the
+      # fixer's and the rebase's pushes don't count. Nothing is carried from one run to the next.
+      - name: Count the builds since the label, and start another or say a person must act
+        id: tries
         env:
           GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          CI_EVENT: ${{ github.event.workflow_run.event }}
+          CI_RUN: ${{ github.event.workflow_run.id }}
         run: |
-          case "$ISSUE" in ''|*[!0-9]*) echo "The issue must be a number: $ISSUE"; exit 1 ;; esac
-          case "$ATTEMPT" in [1-3]) ;; *) echo "The attempt must be 1, 2 or 3: $ATTEMPT"; exit 1 ;; esac
-          case "$FAILED_RUN" in ''|*[!0-9]*) echo "The run must be a number: $FAILED_RUN"; exit 1 ;; esac
-          if ! [[ "$REQUESTED_BY" =~ ^[A-Za-z0-9-]{0,39}(\[bot\])?$ ]]; then
-            echo "Who asked must be a GitHub login: $REQUESTED_BY"
-            exit 1
-          fi
-          if ! [[ "$ASKED" =~ ^([0-9a-f]{64})?$ ]]; then
-            echo "The digest of the issue as labelled must be a sha256: $ASKED"
-            exit 1
-          fi
-          here="$RUNNER_TEMP/here"
-          failed="$RUNNER_TEMP/failed"
-          mkdir -p "$here" "$failed"
-          tidy='def tidy: gsub("<!-- factory-status -->"; "") | gsub("<"; "&lt;") | gsub("@(?=[A-Za-z0-9])"; "@\u200b");
-            def clean: gsub("[\r\n]+"; " ") | tidy | .[0:1000];'
+          leave() { echo "$1"; exit 0; }
+          [ "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ] && [ "$CI_EVENT" = pull_request ] ||
+            leave "CI didn't run on a pull request from a branch of this repository."
+          case "$BRANCH" in build/issue-*) issue="${BRANCH#build/issue-}" ;; *) leave "This isn't a build's branch." ;; esac
+          case "$issue" in ''|*[!0-9]*) leave "This isn't a build's branch." ;; esac
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || leave "CI's commit isn't a commit id."
+          case "$CI_RUN" in ''|*[!0-9]*) leave "CI's run isn't a number." ;; esac
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/jobs" --paginate --jq '.jobs[]' | jq -s . > "$RUNNER_TEMP/jobs.json"
+          jq -e 'any(.[]; .name == "test" and .conclusion == "failure")' "$RUNNER_TEMP/jobs.json" > /dev/null ||
+            leave "CI's tests didn't fail."
+          pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=$GITHUB_REPOSITORY_OWNER:$BRANCH&base=main&state=open" |
+            jq -r --arg repository "$GITHUB_REPOSITORY" --arg branch "$BRANCH" --arg head "$HEAD_SHA" \
+              '[.[] | select(.head.ref == $branch and .head.repo.full_name == $repository and .head.sha == $head)]
+                | first | .number // empty')"
+          [ -n "$pr" ] || leave "No open pull request on $BRANCH is at CI's commit, so a newer CI result decides."
 
-          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FAILED_RUN")"
-          workflow="$(jq -r .workflow_id <<< "$run")"
-          build="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build.yml" --jq .id)"
-          ci="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml" --jq .id)"
-          output=""
-          findings=""
-          outcome=retry
-          if [ "$workflow" = "$ci" ]; then
-            # Only CI on a push to this issue's branch in this repository, as land.yml passes on.
-            if ! jq -e --arg branch "build/issue-$ISSUE" --arg repository "$GITHUB_REPOSITORY" \
-                '.head_branch == $branch and .event == "push" and .head_repository.full_name == $repository' \
-                <<< "$run" > /dev/null; then
-              echo "Run $FAILED_RUN isn't CI on a push to build/issue-$ISSUE in this repository."
-              exit 1
-            fi
-            reason="CI failed on the pull request."
-            gh run view "$FAILED_RUN" --repo "$GITHUB_REPOSITORY" --log-failed > "$here/ci.log" || true
-            tail -n 150 "$here/ci.log" > "$here/output.txt"
-            output="$here/output.txt"
-          elif [ "$workflow" = "$build" ]; then
-            # GitHub names each build run for its issue and try, from its own inputs.
-            jq -e --arg title "Build of issue $ISSUE, try $ATTEMPT" '.head_branch == "main" and
-                (.event | IN("issues", "workflow_dispatch")) and .display_title == $title' <<< "$run" > /dev/null || {
-              echo "Run $FAILED_RUN isn't the build from main of issue $ISSUE, try $ATTEMPT."
-              exit 1
-            }
-            get() { gh run download "$FAILED_RUN" --repo "$GITHUB_REPOSITORY" -n "$1" -D "$here/$1" 2> /dev/null; }
-            if ! get change; then
-              reason="The draft failed or ran out of time."
-            elif [ ! -s "$here/change/change.patch" ]; then
-              outcome=nothing
-              reason="Claude changed nothing."
-            elif ! get result || [ "$(head -n 1 "$here/result/result.txt")" != pass ]; then
-              reason="$(head -n 1 "$here/result/result.txt" 2> /dev/null)"
-              [ -n "$reason" ] || reason="The check job did not produce a result."
-              output="$here/result/output.txt"
-            elif ! get review || [ "$(head -n 1 "$here/review/result.txt")" != pass ]; then
-              reason="$(head -n 1 "$here/review/result.txt" 2> /dev/null)"
-              [ -n "$reason" ] || reason="The reviews did not finish."
-              if jq -e 'type == "array" and all(.[]; type == "object")' "$here/review/findings.json" > /dev/null 2>&1; then
-                jq -r "$tidy"' .[] | "- \(.severity | tostring | clean), from the \(.review | tostring | clean) review, in \(.file | tostring | clean):\(.line | tostring | clean): \(.title | tostring | clean)\n\n  \(.detail | tostring | clean)\n"' \
-                  "$here/review/findings.json" > "$here/findings.md"
-                findings="$here/findings.md"
-              fi
-            elif get open; then
-              reason="$(head -n 1 "$here/open/result.txt" 2> /dev/null)"
-              [ -n "$reason" ] || reason="The change no longer applies to main as it is now."
-              output="$here/open/output.txt"
-            else
-              reason="The build stopped without saying why."
-            fi
-          else
-            echo "Run $FAILED_RUN is neither a build nor CI."
-            exit 1
-          fi
-          reason="$(printf '%s' "$reason" | head -n 1 | jq -Rr "$tidy"' clean | .[0:200]')"
-          printf '%s\n' "$reason" > "$failed/reason.txt"
-          {
-            echo "$reason"
-            if [ -n "$findings" ] && [ -s "$findings" ]; then
-              echo
-              echo "What the reviews found:"
-              echo
-              cat "$findings"
-            fi
-            if [ -n "$output" ] && [ -s "$output" ]; then
-              longest="$(grep -o '`*' "$output" | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')"
-              fence="$(printf '%*s' "$(( longest >= 3 ? longest + 1 : 3 ))" '' | tr ' ' '`')"
-              echo
-              echo "The end of the failing output:"
-              echo
-              echo "$fence"
-              # One pass of stripping can leave a whole mark where one was nested in another, so
-              # every < is escaped too.
-              sed -e 's/<!-- factory-status -->//g' -e 's/</\&lt;/g' "$output"
-              echo "$fence"
-            fi
-          } > "$failed/failed.md"
-          # Claude's message keeps its lines, since it may be a question with options for the maintainer.
-          if [ "$outcome" = nothing ] && [ -s "$here/change/message.md" ]; then
-            jq -jRs "$tidy"' tidy | .[0:10000]' "$here/change/message.md" > "$failed/message.md"
-          fi
-          cat "$failed/failed.md"
-          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          # shellcheck disable=SC2016 # The query's variables are GraphQL's.
+          gh api graphql -F owner="$GITHUB_REPOSITORY_OWNER" -f name="${GITHUB_REPOSITORY#*/}" -F number="$issue" -f query='
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                issue(number: $number) {
+                  lastEditedAt
+                  labels(first: 100) { nodes { name } }
+                  timelineItems(itemTypes: [LABELED_EVENT], last: 100) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+                }
+              }
+            }' > "$RUNNER_TEMP/issue.json"
+          jq -e '.data.repository.issue.labels.nodes | any(.name == "build")' "$RUNNER_TEMP/issue.json" > /dev/null ||
+            leave "The build label is off #$issue, so a person has stopped the build."
+          labelled="$(jq -r '[.data.repository.issue.timelineItems.nodes[] | select(.label.name == "build") | .createdAt] | last // empty' "$RUNNER_TEMP/issue.json")"
+          [[ "$labelled" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || leave "Found no time the build label was added."
+          edited="$(jq -r '.data.repository.issue.lastEditedAt // empty' "$RUNNER_TEMP/issue.json")"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: failed
-          path: ${{ runner.temp }}/failed
-
-      # Fewer than three tries: start the build again, which reads why from this run. Three, or a
-      # draft that changed nothing: comment on the issue with why, and edit the status comment to
-      # say the build failed. The full reason goes in a new comment, since an edit sends no
-      # notification.
-      - name: Start the build again, or comment on the issue with why it failed
-        id: again
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OUTCOME: ${{ steps.bring.outputs.outcome }}
-        run: |
-          failed="$RUNNER_TEMP/failed"
-          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          if [ "$OUTCOME" = retry ] && [ "$ATTEMPT" -lt 3 ]; then
-            gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main \
-              -f issue="$ISSUE" -f attempt="$((ATTEMPT + 1))" -f previous_run="$GITHUB_RUN_ID" \
-              -f requested_by="$REQUESTED_BY" -f asked="$ASKED"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$CI_RUN"
+          if [ -n "$edited" ] && [[ "$edited" > "$labelled" ]]; then
+            {
+              echo "**CI's tests failed on #$pr, and this issue was edited since the build label was last added, so the build won't try again from it.**"
+              echo
+              echo "To build it as it reads now, remove the build label and add it again. [CI's run]($run_url)"
+            } > "$RUNNER_TEMP/comment.md"
+            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/comment.md"
             exit 0
           fi
 
-          if [ "$OUTCOME" = nothing ]; then
-            status="**The build changed nothing**, so it won't be tried again. The comment below says why."
-            {
-              echo "**The build changed nothing, so it won't be tried again.**"
-              echo
-              if [ -s "$failed/message.md" ]; then
-                echo "- Claude left the code as it was, and said why:"
-                echo
-                cat "$failed/message.md"
-              else
-                echo "- Claude left the code as it was, and left no message saying why."
-              fi
-              echo
-              echo "[The run]($run_url)"
-            } > "$failed/comment.md"
-          else
-            status="**The build failed three times**, so it has stopped. The comment below says why."
-            {
-              echo "**The build failed three times, so it has stopped.**"
-              echo
-              printf -- '- The last try failed because: %s\n' "$(cat "$failed/reason.txt")"
-              echo "- To start afresh, remove the build label and add it again."
-              if [ "$(wc -l < "$failed/failed.md")" -gt 1 ]; then
-                echo
-                echo "<details><summary>Why</summary>"
-                echo
-                tail -n +2 "$failed/failed.md" | sed '/./,$!d'
-                echo
-                echo "</details>"
-              fi
-              echo
-              echo "[The run]($run_url)"
-            } > "$failed/comment.md"
+          builds="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/build.yml/runs?branch=main&created=>=$labelled&per_page=100" |
+            jq -s --arg title "Build of issue $issue" \
+              '[.[].workflow_runs[] | select(.display_title == $title and .head_branch == "main"
+                and (.event | IN("issues", "workflow_dispatch")))] | length')"
+          echo "#$issue has had $builds builds since the label was last added."
+          if [ "$builds" -lt 3 ]; then
+            gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main -f issue="$issue"
+            exit 0
           fi
-          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$failed/comment.md"
-
-          printf '<!-- factory-status -->\n%s [The run](%s)\n' "$status" "$run_url" > "$failed/status.md"
-          id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments" \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- factory-status -->"))) | .id' |
-            tail -n 1)"
-          if [ -n "$id" ]; then
-            jq -n --rawfile body "$failed/status.md" '{body: $body}' |
-              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" --input - > /dev/null
-          else
-            gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$failed/status.md"
-          fi
+          {
+            echo "**CI's tests failed on #$pr, and the build has tried three times since the build label was added, so it has stopped.**"
+            echo
+            echo "A person must look at it. To start afresh, remove the build label and add it again. [CI's run]($run_url)"
+          } > "$RUNNER_TEMP/comment.md"
+          gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/comment.md"

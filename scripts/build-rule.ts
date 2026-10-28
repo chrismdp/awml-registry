@@ -42,7 +42,7 @@ const testFile = /\.test\.(ts|tsx|mjs)$/;
 // skip it.
 const removedTest = /^-\s*(it|test|describe)\b[\w.]*\s*\(/m;
 const gitAttributes = /(^|\/)\.gitattributes$/;
-// The binary files the rule lets through unread, as review.yml does, each only if it starts as its
+// The binary files the rule lets through unread, as CI's reviews do, each only if it starts as its
 // kind does. The PNG and GIF signatures are the ones the build's open job checks its pictures by.
 const ascii = (text: string) => Buffer.from(text, "latin1");
 const startsWith = (head: Buffer, ...signatures: Buffer[]) =>
