@@ -164,8 +164,8 @@ jobs:
       # The label approves the issue as it reads then, and a try drafts from it only if it hasn't
       # been edited or renamed since the label was last added. Its text and its comments are read as GitHub
       # renders them, bodyHTML, never the raw body, so HTML comments and hidden markup never reach
-      # Claude (chrismdp/awml#150). Anyone can comment, but only the comments of the owner, members
-      # and collaborators, by GitHub's record of who wrote each, are passed on.
+      # Claude (chrismdp/awml#150). Anyone can comment, but only the comments of those GitHub says
+      # may write to the repository are passed on.
       - name: Keep the issue's text and its people's comments, as GitHub renders them
         id: keep
         env:
@@ -186,7 +186,7 @@ jobs:
                   timelineItems(itemTypes: [LABELED_EVENT, RENAMED_TITLE_EVENT], last: 100) {
                     nodes { __typename ... on LabeledEvent { createdAt label { name } } ... on RenamedTitleEvent { createdAt } }
                   }
-                  comments(first: 100) { nodes { authorAssociation author { login } createdAt bodyHTML } }
+                  comments(first: 100) { nodes { author { login } createdAt bodyHTML } }
                 }
               }
             }' > "$RUNNER_TEMP/issue.json"
@@ -196,9 +196,17 @@ jobs:
             echo "The issue was edited since the build label was last added, so it isn't drafted from."
             exit 1
           fi
-          jq -r '.data.repository.issue as $issue
+          # A comment is kept by what GitHub says its author may do to the repository, write,
+          # maintain or admin, not by how they're associated with it: a member may only triage.
+          jq -r '[.data.repository.issue.comments.nodes[].author.login // empty] | unique | .[]' "$RUNNER_TEMP/issue.json" |
+            while IFS= read -r login; do
+              [[ "$login" =~ ^[A-Za-z0-9-]{1,39}$ ]] || continue
+              role="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$login/permission" --jq .role_name || true)"
+              case "$role" in admin|maintain|write) echo "$login" ;; esac
+            done | jq -Rsc 'split("\n") | map(select(. != ""))' > "$RUNNER_TEMP/writers.json"
+          jq -r --slurpfile writers "$RUNNER_TEMP/writers.json" '.data.repository.issue as $issue
             | "# #\($issue.number): \($issue.title)\n\n\($issue.bodyHTML)\n",
-              ($issue.comments.nodes[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR"))
+              ($issue.comments.nodes[] | select(.author.login as $login | $writers[0] | index([$login]))
                 | "## Comment by \(.author.login), \(.createdAt)\n\n\(.bodyHTML)\n")' \
             "$RUNNER_TEMP/issue.json" > "$input/issue.md"
 

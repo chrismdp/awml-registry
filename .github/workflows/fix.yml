@@ -28,7 +28,7 @@ on:
 
 # A newer CI result on a branch replaces an older one, whose head has moved.
 concurrency:
-  group: fix-${{ github.event.workflow_run.head_branch }}
+  group: fix-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 jobs:

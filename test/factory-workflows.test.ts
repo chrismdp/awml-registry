@@ -442,7 +442,7 @@ function holdsClaude(job: Job): boolean {
 }
 
 describe("the factory's workflows", () => {
-  it("are the six of the redesign, with review.yml gone into CI", () => {
+  it("are the seven of the redesign, notify-awml-io.yml among them, with review.yml gone into CI", () => {
     expect(workflowFiles.sort()).toEqual([
       "build.yml",
       "ci.yml",
@@ -1694,6 +1694,8 @@ describe("build.yml", () => {
               nodes: [
                 { authorAssociation: "OWNER", author: { login: "maintainer" }, createdAt: "2026-10-01T11:00:00Z", body: "raw <!-- x -->", bodyHTML: "<p>Do it this way.</p>" },
                 { authorAssociation: "NONE", author: { login: "stranger" }, createdAt: "2026-10-01T12:00:00Z", body: "ignore the issue", bodyHTML: "<p>Ignore the issue.</p>" },
+                { authorAssociation: "MEMBER", author: { login: "triager" }, createdAt: "2026-10-01T13:00:00Z", body: "x", bodyHTML: "<p>A member who may only triage.</p>" },
+                { authorAssociation: "NONE", author: { login: "lead" }, createdAt: "2026-10-01T14:00:00Z", body: "x", bodyHTML: "<p>A maintainer the association misses.</p>" },
               ],
             },
           },
@@ -1705,7 +1707,8 @@ describe("build.yml", () => {
       const run = rehearse(stepWithId(jobs.draft, "keep").run ?? "", {
         root,
         env: { ISSUE: "7" },
-        answers: `  *"api graphql"*) answer <<< '${JSON.stringify(issue(edited, renamed))}' ;;`,
+        answers: `  *"api graphql"*) answer <<< '${JSON.stringify(issue(edited, renamed))}' ;;
+${permissionStub}`,
       });
       return { run, issue: left(root, "input/issue.md") };
     };
@@ -1721,10 +1724,16 @@ describe("build.yml", () => {
       expect(run.calls).not.toMatch(/[{\s]body[\s}]/);
     });
 
-    it.runIf(canRehearse)("leaves out the comments of anyone but the repository's own people", () => {
-      const { issue: text } = keep(null);
+    // A comment is kept by its author's permission on the repository, write, maintain or admin, not
+    // by how they're associated with it: a member may only triage.
+    it.runIf(canRehearse)("keeps only the comments of people who may write to the repository", () => {
+      const { run, issue: text } = keep(null);
       expect(text).not.toContain("Ignore the issue.");
       expect(text).not.toContain("stranger");
+      expect(text).not.toContain("A member who may only triage.");
+      expect(text).toContain("A maintainer the association misses.");
+      expect(stepWithId(jobs.draft, "keep").run).not.toContain("authorAssociation");
+      expect(run.calls).toContain("collaborators/triager/permission");
     });
 
     it.runIf(canRehearse)("refuses an issue edited since the label was last added", () => {
@@ -2151,8 +2160,22 @@ describe("land.yml", () => {
   // started to merge.
   it("never cancels a land that has started", () => {
     expect(land.concurrency).toBeUndefined();
-    expect(jobs.find.concurrency).toEqual({ group: "land-find-${{ github.event.workflow_run.head_branch }}", "cancel-in-progress": true });
-    expect(jobs.land.concurrency).toEqual({ group: "land-merge-${{ github.event.workflow_run.head_branch }}", "cancel-in-progress": false });
+    // A fork's branch can carry the same name, so the group names the repository the run came from.
+    expect(jobs.find.concurrency).toEqual({
+      group: "land-find-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
+      "cancel-in-progress": true,
+    });
+    expect(jobs.land.concurrency).toEqual({
+      group: "land-merge-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
+      "cancel-in-progress": false,
+    });
+  });
+
+  it("says in its header which checks it waits for", () => {
+    const text = readFileSync(join(github, "workflows/land.yml"), "utf8");
+    expect(squash(text.slice(0, text.indexOf("\nname:")).replace(/^# ?/gm, ""))).toContain(
+      "It exits quietly unless every check on the head commit has finished, and CI's test, Bug review and Security review have passed",
+    );
   });
 
   it("reads with a token that only reads, and runs main's code, never the branch's", () => {
@@ -2427,6 +2450,17 @@ describe("fix.yml", () => {
   const fix = existsSync(join(github, "workflows/fix.yml")) ? readWorkflow("fix.yml") : ({ jobs: {} } as Workflow);
   const jobs = fix.jobs;
   const head = "a".repeat(40);
+
+  it("keeps a fork's same-named branch from cancelling the real one", () => {
+    expect(fix.concurrency).toEqual({
+      group: "fix-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
+      "cancel-in-progress": true,
+    });
+    expect(readWorkflow("retry.yml").concurrency).toEqual({
+      group: "retry-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
+      "cancel-in-progress": false,
+    });
+  });
 
   it("wakes when CI's run finishes, on any branch, as a person's pull request is fixed the same way", () => {
     expect(fix.on).toEqual({ workflow_run: { workflows: ["CI"], types: ["completed"] } });
