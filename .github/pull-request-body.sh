@@ -20,12 +20,11 @@ set -euo pipefail
 
 case "$ISSUE" in ''|*[!0-9]*) echo "The issue must be a number: $ISSUE" >&2; exit 1 ;; esac
 
-# GitHub closes each issue a merged pull request's description names after a closing keyword, so
-# Claude's description closes none: each such reference goes in a code span, where GitHub reads no
-# reference. The issue the build is for is closed by the last line, which this script writes.
+# Claude's text is escaped, so it can't hide the rest or mention anyone, capped, and closes no issue:
+# the build's own Closes #n is the last line, which this script writes.
+here="$(dirname "$0")"
 unclose() {
-  jq -jRs '.[0:60000] | gsub("<"; "&lt;") | gsub("@(?=[A-Za-z0-9])"; "@\u200b") | gsub("(?<keyword>\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\b:?\\s+)(?<ref>(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+|https?://[^\\s`<>()]+)";
-    "\(.keyword)`\(.ref)`"; "i")'
+  jq -jRs '.[0:60000] | gsub("<"; "&lt;") | gsub("@(?=[A-Za-z0-9])"; "@\u200b")' | bash "$here/unclose.sh"
 }
 if [ -s "$CHANGE_DIR/pull-request.md" ]; then
   unclose < "$CHANGE_DIR/pull-request.md"

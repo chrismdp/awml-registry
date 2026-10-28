@@ -16,6 +16,11 @@
 # DIR/binary-files.md when there are binary files.
 set -euo pipefail
 
+# The patch's file names are its author's, so nothing this prints can start a workflow command.
+stop="$(openssl rand -hex 16)"
+echo "::stop-commands::$stop"
+trap 'echo "::$stop::"' EXIT
+
 if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "The head commit isn't a commit id: $HEAD_SHA"
   exit 1
@@ -65,7 +70,7 @@ done < <(awk 'function flush() { for (i = 1; i <= n; i++) print (binary ? "binar
 claudes='(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$'
 refuse() {
   echo "The patch changes Claude Code's own settings, servers or instructions, which a review session would load, so it isn't reviewed:"
-  grep -zE "$claudes" | tr '\0' '\n'
+  grep -zE "$claudes" | jq -Rs 'split("\u0000") | map(select(. != ""))'
   exit 1
 }
 if [ "${#paths[@]}" -gt 0 ] && printf '%s\0' "${paths[@]}" | grep -zqE "$claudes"; then

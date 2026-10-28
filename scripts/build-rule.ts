@@ -202,7 +202,8 @@ export function evaluate(repo: string, config: Config, judged: Judged = {}): Ver
 
 // The branch's commits from base to head. The base must be under the head. A commit is the
 // factory's when both its author and its committer are the app's bot, as the build and the fixer
-// commit. The factory never merges, so a commit with two parents is counted apart.
+// commit. Only people with write access can push to a branch here, and they are trusted, so the
+// rule takes the emails as given, though such a person could forge them. The factory never merges, so a commit with two parents is counted apart.
 function readCommits(repo: string, judged: Judged) {
   const { base, head, factory } = judged;
   if (!base || !head || !/^[0-9a-f]{40}$/.test(base) || !/^[0-9a-f]{40}$/.test(head)) {

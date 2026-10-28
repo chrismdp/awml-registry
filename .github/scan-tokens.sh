@@ -3,7 +3,8 @@
 # pushed or posted (chrismdp/awml#160): an sk-ant- key anywhere, or a run of 80 or more letters,
 # digits, - and _ that holds a digit. Packages' integrity hashes, as package-lock.json names them,
 # and base64 data, as a page or a drawing embeds it, are left out of the runs. It names each file it
-# refuses, never what it found there, since the log is public.
+# refuses, never what it found there, since the log is public, and names it as a JSON string, so a
+# name a session chose can't start a workflow command.
 #
 #   scan-tokens.sh PATH...
 set -euo pipefail
@@ -12,7 +13,7 @@ found=0
 while IFS= read -r -d '' file; do
   if sed -E -e 's#sha(1|256|384|512)-[A-Za-z0-9+/]+=*##g' -e 's#base64,[A-Za-z0-9+/]+=*##g' "$file" |
     grep -aoiE 'sk-ant-|[A-Za-z0-9_-]{80,}' | grep -qiE 'sk-ant-|[0-9]'; then
-    echo "$file carries what looks like a login token." >&2
+    jq -nr --arg file "$file" '"\($file | tojson) carries what looks like a login token."' >&2
     found=1
   fi
 done < <(find "$@" -type f -print0)

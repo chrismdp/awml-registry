@@ -6,6 +6,15 @@
 #
 #   claude-settings.sh HOME [--write DIR]... [--deny-write PATH]... [--domain HOST]...
 #
+# Writes are also denied, whatever the flags say, to the places on the runner a command could use to
+# reach beyond its job's sandbox: the runner's file-command folder, which sets a step's outputs and
+# environment, the tool cache, which later steps run from, and the runner's own folders in the job's
+# real home. With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB set, Claude Code 2.1.312 itself denies writes, in
+# a list no setting can loosen, to the launch folder's .github, scripts, node_modules/.bin,
+# package.json, package-lock.json, .npmrc, .claude and git's hooks and config, and to the runner's
+# file-command folder and event file; but it reckons the runner's folders from HOME, which here is
+# the session's own, so they're named here from the job's.
+#
 # The keys are Claude Code's, from its sandboxing documentation: the sandbox on, and Claude Code
 # refusing to start without it; no retry of a command outside it, and no command excluded from it;
 # a fresh /proc, so a command sees no process outside the sandbox, Claude Code's own included,
@@ -33,6 +42,10 @@ if [ -e "$home/.claude/settings.json" ]; then
   echo "The session's home already holds settings, so it isn't a home of its own: $home" >&2
   exit 1
 fi
+for runner_path in "${RUNNER_TEMP:+$RUNNER_TEMP/_runner_file_commands}" "${RUNNER_TOOL_CACHE:-}" \
+  "${HOME:+$HOME/actions-runner}" "${HOME:+$HOME/runners}"; do
+  [ -z "$runner_path" ] || denied+=("$runner_path")
+done
 mkdir -p "$home/.claude"
 list() { if [ $# -gt 0 ]; then printf '%s\n' "$@"; fi | jq -Rsc 'split("\n") | map(select(. != ""))'; }
 jq -n \

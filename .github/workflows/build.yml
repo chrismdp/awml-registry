@@ -24,7 +24,8 @@ run-name: ${{ (github.event_name == 'workflow_dispatch' || github.event.label.na
 
 # Before it works, a repository needs:
 # - a GitHub App with read and write access to contents, pull requests and issues, installed on the
-#   repository, with its app id in a FACTORY_APP_ID secret and a private key in FACTORY_APP_KEY;
+#   repository, with its app id in a FACTORY_APP_ID secret and a private key in FACTORY_APP_KEY. The
+#   app must NOT have the workflows permission, so nothing it pushes can change a workflow;
 # - a CLAUDE_CODE_OAUTH_TOKEN secret, made with `claude setup-token`, so the runs come out of the
 #   maintainer's subscription rather than a metered API key;
 # - a build label;
@@ -96,7 +97,9 @@ jobs:
                 issue(number: $number) {
                   lastEditedAt
                   labels(first: 100) { nodes { name } }
-                  timelineItems(itemTypes: [LABELED_EVENT], last: 100) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+                  timelineItems(itemTypes: [LABELED_EVENT, RENAMED_TITLE_EVENT], last: 100) {
+                    nodes { __typename ... on LabeledEvent { createdAt label { name } } ... on RenamedTitleEvent { createdAt } }
+                  }
                 }
               }
             }' > "$here/issue.json"
@@ -105,8 +108,9 @@ jobs:
             echo "go=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # A new title doesn't change lastEditedAt, so a rename since the label counts as an edit too.
           labelled="$(jq -r '[.data.repository.issue.timelineItems.nodes[] | select(.label.name == "build") | .createdAt] | last // empty' "$here/issue.json")"
-          edited="$(jq -r '.data.repository.issue.lastEditedAt // empty' "$here/issue.json")"
+          edited="$(jq -r '.data.repository.issue | [.lastEditedAt // empty, (.timelineItems.nodes[] | select(.__typename == "RenamedTitleEvent") | .createdAt)] | max // empty' "$here/issue.json")"
           if [ -z "$labelled" ] || { [ -n "$edited" ] && [[ "$edited" > "$labelled" ]]; }; then
             {
               echo "**This issue was edited since the build label was last added, so the build won't draft from it.**"
@@ -141,11 +145,11 @@ jobs:
       pictures: ${{ steps.patch.outputs.pictures }}
       digest: ${{ steps.pack.outputs.digest }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       # Only for Claude Code, and for npm inside its sandbox. No npm cache is saved or restored.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           package-manager-cache: false
@@ -158,7 +162,7 @@ jobs:
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
 
       # The label approves the issue as it reads then, and a try drafts from it only if it hasn't
-      # been edited since the label was last added. Its text and its comments are read as GitHub
+      # been edited or renamed since the label was last added. Its text and its comments are read as GitHub
       # renders them, bodyHTML, never the raw body, so HTML comments and hidden markup never reach
       # Claude (chrismdp/awml#150). Anyone can comment, but only the comments of the owner, members
       # and collaborators, by GitHub's record of who wrote each, are passed on.
@@ -179,13 +183,15 @@ jobs:
                   title
                   bodyHTML
                   lastEditedAt
-                  timelineItems(itemTypes: [LABELED_EVENT], last: 100) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+                  timelineItems(itemTypes: [LABELED_EVENT, RENAMED_TITLE_EVENT], last: 100) {
+                    nodes { __typename ... on LabeledEvent { createdAt label { name } } ... on RenamedTitleEvent { createdAt } }
+                  }
                   comments(first: 100) { nodes { authorAssociation author { login } createdAt bodyHTML } }
                 }
               }
             }' > "$RUNNER_TEMP/issue.json"
           labelled="$(jq -r '[.data.repository.issue.timelineItems.nodes[] | select(.label.name == "build") | .createdAt] | last // empty' "$RUNNER_TEMP/issue.json")"
-          edited="$(jq -r '.data.repository.issue.lastEditedAt // empty' "$RUNNER_TEMP/issue.json")"
+          edited="$(jq -r '.data.repository.issue | [.lastEditedAt // empty, (.timelineItems.nodes[] | select(.__typename == "RenamedTitleEvent") | .createdAt)] | max // empty' "$RUNNER_TEMP/issue.json")"
           if [ -z "$labelled" ] || { [ -n "$edited" ] && [[ "$edited" > "$labelled" ]]; }; then
             echo "The issue was edited since the build label was last added, so it isn't drafted from."
             exit 1
@@ -220,6 +226,22 @@ jobs:
               gh run view --job "$job" --repo "$GITHUB_REPOSITORY" --log-failed || true
             done | tail -n 300 > "$input/failed.log"
 
+      # The session runs the checks but can't install: under the scrub, Claude Code denies its
+      # commands writes to node_modules/.bin and package-lock.json, and its sandbox has no network.
+      # So the dependencies are installed here, with every package's scripts off, so no code of
+      # theirs runs beside the secret, and from npm's own registry, whatever an .npmrc says. None of
+      # the registry's checks needs a package's install script. Git's config is copied out, for the
+      # check after the session.
+      - name: Install the dependencies with their scripts off
+        env:
+          npm_config_registry: https://registry.npmjs.org/
+        run: |
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
+          npm ci --ignore-scripts --no-audit --no-fund
+          echo "::$stop::"
+          cp .git/config "$RUNNER_TEMP/git-config"
+
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
       # them on this throwaway machine, and check bubblewrap works before Claude starts.
@@ -229,11 +251,12 @@ jobs:
           sudo apt-get install -y bubblewrap socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --dev-bind / / --unshare-pid true
-          npm install -g @anthropic-ai/claude-code
+          npm install -g @anthropic-ai/claude-code@2.1.312
 
       # Claude Code holds the maintainer's login token for its own calls and strips it, with any
       # other credential, from the commands it runs, which run in its sandbox: they see none of
-      # Claude Code's own process, reach only npm's registry, and can't write git's files. It loads
+      # Claude Code's own process, reach no network, and can't write git's files. Under the scrub,
+      # Claude Code forces --permission-mode default, so every tool it may use is named. It loads
       # only the settings claude-settings.sh writes in a home of its own, and no MCP servers, since
       # Claude Code picks up a settings file or a .mcp.json that appears in its tree while it runs.
       # It reads only the workspace and its inputs, never /proc, and writes its notes in a folder of
@@ -248,18 +271,16 @@ jobs:
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/build"
           rm -rf "$session"
-          mkdir -p "$session/out" "$session/npm"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --write "$session/npm" --deny-write ./.git \
-            --domain registry.npmjs.org
-          export npm_config_cache="$session/npm"
+          mkdir -p "$session/out"
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write ./.git
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/build-prompt.md")"
           status=0
-          HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode acceptEdits \
+          HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
             --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" \
             --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(./**)" "Write(./**)" \
               "Edit(/$session/out/**)" "Write(/$session/out/**)" \
-              "Bash(npm ci:*)" "Bash(npm install:*)" "Bash(npm run:*)" "Bash(npm test:*)" \
+              "Bash(npm run:*)" "Bash(npm test:*)" \
               "Bash(npx vitest:*)" "Bash(npx tsc:*)" "Bash(npx eslint:*)" \
               "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(ls:*)" \
             > "$session/log" 2>&1 || status=$?
@@ -271,14 +292,24 @@ jobs:
 
       # The pages are pictured unless Claude named none: no pictures.json, or an empty list. A
       # pictures.json that isn't a list still starts the pictures job, which says what is wrong.
+      # Git reads the tree the session wrote, so it runs nothing the session's commands could have
+      # set: git's config must be byte for byte as it was before the session, no global or system
+      # config is read, and no hook, fsmonitor, external diff or text conversion runs.
       - name: Make the patch
         id: patch
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
         run: |
+          if ! cmp -s .git/config "$RUNNER_TEMP/git-config"; then
+            echo "Git's config changed during the session, so no git runs on the tree."
+            exit 1
+          fi
           out="$RUNNER_TEMP/sessions/build/out"
           change="$RUNNER_TEMP/change"
           mkdir -p "$change"
-          git -c core.hooksPath=/dev/null -c core.fsmonitor=false add -A
-          git -c core.hooksPath=/dev/null -c core.fsmonitor=false diff --cached --binary > "$change/change.patch"
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= add -A
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= diff --cached --binary --no-ext-diff --no-textconv > "$change/change.patch"
           for file in message.md pull-request.md pictures.json; do
             if [ -f "$out/$file" ] && [ ! -L "$out/$file" ]; then cp "$out/$file" "$change/"; fi
           done
@@ -305,7 +336,7 @@ jobs:
           echo "digest=$(digest "$RUNNER_TEMP/change")" >> "$GITHUB_OUTPUT"
 
       # Kept for 30 days, so a draft that's offered rather than pushed can be downloaded.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: change
           path: ${{ runner.temp }}/change
@@ -323,18 +354,18 @@ jobs:
     outputs:
       digest: ${{ steps.pack.outputs.digest }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
       # The change's code runs in this job, so it neither saves npm's cache nor restores one.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           package-manager-cache: false
       - run: npm ci
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: change
           path: ${{ runner.temp }}/change
@@ -357,15 +388,18 @@ jobs:
         env:
           CHROME: /usr/bin/google-chrome
         run: |
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
           bash "$RUNNER_TEMP/picture-pages.sh" "$RUNNER_TEMP/change/pictures.json" \
             "$RUNNER_TEMP/change/change.patch" "$RUNNER_TEMP/pictures"
+          echo "::$stop::"
 
       - name: Take the pictures' digest
         id: pack
         run: |
           digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c 1-64; }
           echo "digest=$(digest "$RUNNER_TEMP/pictures")" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pictures
           path: ${{ runner.temp }}/pictures
@@ -386,12 +420,12 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: main
           persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: change
           path: ${{ runner.temp }}/change
@@ -440,7 +474,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          cp .github/pull-request-body.sh "$RUNNER_TEMP/pull-request-body.sh"
+          cp .github/pull-request-body.sh .github/unclose.sh "$RUNNER_TEMP/"
           if ! git -c core.hooksPath=/dev/null apply --index "$RUNNER_TEMP/change/change.patch"; then
             {
               echo "**The build's change no longer applies to main as it is now, so it wasn't pushed.**"
@@ -453,7 +487,9 @@ jobs:
           fi
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$'
           if git diff --cached --name-only --no-renames -z | grep -zqE "$guarded"; then
-            git diff --cached --name-only --no-renames -z | grep -zE "$guarded" | tr '\0' '\n'
+            # The names are the draft's, so they're printed as JSON, where none can start a workflow
+            # command.
+            git diff --cached --name-only --no-renames -z | grep -zE "$guarded" | jq -Rs 'split("\u0000") | map(select(. != ""))'
             {
               echo "**The build's draft changes \`.github/\` or Claude Code's own files, so the app didn't push it.**"
               echo
@@ -472,7 +508,7 @@ jobs:
           fi
           echo "result=push" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: steps.guard.outputs.result == 'push' && needs.pictures.result == 'success'
         with:
           name: pictures
@@ -559,7 +595,7 @@ jobs:
       - name: Make the app's token
         id: app
         if: steps.guard.outputs.result == 'push'
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         with:
           app-id: ${{ secrets.FACTORY_APP_ID }}
           private-key: ${{ secrets.FACTORY_APP_KEY }}
@@ -576,7 +612,10 @@ jobs:
         run: |
           id="$(gh api "users/$APP_SLUG%5Bbot%5D" --jq .id)"
           message="$RUNNER_TEMP/commit.md"
-          cat "$RUNNER_TEMP/change/message.md" > "$message" 2> /dev/null || true
+          # Claude's message closes no issue: only the build's own Closes #n does.
+          if [ -f "$RUNNER_TEMP/change/message.md" ]; then
+            bash "$RUNNER_TEMP/unclose.sh" < "$RUNNER_TEMP/change/message.md" > "$message"
+          fi
           [ -s "$message" ] || echo "Build #$ISSUE" > "$message"
           printf '\n\nCloses #%s\n' "$ISSUE" >> "$message"
           git config user.name "$APP_SLUG[bot]"
@@ -584,16 +623,22 @@ jobs:
           git -c core.hooksPath=/dev/null switch -c "build/issue-$ISSUE"
           git -c core.hooksPath=/dev/null commit -q -F "$message"
 
-      # The branch is reused, so a new try's push updates the open pull request. CI judges it.
+      # The branch is reused, so a new try's push replaces it and updates the open pull request,
+      # which CI then judges. The push is leased on the head this step read, or on there being no
+      # branch, so GitHub refuses it if anyone pushed meanwhile.
       - name: Push the branch
         id: push
         if: steps.guard.outputs.result == 'push'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          git -c core.hooksPath=/dev/null \
-            -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
-            push --force origin "HEAD:refs/heads/build/issue-$ISSUE"
+          branch="build/issue-$ISSUE"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          old="$(git -c core.hooksPath=/dev/null -c http.https://github.com/.extraheader="$auth" \
+            ls-remote origin "refs/heads/$branch" | cut -f 1)"
+          [[ "$old" =~ ^([0-9a-f]{40})?$ ]] || { echo "The branch's head isn't a commit id: $old"; exit 1; }
+          git -c core.hooksPath=/dev/null -c http.https://github.com/.extraheader="$auth" \
+            push --force-with-lease="refs/heads/$branch:$old" origin "HEAD:refs/heads/$branch"
 
       # The pictures go to the factory-media branch, which holds nothing else and shares no history
       # with main. Each run adds a commit with its own folder, so the links in older descriptions
@@ -644,7 +689,6 @@ jobs:
           title="$(head -n 1 "$RUNNER_TEMP/change/message.md" 2> /dev/null | cut -c 1-200 || true)"
           [ -n "$title" ] || title="Build #$ISSUE"
           printf '%s\n' "$title" > "$RUNNER_TEMP/title.txt"
-          cat "$RUNNER_TEMP/pull-request.md"
 
       # gh pr view finds a branch's closed or merged pull request when it has no open one, so only
       # GitHub's list of the branch's open pull requests decides whether there's one to update.

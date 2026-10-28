@@ -26,13 +26,13 @@ on:
     types: [completed]
     branches: ["build/issue-*"]
 
-# A newer CI result on a branch replaces an older one, which no longer matches the branch's head.
-concurrency:
-  group: land-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: true
-
 jobs:
+  # A newer CI result on a branch replaces the reading of an older one, which no longer matches the
+  # branch's head.
   find:
+    concurrency:
+      group: land-find-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -103,14 +103,14 @@ jobs:
             echo "labeller=$labeller"
           } | tee -a "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         if: steps.ready.outputs.go == 'true'
         with:
           ref: main
           fetch-depth: 0
           persist-credentials: false
       # The rule needs only Node and git. Nothing is installed, and no npm cache is restored.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         if: steps.ready.outputs.go == 'true'
         with:
           node-version: 22
@@ -145,7 +145,10 @@ jobs:
           node --experimental-strip-types "$RUNNER_TEMP/build-rule.mts" --repo "$RUNNER_TEMP/judged" \
             --rules "$RUNNER_TEMP/build-rules.yml" --classified "$classified" --nits "$nits" \
             --base "$base" --head "$HEAD_SHA" --factory 'awml-factory[bot]' > "$RUNNER_TEMP/verdict.txt"
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
           cat "$RUNNER_TEMP/verdict.txt"
+          echo "::$stop::"
           verdict="$(head -n 1 "$RUNNER_TEMP/verdict.txt")"
           case "$verdict" in
             ship|show|ask) ;;
@@ -160,9 +163,14 @@ jobs:
 
   # Ships, shows or asks. It checks out nothing and runs only gh. Each pull request lands on its
   # own.
+  # Nothing cancels a land that has started, since it may be merging: a newer one waits for it, then
+  # finds the pull request merged or moved, and leaves it.
   land:
     needs: find
     if: needs.find.outputs.go == 'true'
+    concurrency:
+      group: land-merge-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The Actions token checks the head, comments and requests a review. The app's token merges.
@@ -196,7 +204,7 @@ jobs:
       - name: Make the app's token
         id: app
         if: steps.head.outputs.current == 'true' && (needs.find.outputs.verdict == 'ship' || needs.find.outputs.verdict == 'show')
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         with:
           app-id: ${{ secrets.FACTORY_APP_ID }}
           private-key: ${{ secrets.FACTORY_APP_KEY }}

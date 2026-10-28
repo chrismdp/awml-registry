@@ -101,11 +101,11 @@ jobs:
       changed: ${{ steps.patch.outputs.changed }}
       digest: ${{ steps.pack.outputs.digest }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: main
           persist-credentials: false
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           package-manager-cache: false
@@ -124,13 +124,27 @@ jobs:
           bash "$RUNNER_TEMP/main/review-findings.sh" findings "$CI_RUN" > "$RUNNER_TEMP/input/findings.json"
           gh api "repos/$GITHUB_REPOSITORY/compare/main...$HEAD_SHA" -H "Accept: application/vnd.github.diff" \
             > "$RUNNER_TEMP/input/change.patch"
-          jq . "$RUNNER_TEMP/input/findings.json"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      # The session runs the checks but can't install: under the scrub, Claude Code denies its
+      # commands writes to node_modules/.bin and package-lock.json, and its sandbox has no network.
+      # So the dependencies are installed here, with every package's scripts off, so no code of
+      # theirs runs beside the secret, and from npm's own registry, whatever an .npmrc says. Git's
+      # config is copied out, for the check after the session.
+      - name: Install the dependencies with their scripts off
+        env:
+          npm_config_registry: https://registry.npmjs.org/
+        run: |
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
+          npm ci --ignore-scripts --no-audit --no-fund
+          echo "::$stop::"
+          cp .git/config "$RUNNER_TEMP/git-config"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
@@ -141,11 +155,12 @@ jobs:
           sudo apt-get install -y bubblewrap socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --dev-bind / / --unshare-pid true
-          npm install -g @anthropic-ai/claude-code
+          npm install -g @anthropic-ai/claude-code@2.1.312
 
       # The findings came from sessions that read the patch, and the patch is the branch's, so text in
-      # either can steer this session. Its commands run in its sandbox, which reaches npm's registry
-      # and nothing else, sees none of Claude Code's own process and can't write git's files. It loads
+      # either can steer this session. Its commands run in its sandbox, which reaches no network, sees
+      # none of Claude Code's own process and can't write git's files. Under the scrub, Claude Code
+      # forces --permission-mode default, so every tool it may use is named. It loads
       # only the settings claude-settings.sh writes in a home of its own, and no MCP servers, and
       # reads only the workspace and its inputs, never /proc.
       - name: Fix the findings
@@ -158,18 +173,16 @@ jobs:
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/fix"
           rm -rf "$session"
-          mkdir -p "$session/out" "$session/npm"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --write "$session/npm" --deny-write ./.git \
-            --domain registry.npmjs.org
-          export npm_config_cache="$session/npm"
+          mkdir -p "$session/out"
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write ./.git
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/fix-prompt.md")"
           status=0
-          HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode acceptEdits \
+          HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
             --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" \
             --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(./**)" "Write(./**)" \
               "Edit(/$session/out/**)" "Write(/$session/out/**)" \
-              "Bash(npm ci:*)" "Bash(npm install:*)" "Bash(npm run:*)" "Bash(npm test:*)" \
+              "Bash(npm run:*)" "Bash(npm test:*)" \
               "Bash(npx vitest:*)" "Bash(npx tsc:*)" "Bash(npx eslint:*)" \
               "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(ls:*)" \
             > "$session/log" 2>&1 || status=$?
@@ -179,13 +192,23 @@ jobs:
           echo "::$stop::"
           exit "$status"
 
+      # Git reads the tree the session wrote, so it runs nothing the session's commands could have
+      # set: git's config must be byte for byte as it was before the session, no global or system
+      # config is read, and no hook, fsmonitor, external diff or text conversion runs.
       - name: Make the patch
         id: patch
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
         run: |
+          if ! cmp -s .git/config "$RUNNER_TEMP/git-config"; then
+            echo "Git's config changed during the session, so no git runs on the tree."
+            exit 1
+          fi
           fixed="$RUNNER_TEMP/fix"
           mkdir -p "$fixed"
-          git -c core.hooksPath=/dev/null -c core.fsmonitor=false add -A
-          git -c core.hooksPath=/dev/null -c core.fsmonitor=false diff --cached --binary > "$fixed/fix.patch"
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= add -A
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= diff --cached --binary --no-ext-diff --no-textconv > "$fixed/fix.patch"
           out="$RUNNER_TEMP/sessions/fix/out/message.md"
           if [ -f "$out" ] && [ ! -L "$out" ]; then cp "$out" "$fixed/message.md"; fi
           if [ -s "$fixed/fix.patch" ]; then
@@ -204,7 +227,7 @@ jobs:
           echo "digest=$(digest "$RUNNER_TEMP/fix")" >> "$GITHUB_OUTPUT"
 
       # Kept for 30 days, so a fix that's offered rather than pushed can be downloaded.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fix
           path: ${{ runner.temp }}/fix
@@ -226,12 +249,12 @@ jobs:
       BRANCH: ${{ needs.decide.outputs.branch }}
       CI_RUN: ${{ github.event.workflow_run.id }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: needs.fix.result == 'success'
         with:
           name: fix
@@ -283,7 +306,9 @@ jobs:
             give_up "The fixer's fix doesn't apply to the reviewed commit."
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$'
           if git diff --cached --name-only --no-renames -z | grep -zqE "$guarded"; then
-            git diff --cached --name-only --no-renames -z | grep -zE "$guarded" | tr '\0' '\n'
+            # The names are the fix's, so they're printed as JSON, where none can start a workflow
+            # command.
+            git diff --cached --name-only --no-renames -z | grep -zE "$guarded" | jq -Rs 'split("\u0000") | map(select(. != ""))'
             {
               echo "**The fixer's fix changes \`.github/\` or Claude Code's own files, so the app didn't push it.**"
               echo
@@ -326,7 +351,7 @@ jobs:
       - name: Make the app's token
         id: app
         if: steps.guard.outputs.result == 'push'
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         with:
           app-id: ${{ secrets.FACTORY_APP_ID }}
           private-key: ${{ secrets.FACTORY_APP_KEY }}
