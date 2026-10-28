@@ -972,6 +972,21 @@ describe("the factory's workflows", () => {
     ]);
   });
 
+  // A session that can't delete its scratch files leaves them in the pull request, so the build's,
+  // the fixer's and the rebase's sessions may copy, make, remove and move files, inside the
+  // sandbox and checked by the host after; and the build and the fixer are told to clean up.
+  it("let the sessions that change the tree manage its files, and tell them to clean up", () => {
+    const fileCommands = '"Bash(cp:*)" "Bash(mkdir:*)" "Bash(rm:*)" "Bash(mv:*)"';
+    for (const [file, id] of [["build.yml", "draft"], ["fix.yml", "fix"], ["resolve.yml", "draft"]]) {
+      const text = steps(readJobs(file)[id]).map(runOf).join("\n");
+      expect(text, `${file} ${id}`).toContain(fileCommands);
+    }
+    for (const name of ["build-prompt.md", "fix-prompt.md"])
+      expect(squash(readFileSync(join(github, name), "utf8")), name).toContain(
+        "Every untracked file left in the tree goes into the pull request, so delete any scratch file you made before you finish.",
+      );
+  });
+
   it("pin every action to a commit", () => {
     for (const [file, id, job] of everyJob()) {
       if (file === "notify-awml-io.yml") continue;
@@ -2212,7 +2227,7 @@ ${permissionStub}`,
     expect(allowed.filter((rule) => rule.startsWith("Read("))).toEqual(["Read(./**)", `Read(/${input}/**)`]);
     expect(allowed).toContain(`Edit(/${out}/**)`);
     for (const rule of allowed) expect(rule).not.toMatch(/^(Read|Edit|Write|Glob|Grep|Bash)$/);
-    expect(allowed.filter((rule) => rule.startsWith("Bash(")).every((rule) => /^Bash\((npm (run|test)|npx (vitest|tsc|eslint)|git (status|diff|log)|ls)\b/.test(rule))).toBe(true);
+    expect(allowed.filter((rule) => rule.startsWith("Bash(")).every((rule) => /^Bash\((npm (run|test)|npx (vitest|tsc|eslint)|git (status|diff|log)|ls|cp|mkdir|rm|mv)\b/.test(rule))).toBe(true);
     expect(allowed).not.toContain("Bash(npm ci:*)");
   });
 

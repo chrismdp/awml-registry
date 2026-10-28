@@ -337,6 +337,7 @@ jobs:
               "Bash(npm run:*)" "Bash(npm test:*)" \
               "Bash(npx vitest:*)" "Bash(npx tsc:*)" "Bash(npx eslint:*)" \
               "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(ls:*)" \
+              "Bash(cp:*)" "Bash(mkdir:*)" "Bash(rm:*)" "Bash(mv:*)" \
             > "$log" 2>&1 || status=$?
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"

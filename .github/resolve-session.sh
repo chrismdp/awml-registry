@@ -66,6 +66,7 @@ set -euo pipefail
           "Bash(npm run:*)" "Bash(npm test:*)" \
           "Bash(npx vitest:*)" "Bash(npx tsc:*)" "Bash(npx eslint:*)" \
           "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(ls:*)" \
+          "Bash(cp:*)" "Bash(mkdir:*)" "Bash(rm:*)" "Bash(mv:*)" \
         > "$log" 2>&1
     ) || echo "The session on #$number ended with an error."
     stop="$(openssl rand -hex 16)"

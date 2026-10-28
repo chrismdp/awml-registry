@@ -34,6 +34,8 @@ reason.
 - This repo has no billing code. Anything to do with payment belongs in the hosted service, not
   here; say so in the message instead of building it.
 - Run `npm run typecheck`, `npm run lint` and `npm test` until they all pass.
+- Every untracked file left in the tree goes into the pull request, so delete any scratch file you
+  made before you finish.
 - Don't commit, push or open anything. Leave the change in the working tree. A later job pushes it
   and opens the pull request, and CI runs the checks again and reviews it there.
 - Don't change anything in `.github/`, Claude Code's own files (`.claude/`, `.mcp.json`, a
