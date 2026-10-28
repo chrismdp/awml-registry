@@ -161,10 +161,11 @@ for script in "\${rewrite[@]}"; do
 done
 args="$(printf '%s\\0' "$@" | jq -Rsc 'split("\\u0000") | .[:-1]')"
 jq -nc --arg home "$HOME" --arg empty "$empty" --arg changes "$changes" --argjson args "$args" \\
-  '{home: $home, empty: $empty, changes: $changes, args: $args}' >> "$CLAUDE_LOG"
+  --arg maintain "\${CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR:-}" \\
+  '{home: $home, empty: $empty, changes: $changes, args: $args, maintain: $maintain}' >> "$CLAUDE_LOG"
 `;
 
-type Session = { home: string; empty: string; changes: string; args: string[] };
+type Session = { home: string; empty: string; changes: string; args: string[]; maintain: string };
 
 // The values a session was given for a flag that takes several, up to the next flag.
 function flagValues(args: string[], flag: string): string[] {
@@ -989,6 +990,32 @@ describe("the factory's workflows", () => {
     expect(squash(readFileSync(join(github, "resolve-prompt.md"), "utf8"))).toContain(
       "Every untracked file left in the clone goes into the rebase's commit, so delete any scratch file you made before you finish.",
     );
+  });
+
+  // A session's Bash that runs cd into a folder added with --add-dir stays there, and Claude Code
+  // then reads ./ rules against that folder, refusing every edit to the tree. So each session that
+  // writes the tree keeps Bash in its tree, and names its tree's rules absolutely. The reviews
+  // and Classify run no Bash and keep ./ rules.
+  it("keep each writing session's rules on its tree, wherever Bash's cd goes", () => {
+    const rules = (text: string) => {
+      const from = text.indexOf("--allowedTools");
+      return text.slice(from, text.indexOf('> "$log"', from));
+    };
+    const resolve = readFileSync(join(github, "resolve-session.sh"), "utf8");
+    for (const [where, text, tree] of [
+      ["build.yml", stepWithId(readJobs("build.yml").draft, "session").run ?? "", "$GITHUB_WORKSPACE"],
+      ["fix.yml", stepWithId(readJobs("fix.yml").fix, "session").run ?? "", "$GITHUB_WORKSPACE"],
+      ["resolve-session.sh", resolve, "$root/work"],
+    ]) {
+      // The whole of --allowedTools, every line of it.
+      expect(rules(text), where).not.toContain("(./");
+      for (const tool of ["Read", "Edit", "Write"]) expect(rules(text), where).toContain(`"${tool}(/${tree}/**)"`);
+      expect(text, where).toContain(`--disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Edit(/${tree}/.git/**)"`);
+    }
+    for (const [file, id] of [["build.yml", "draft"], ["fix.yml", "fix"]])
+      expect(stepWithId(readJobs(file)[id], "session").env?.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR, file).toBe("1");
+    expect(resolve).toContain('CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1 HOME="$home" claude -p');
+    for (const id of ["review", "classify"]) expect(stepWithId(readJobs("ci.yml")[id], "session").run, id).toContain('"Read(./**)"');
   });
 
   it("pin every action to a commit", () => {
@@ -2211,14 +2238,18 @@ ${permissionStub}`,
     put(join(root, "runner/main/build-prompt.md"), "Read INPUT_DIR/issue.md. Write OUT_DIR/message.md.\n");
     put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
     put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
+    const workspace = join(root, "workspace");
     const { run, started } = sessions(draft.run ?? "", root, {
+      ...draft.env,
       INPUT_DIR: input,
+      GITHUB_WORKSPACE: workspace,
       CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     });
     expect(run.failed, run.printed).toBe(false);
     expect(started).toHaveLength(1);
     const [session] = started;
+    expect(session.maintain, "Bash's cd stays in the tree").toBe("1");
     const out = join(dirname(session.home), "out");
     const settings = JSON.parse(readFileSync(join(session.home, ".claude/settings.json"), "utf8"));
     expect(settings.sandbox.network.allowedDomains).toEqual([]);
@@ -2226,9 +2257,10 @@ ${permissionStub}`,
     // above them is denied: the scrub guards .git, and the checks after the session the rest.
     expect(settings.sandbox.filesystem.denyWrite).not.toContain("./.git");
     expect(flagValues(session.args, "--permission-mode")).toEqual(["default"]);
-    expect(flagValues(session.args, "--disallowedTools")).toEqual(["Read(//proc/**)", "Edit(./.git/**)"]);
+    expect(flagValues(session.args, "--disallowedTools")).toEqual(["Read(//proc/**)", "Edit(./.git/**)", `Edit(/${workspace}/.git/**)`]);
     const allowed = flagValues(session.args, "--allowedTools");
-    expect(allowed.filter((rule) => rule.startsWith("Read("))).toEqual(["Read(./**)", `Read(/${input}/**)`]);
+    expect(allowed.filter((rule) => rule.startsWith("Read("))).toEqual([`Read(/${workspace}/**)`, `Read(/${input}/**)`]);
+    expect(allowed).toEqual(expect.arrayContaining([`Edit(/${workspace}/**)`, `Write(/${workspace}/**)`]));
     expect(allowed).toContain(`Edit(/${out}/**)`);
     for (const rule of allowed) expect(rule).not.toMatch(/^(Read|Edit|Write|Glob|Grep|Bash)$/);
     expect(allowed.filter((rule) => rule.startsWith("Bash(")).every((rule) => /^Bash\((npm (run|test)|npx (vitest|tsc|eslint)|git (status|diff|log)|ls|cp|mkdir|rm|mv)\b/.test(rule))).toBe(true);
@@ -3326,18 +3358,23 @@ ${permissionStub}`,
     put(join(root, "runner/main/fix-prompt.md"), "Read INPUT_DIR/findings.json. Write OUT_DIR/message.md.\n");
     put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
     put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
+    const workspace = join(root, "workspace");
     const { run, started } = sessions(draft.run ?? "", root, {
+      ...draft.env,
       INPUT_DIR: input,
+      GITHUB_WORKSPACE: workspace,
       CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     });
     expect(run.failed, run.printed).toBe(false);
     const [session] = started;
+    expect(session.maintain, "Bash's cd stays in the tree").toBe("1");
     const settings = JSON.parse(readFileSync(join(session.home, ".claude/settings.json"), "utf8"));
     expect(settings.sandbox.network.allowedDomains).toEqual([]);
     expect(settings.sandbox.filesystem.denyWrite).not.toContain("./.git");
     expect(flagValues(session.args, "--permission-mode")).toEqual(["default"]);
-    expect(flagValues(session.args, "--allowedTools").filter((rule) => rule.startsWith("Read("))).toEqual(["Read(./**)", `Read(/${input}/**)`]);
+    expect(flagValues(session.args, "--allowedTools").filter((rule) => rule.startsWith("Read("))).toEqual([`Read(/${workspace}/**)`, `Read(/${input}/**)`]);
+    expect(flagValues(session.args, "--disallowedTools")).toEqual(["Read(//proc/**)", "Edit(./.git/**)", `Edit(/${workspace}/.git/**)`]);
     const prompt = session.args[session.args.indexOf("-p") + 1];
     expect(prompt).toContain(`${input}/findings.json`);
   });
@@ -3993,6 +4030,12 @@ ${permissionStub}
     // The host writes nothing in the pull request's folder: the files that conflict go in the prompt.
     expect(started[0].args[started[0].args.indexOf("-p") + 1]).toMatch(/conflict now, one a line:\n\nconflicted-1\.txt$/);
     expect(flagValues(started[0].args, "--permission-mode")).toEqual(["default"]);
+    expect(started[0].maintain, "Bash's cd stays in the clone").toBe("1");
+    const clone = join(root, "runner/pr/1/work");
+    expect(flagValues(started[0].args, "--allowedTools")).toEqual(
+      expect.arrayContaining([`Read(/${clone}/**)`, `Edit(/${clone}/**)`, `Write(/${clone}/**)`]),
+    );
+    expect(flagValues(started[0].args, "--disallowedTools")).toEqual(["Read(//proc/**)", "Edit(./.git/**)", `Edit(/${clone}/.git/**)`]);
     const denied = JSON.parse(readFileSync(join(started[0].home, ".claude/settings.json"), "utf8")).sandbox.filesystem.denyWrite;
     // The rebase's own state, which the token-free continue reads, and nothing above .git's own
     // files, where the scrub makes its mount points.

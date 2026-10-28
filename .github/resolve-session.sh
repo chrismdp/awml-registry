@@ -58,10 +58,14 @@ set -euo pipefail
     prompt+=$'\n\nThe files that conflict now, one a line:\n\n'"$(cat "$HOST_DIR/conflicted-$number.txt")"
     (
       cd "$root/work"
-      HOME="$home" claude -p "$prompt" --model sonnet --max-turns 200 --permission-mode default \
+      # A command that runs cd into a folder added with --add-dir would otherwise stay there, and
+      # Claude Code would read ./ rules against it and refuse every edit to the clone, so Bash goes
+      # back to the clone after each command, and the clone's rules name it absolutely.
+      CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1 HOME="$home" claude -p "$prompt" --model sonnet --max-turns 200 --permission-mode default \
         --setting-sources user --strict-mcp-config --add-dir "$root/in" --add-dir "$root/out" \
-        --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" \
-        --allowedTools "Read(./**)" "Read(/$root/in/**)" "Read(/$root/out/**)" "Edit(./**)" "Write(./**)" \
+        --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Edit(/$root/work/.git/**)" \
+        --allowedTools "Read(/$root/work/**)" "Read(/$root/in/**)" "Read(/$root/out/**)" \
+          "Edit(/$root/work/**)" "Write(/$root/work/**)" \
           "Edit(/$root/out/**)" "Write(/$root/out/**)" \
           "Bash(npm run:*)" "Bash(npm test:*)" \
           "Bash(npx vitest:*)" "Bash(npx tsc:*)" "Bash(npx eslint:*)" \

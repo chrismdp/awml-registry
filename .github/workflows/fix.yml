@@ -315,6 +315,10 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
           INPUT_DIR: ${{ runner.temp }}/input
+          # A command that runs cd into a folder added with --add-dir would otherwise stay there, and
+          # Claude Code would read ./ rules against it and refuse every edit to the tree, so Bash
+          # goes back to the tree after each command, and the tree's rules name it absolutely.
+          CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1"
         run: |
           {
           # One group, which bash reads whole before claude starts, so nothing a command in
@@ -331,8 +335,9 @@ jobs:
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
-            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" \
-            --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(./**)" "Write(./**)" \
+            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Edit(/$GITHUB_WORKSPACE/.git/**)" \
+            --allowedTools "Read(/$GITHUB_WORKSPACE/**)" "Read(/$INPUT_DIR/**)" \
+              "Edit(/$GITHUB_WORKSPACE/**)" "Write(/$GITHUB_WORKSPACE/**)" \
               "Edit(/$session/out/**)" "Write(/$session/out/**)" \
               "Bash(npm run:*)" "Bash(npm test:*)" \
               "Bash(npx vitest:*)" "Bash(npx tsc:*)" "Bash(npx eslint:*)" \
