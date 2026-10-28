@@ -896,23 +896,29 @@ describe("the factory's workflows", () => {
   });
 
   // Under pipefail, grep -q exits at its first match, its producer dies of SIGPIPE, and the pipe
-  // fails, so a match reads as none and a guard lets the file through. Every grep that ends a pipe
-  // reads all its input.
-  it("never end a pipe in a quiet grep", () => {
+  // fails, so a match reads as none and a guard lets the file through. GNU grep whose output goes
+  // to /dev/null may stop at its first match too. So no pipe ends in either: the producer writes a
+  // file, and grep -q reads the file, with no pipe.
+  it("never end a pipe in a quiet grep, or one whose output goes to /dev/null", () => {
     const texts: [string, string][] = readdirSync(github)
       .filter((name) => name.endsWith(".sh"))
       .map((name) => [name, readFileSync(join(github, name), "utf8")]);
     for (const [file, id, job] of everyJob()) for (const each of steps(job)) texts.push([`${file} ${id} ${each.name}`, each.run ?? ""]);
     for (const [where, text] of texts) {
       const joined = text.replace(/\|\s*\\?\n\s*/g, "| ");
-      expect(joined, where).not.toMatch(/\|\s*grep\s+(-[A-Za-z]+\s+)*-[A-Za-z]*q/);
+      // A single |, a pipe; || is an or.
+      expect(joined, where).not.toMatch(/(?<!\|)\|(?!\|)\s*grep\s+(-[A-Za-z]+\s+)*-[A-Za-z]*q/);
+      expect(joined, where).not.toMatch(/(?<!\|)\|(?!\|)\s*grep\b[^|;&\n]*>\s*\/dev\/null/);
     }
   });
 
-  it.runIf(canRehearse)("finds a match early in a long pipe, under pipefail", () => {
+  it.runIf(canRehearse)("finds a match first in a 200,000-line producer, under pipefail", () => {
     const quiet = spawnSync("bash", ["-c", 'set -o pipefail; if seq 1 2000000 | grep -q "^1$"; then echo matched; fi'], { encoding: "utf8" });
     expect(quiet.stdout, "the quiet grep this guards against no longer fails here").toBe("");
-    const whole = spawnSync("bash", ["-c", 'set -o pipefail; if seq 1 2000000 | grep "^1$" > /dev/null; then echo matched; fi'], { encoding: "utf8" });
+    const root = scratch();
+    put(join(root, "guard.sh"), 'seq 1 200000 > "$1/names"\nif grep -q "^1$" "$1/names"; then echo matched; fi\n');
+    const whole = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(root, "guard.sh"), root], { encoding: "utf8" });
+    expect(whole.status).toBe(0);
     expect(whole.stdout).toBe("matched\n");
   });
 

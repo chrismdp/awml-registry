@@ -81,8 +81,15 @@ refuse() {
   grep -zE "$claudes" | jq -Rs 'split("\u0000") | map(select(. != ""))'
   exit 1
 }
-if [ "${#paths[@]}" -gt 0 ] && printf '%s\0' "${paths[@]}" | grep -zE "$claudes" > /dev/null; then
-  printf '%s\0' "${paths[@]}" | refuse
+# Each list of names goes to a file of its own, outside the reviews' folder, that grep reads whole:
+# a grep at the end of a pipe may stop at its first match, and under pipefail the producer's
+# SIGPIPE would read as no match.
+names="$(mktemp -d)"
+trap 'rm -rf "$names"; echo "::$stop::"' EXIT
+: > "$names/paths"
+if [ "${#paths[@]}" -gt 0 ]; then printf '%s\0' "${paths[@]}" > "$names/paths"; fi
+if grep -qzE "$claudes" "$names/paths"; then
+  refuse < "$names/paths"
 fi
 # GitHub's diff names a binary file without its contents, so git can't apply it, and the
 # reviews can't read it. A file is binary to git if it holds one NUL byte, so only images
@@ -109,8 +116,9 @@ awk 'function flush() { if (section != "" && !binary) printf "%s", section; sect
 if [ -s "$review/text.patch" ]; then
   git apply --index "$review/text.patch"
 fi
-if git diff --cached --name-only --no-renames -z | grep -zE "$claudes" > /dev/null; then
-  git diff --cached --name-only --no-renames -z | refuse
+git diff --cached --name-only --no-renames -z > "$names/staged"
+if grep -qzE "$claudes" "$names/staged"; then
+  refuse < "$names/staged"
 fi
 staged="$(git diff --cached --name-only --no-renames -z | tr '\0' '\n')"
 for path in "${paths[@]}"; do

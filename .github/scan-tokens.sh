@@ -10,9 +10,14 @@
 set -euo pipefail
 
 found=0
+# The candidate runs go to a file that the last grep reads whole: a grep at the end of a pipe may
+# stop at its first match, and under pipefail the producer's SIGPIPE would read as no token.
+runs="$(mktemp)"
+trap 'rm -f "$runs"' EXIT
 while IFS= read -r -d '' file; do
-  if sed -E -e 's#sha(1|256|384|512)-[A-Za-z0-9+/]+=*##g' -e 's#base64,[A-Za-z0-9+/]+=*##g' "$file" |
-    grep -aoiE 'sk-ant-|[A-Za-z0-9_-]{80,}' | grep -iE 'sk-ant-|[0-9]' > /dev/null; then
+  sed -E -e 's#sha(1|256|384|512)-[A-Za-z0-9+/]+=*##g' -e 's#base64,[A-Za-z0-9+/]+=*##g' "$file" |
+    { grep -aoiE 'sk-ant-|[A-Za-z0-9_-]{80,}' || true; } > "$runs"
+  if grep -qiE 'sk-ant-|[0-9]' "$runs"; then
     jq -nr --arg file "$file" '"\($file | tojson) carries what looks like a login token."' >&2
     found=1
   fi
