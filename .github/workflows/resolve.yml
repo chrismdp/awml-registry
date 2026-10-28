@@ -471,9 +471,9 @@ jobs:
           if git "${safe[@]}" grep -qE '^(<<<<<<<|>>>>>>>)( |$)' refs/rebased --; then
             refuse "The rebased branch still holds conflict markers."
           fi
-          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)'
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)package(-lock)?\.json$'
           if git "${safe[@]}" diff --name-only --no-renames -z "$MAIN_SHA" refs/rebased | grep -zqE "$guarded"; then
-            refuse "The rebased branch changes .github/ or Claude Code's own files, which the app doesn't push."
+            refuse "The rebased branch changes .github/, Claude Code's own files, its dependencies, an .npmrc, a .yarnrc or node_modules/, which the factory doesn't push."
           fi
           { echo "result=push"; echo "new_sha=$(git rev-parse refs/rebased)"; } >> "$GITHUB_OUTPUT"
 

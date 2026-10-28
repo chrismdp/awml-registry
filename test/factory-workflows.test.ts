@@ -746,6 +746,34 @@ describe("the factory's workflows", () => {
   });
 });
 
+// The paths the app never pushes, and the ones whose change also keeps npm from a branch, each
+// written the same way everywhere, so the lists can't drift apart.
+const neverPushPattern =
+  "^\\.github/|(^|/)\\.claude(/|$)|(^|/)\\.mcp\\.json$|(^|/)CLAUDE(\\.local)?\\.md$|(^|/)\\.npmrc$|(^|/)\\.yarnrc[^/]*$|(^|/)node_modules(/|$)";
+const heldBackPattern = `${neverPushPattern}|(^|/)package(-lock)?\\.json$`;
+
+describe("the factory's path patterns", () => {
+  it("are one never-push pattern in the build and the fixer, and one held-back pattern in the fixer's decide and in resolve", () => {
+    const found: string[] = [];
+    for (const file of ["build.yml", "fix.yml", "resolve.yml"]) {
+      const text = readFileSync(join(github, "workflows", file), "utf8");
+      for (const [, name, pattern] of text.matchAll(/\b(guarded|held)='([^']*)'/g)) {
+        found.push(`${file} ${name}`);
+        const want = file === "resolve.yml" || name === "held" ? heldBackPattern : neverPushPattern;
+        expect(pattern, `${file} ${name}`).toBe(want);
+      }
+    }
+    expect(found.sort()).toEqual([
+      "build.yml guarded",
+      "fix.yml guarded",
+      "fix.yml held",
+      "resolve.yml guarded",
+      "resolve.yml guarded",
+      "resolve.yml guarded",
+    ]);
+  });
+});
+
 describe("claude-settings.sh", () => {
   // The keys and values are Claude Code's own, from its sandboxing documentation: the sandbox on,
   // refusing to start without it, no retry outside it, no command excluded from it, a fresh /proc
@@ -879,6 +907,12 @@ describe("check-lockfile.sh", () => {
     expect(check(good).failed).toBe(false);
   });
 
+  // A package bundled inside another comes in that package's tarball, so it has no source of its
+  // own; only one nested in another's node_modules can be.
+  it.runIf(canRehearse)("passes a package bundled inside another, with no source of its own", () => {
+    expect(check({ ...good, packages: { ...good.packages, "node_modules/a/node_modules/d": { inBundle: true, version: "1.0.0" } } }).failed).toBe(false);
+  });
+
   it.runIf(canRehearse)("passes the repository's own lockfile", () => {
     expect(rehearse(script("check-lockfile.sh", [join(__dirname, "..")]), { root: scratch() }).failed).toBe(false);
   });
@@ -889,6 +923,12 @@ describe("check-lockfile.sh", () => {
     ["a package without its integrity", { ...good, packages: { ...good.packages, "node_modules/c": { resolved: "https://registry.npmjs.org/c/-/c-1.0.0.tgz" } } }],
     ["a package without a source", { ...good, packages: { ...good.packages, "node_modules/c": { version: "1.0.0" } } }],
     ["an old lockfile", { ...good, lockfileVersion: 1 }],
+    ["a git source flagged as bundled", { ...good, packages: { ...good.packages, "node_modules/a/node_modules/c": { inBundle: true, resolved: "git+https://example.com/c.git" } } }],
+    ["a git source flagged as a link", { ...good, packages: { ...good.packages, "node_modules/c": { link: true, resolved: "git+https://example.com/c.git" } } }],
+    ["a link to an absolute path", { ...good, packages: { ...good.packages, "node_modules/c": { link: true, resolved: "/etc" } } }],
+    ["a link out of the tree", { ...good, packages: { ...good.packages, "node_modules/c": { link: true, resolved: "../elsewhere" } } }],
+    ["a link with no target", { ...good, packages: { ...good.packages, "node_modules/c": { link: true } } }],
+    ["a top-level package flagged as bundled", { ...good, packages: { ...good.packages, "node_modules/c": { inBundle: true } } }],
     ["no packages", { lockfileVersion: 3 }],
   ])("refuses %s", (_, lock) => {
     expect(check(lock).failed).toBe(true);
@@ -2088,10 +2128,12 @@ describe("fix.yml", () => {
     expect(runs(jobs.write)).not.toMatch(/\b(npm|npx|node)\b/);
   });
 
+  // The branch's files and its fix commits are read with git, from a clone of main with the branch's
+  // head fetched in, never from GitHub's compare, which lists at most 300 files.
   const decide = ({
     event = "pull_request",
     repository = "owner/repo",
-    pullHead = head,
+    pullHead = undefined as string | undefined,
     test = "success",
     bug = "failure",
     security = "success",
@@ -2100,23 +2142,52 @@ describe("fix.yml", () => {
     files = ["src/page.tsx"],
   }: Partial<{ event: string; repository: string; pullHead: string; test: string; bug: string; security: string; fixes: number; pullRepository: string; files: string[] }> = {}) => {
     const root = scratch();
-    const commits = [{ commit: { message: "Build #7\n\nCloses #7" } }];
-    for (let at = 0; at < fixes; at++) commits.push({ commit: { message: `Fix the review findings\n\nFactory-Fix: https://github.com/owner/repo/actions/runs/${at}` } });
-    return rehearse(stepWithId(jobs.decide, "ready").run ?? "", {
+    const origin = join(root, "origin");
+    mkdirSync(origin);
+    git(origin, "init", "-q");
+    put(join(origin, "README.md"), "A registry\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "main");
+    git(origin, "switch", "-q", "-c", "build/issue-7");
+    for (const path of files) put(join(origin, path), "changed\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "Build #7\n\nCloses #7");
+    for (let at = 0; at < fixes; at++) {
+      put(join(origin, `fix-${at}.txt`), "fixed\n");
+      git(origin, "add", "-A");
+      git(origin, "commit", "-qm", `Fix the review findings\n\nFactory-Fix: https://github.com/owner/repo/actions/runs/${at}`);
+    }
+    const sha = git(origin, "rev-parse", "HEAD");
+    git(origin, "switch", "-q", "main");
+    const work = join(root, "work");
+    git(root, "clone", "-q", origin, work);
+    const run = rehearse(stepWithId(jobs.decide, "ready").run ?? "", {
       root,
-      env: { BRANCH: "build/issue-7", HEAD_SHA: head, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77" },
+      cwd: work,
+      env: { BRANCH: "build/issue-7", HEAD_SHA: sha, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77" },
       answers: `
   *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: test }, { name: "Bug review", conclusion: bug }, { name: "Security review", conclusion: security }, { name: "Classify", conclusion: "success" }] })}' ;;
-  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([{ number: 12, head: { sha: pullHead, ref: "build/issue-7", repo: { full_name: pullRepository } }, base: { ref: "main" } }])}' ;;
-  *"compare/main...${head}"*) answer <<< '${JSON.stringify({ commits, files: files.map((filename) => ({ filename })) })}' ;;`,
+  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([{ number: 12, head: { sha: pullHead ?? sha, ref: "build/issue-7", repo: { full_name: pullRepository } }, base: { ref: "main" } }])}' ;;`,
     });
+    return { ...run, sha };
   };
+
+  it("reads the branch with git, from a clone of main that keeps no credentials", () => {
+    const clone = steps(jobs.decide).find((each) => each.uses?.startsWith(cloneAction));
+    expect(clone?.with).toEqual({ ref: "main", "fetch-depth": 0, "persist-credentials": false });
+    expect(stepWithId(jobs.decide, "ready").run).not.toContain("/compare/");
+  });
+
+  it.runIf(canRehearse)("holds back a branch whose changes run past 300 files", () => {
+    const files = Array.from({ length: 301 }, (_, n) => `src/file-${n}.ts`);
+    expect(decide({ files: [...files, "package.json"] }).outputs.outcome).toBe("npmfiles");
+  });
 
   it.runIf(canRehearse)("fixes when the tests passed, a review failed, and the branch has fewer than two fix commits", () => {
     for (const fixes of [0, 1]) {
       const run = decide({ fixes });
       expect(run.failed, run.printed).toBe(false);
-      expect(run.outputs).toMatchObject({ outcome: "fix", pr: "12", head_sha: head, branch: "build/issue-7" });
+      expect(run.outputs).toMatchObject({ outcome: "fix", pr: "12", head_sha: run.sha, branch: "build/issue-7" });
     }
     expect(decide({ bug: "success", security: "failure" }).outputs.outcome).toBe("fix");
   });

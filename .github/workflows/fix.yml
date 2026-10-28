@@ -45,6 +45,13 @@ jobs:
       head_sha: ${{ steps.ready.outputs.head_sha }}
       branch: ${{ steps.ready.outputs.branch }}
     steps:
+      # main, to read the branch against with git. Nothing from it runs.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
       # Only a pull_request run from a branch of this repository, whose tests all passed and one of
       # whose reviews failed. The pull request must be open with the reviewed commit as its head.
       # Only its outcome, the pull request's number, the reviewed commit and the branch pass on.
@@ -75,15 +82,21 @@ jobs:
                 | first | .number // empty')"
           case "$pr" in *[!0-9]*) leave "The pull request's number isn't a number." ;; esac
           [ -n "$pr" ] || leave "No open pull request on $BRANCH is at the reviewed commit, so there's nothing to fix."
-          gh api "repos/$GITHUB_REPOSITORY/compare/main...$HEAD_SHA" > "$RUNNER_TEMP/compare.json"
-          fixes="$(jq '[.commits[] | select(.commit.message | test("(^|\n)Factory-Fix: "))] | length' "$RUNNER_TEMP/compare.json")"
+          # The branch's commits and files since main, read with git: GitHub's compare lists at most
+          # 300 files. Git runs here on data alone, with hooks, fsmonitor and global config off.
+          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            safe_git fetch -q --no-tags origin "$HEAD_SHA"
+          base="$(safe_git merge-base HEAD "$HEAD_SHA")"
+          fixes="$(safe_git log -z --format=%B "$base..$HEAD_SHA" | jq -Rs 'split("\u0000") | map(select(test("(^|\n)Factory-Fix: "))) | length')"
           case "$fixes" in ''|*[!0-9]*) echo "The fix commits couldn't be counted: $fixes"; exit 1 ;; esac
           # npm reads a tree's .npmrc, a committed node_modules/ shadows packages, and npm runs a git
           # dependency's prepare script even with scripts off, so a branch that changes any of them,
           # or its package.json or lockfile, is never installed beside the Claude token: the fixer
           # only ever installs main's dependencies.
-          if jq -e '[.files[].filename] | any(test("(^|/)\\.npmrc$|(^|/)\\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)package(-lock)?\\.json$"))' \
-            "$RUNNER_TEMP/compare.json" > /dev/null; then
+          held='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)package(-lock)?\.json$'
+          if safe_git diff --name-only --no-renames --no-ext-diff --no-textconv -z "$base" "$HEAD_SHA" | grep -zqE "$held"; then
             outcome=npmfiles
           elif [ "$fixes" -ge 2 ]; then outcome=giveup; else outcome=fix; fi
           {
