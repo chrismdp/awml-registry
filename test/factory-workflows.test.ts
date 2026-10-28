@@ -4608,6 +4608,9 @@ done
     expect(linked(join(root, "runner/pr/5/out/message.md"))).toBe(true);
     expect(linked(join(clone, "a.txt"))).toBe(true);
     expect(ran.map((run) => run.failed)).toEqual([false, false]);
+    // The clone passed every check before the add and the continue, so it's those that left the
+    // links alone.
+    expect(existsSync(join(root, "host/baseline/gave-up-5")), ran.map((run) => run.printed).join("\n")).toBe(false);
     leakedNothing(root, ran, ["pr/5/in"]);
   });
 
