@@ -35,6 +35,12 @@ while IFS=$'\t' read -r number _; do
     give_up "The session on #$number changed its clone's git config, so no git runs there."
     continue
   fi
+  # The rebase's state must be as it was before the session, and no other started: git's continue
+  # follows it outside the sandbox, exec lines and all.
+  if ! bash "$HOST_DIR/main/rebase-state.sh" check "$work" "$HOST_DIR/rebase-state-$number"; then
+    give_up "The session on #$number changed its clone's rebase state, so no git runs there."
+    continue
+  fi
   # Replace refs are ignored, by GIT_NO_REPLACE_OBJECTS in safe_git, and a grafts file, which would
   # change the commits git reads, is refused.
   if [ -e "$work/.git/info/grafts" ] || [ -L "$work/.git/info/grafts" ]; then

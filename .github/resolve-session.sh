@@ -28,10 +28,16 @@ set -euo pipefail
     root="$RUNNER_TEMP/pr/$number"
     [ -d "$root/work/.git/rebase-merge" ] || [ -d "$root/work/.git/rebase-apply" ] || continue
     [ ! -e "$HOST_DIR/baseline/gave-up-$number" ] || continue
+    # The rebase's state as it is before the session, kept where no session can write, so the
+    # continue can check that the session left it, and started no other, before git follows it.
+    if ! bash "$HOST_DIR/main/rebase-state.sh" snapshot "$root/work" "$HOST_DIR/rebase-state-$number"; then
+      echo "The rebase of #$number has a state that can't be kept, so no session starts there."
+      continue
+    fi
     # Not all of .git: bwrap makes the scrub's own mount points there, such as .git/config.lock,
     # which it can't inside a denied folder. The rebase's own state, which the token-free continue
-    # reads, is denied, as the scrub doesn't guard it; the clone's config and identity are checked
-    # after the session.
+    # reads, is denied, as the scrub doesn't guard it; the clone's config and identity, and the
+    # rebase's state, are checked after the session.
     denied=(--deny-write "$root/in" --deny-write "$0" --deny-write "$STEP_SCRIPT")
     for state in rebase-merge rebase-apply; do
       if [ -e "$root/work/.git/$state" ]; then denied+=(--deny-write "./.git/$state"); fi

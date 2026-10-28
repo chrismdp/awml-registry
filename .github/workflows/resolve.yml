@@ -244,7 +244,7 @@ jobs:
           echo "::stop-commands::$stop"
           trap 'echo "::$stop::"' EXIT
           mkdir -p "$HOST_DIR/main" "$HOST_DIR/baseline" "$HOST_DIR/check" "$HOST_DIR/resolved"
-          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh AGENTS.md "$HOST_DIR/main/"
+          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh .github/rebase-state.sh AGENTS.md "$HOST_DIR/main/"
           id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
           case "$id" in ''|*[!0-9]*) echo "The app's bot has no id: $id"; exit 1 ;; esac
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"

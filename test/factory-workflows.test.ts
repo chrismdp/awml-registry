@@ -3862,6 +3862,17 @@ ${permissionStub}
     expect(squash(readFileSync(join(github, "resolve-prompt.md"), "utf8"))).toContain("with main's dependencies installed");
   });
 
+  it("keeps each rebase's state before its session, and checks it before git continues it", () => {
+    const session = readFileSync(join(github, "resolve-session.sh"), "utf8");
+    const snapshot = session.indexOf('rebase-state.sh" snapshot "$root/work" "$HOST_DIR/rebase-state-$number"');
+    expect(snapshot).toBeGreaterThan(-1);
+    expect(snapshot).toBeLessThan(session.indexOf("claude -p"));
+    const resume = readFileSync(join(github, "resolve-continue.sh"), "utf8");
+    const checked = resume.indexOf('rebase-state.sh" check "$work" "$HOST_DIR/rebase-state-$number"');
+    expect(checked).toBeGreaterThan(-1);
+    expect(checked).toBeLessThan(resume.indexOf("safe_git -C"));
+  });
+
   it("runs no git in a session's step, and lets the session run none that writes", () => {
     const session = readFileSync(join(github, "resolve-session.sh"), "utf8");
     const commands = session.replace(/"Bash\([^"]*\)"/g, "").split("\n").filter((line) => !/^\s*(#|echo )/.test(line));
@@ -3888,6 +3899,7 @@ ${permissionStub}
     put(join(root, "host/main/resolve-prompt.md"), readFileSync(join(github, "resolve-prompt.md"), "utf8"));
     put(join(root, "host/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
     put(join(root, "host/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
+    put(join(root, "host/main/rebase-state.sh"), readFileSync(join(github, "rebase-state.sh"), "utf8"));
     return root;
   };
 
@@ -3955,6 +3967,9 @@ ${permissionStub}
       put(join(root, "runner/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", clone, join(clone, ".git")], { encoding: "utf8" }));
       put(join(root, "runner/main/placeholders.sh"), readFileSync(join(github, "placeholders.sh"), "utf8"));
       execFileSync("bash", [join(github, "placeholders.sh"), "record", clone, join(root, "runner/baseline/protected-5")]);
+      // The round's session step keeps the rebase's state as it was before the session.
+      put(join(root, "runner/main/rebase-state.sh"), readFileSync(join(github, "rebase-state.sh"), "utf8"));
+      execFileSync("bash", [join(github, "rebase-state.sh"), "snapshot", clone, join(root, "runner/rebase-state-5")]);
       return { root, clone };
     };
     const resume = (root: string) =>
@@ -3971,6 +3986,8 @@ ${permissionStub}
       expect(run.failed, run.printed).toBe(false);
       expect(existsSync(join(clone, ".git/rebase-merge"))).toBe(true);
       expect(left(root, "conflicted-5.txt")).toBe("b.txt\n");
+      // The next round's session step keeps the state again before its session.
+      execFileSync("bash", [join(github, "rebase-state.sh"), "snapshot", clone, join(root, "runner/rebase-state-5")]);
       put(join(clone, "b.txt"), "both\n");
       expect(resume(root).failed).toBe(false);
       expect(existsSync(join(clone, ".git/rebase-merge"))).toBe(false);
@@ -3995,6 +4012,28 @@ ${permissionStub}
       put(join(clone, ".npmrc"), "registry=https://example.com/\n");
       expect(resume(root).failed).toBe(false);
       expect(gaveUp(root)).toBe(true);
+    });
+
+    // The session may not write the rebase's state, but it could start the other kind, which git
+    // prefers, or change the one there: either is a rebase the session wrote, and git's continue,
+    // outside the sandbox, would follow it, exec lines and all.
+    it.runIf(canRehearse).each([
+      ["a rebase-apply of the session's own", (clone: string) => put(join(clone, ".git/rebase-apply/next"), "1\n")],
+      ["a changed todo", (clone: string) =>
+        writeFileSync(join(clone, ".git/rebase-merge/git-rebase-todo"), `exec touch ${join(clone, "..", "owned")}\n`, { flag: "a" })],
+      ["a file added to the state", (clone: string) => put(join(clone, ".git/rebase-merge/extra"), "x\n")],
+      ["a link in the state", (clone: string) => symlinkSync("/proc/self/environ", join(clone, ".git/rebase-merge/env"))],
+      ["a file taken out of the state", (clone: string) => rmSync(join(clone, ".git/rebase-merge/head-name"))],
+    ])("gives up, and runs no git, on a rebase state with %s", (_, spoil) => {
+      const { root, clone } = midRebase();
+      put(join(clone, "a.txt"), "both\n");
+      spoil(clone);
+      const run = resume(root);
+      expect(run.failed, run.printed).toBe(false);
+      expect(gaveUp(root), run.printed).toBe(true);
+      expect(run.printed).toContain("changed its clone's rebase state");
+      expect(existsSync(join(clone, "..", "owned"))).toBe(false);
+      expect(git(clone, "status", "--porcelain")).toContain("a.txt");
     });
 
     it.runIf(canRehearse)("gives up on a clone whose conflicts still hold markers", () => {
@@ -4471,7 +4510,8 @@ done
     put(join(root, "runner/pr/5/out/message.md"), "Kept both sides.\n");
     put(join(root, "host/baseline/git-config-5"), readFileSync(join(clone, ".git/config"), "utf8"));
     put(join(root, "host/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", clone, join(clone, ".git")], { encoding: "utf8" }));
-    main(root, "resolve-prompt.md", "resolve-session.sh", "resolve-continue.sh");
+    main(root, "resolve-prompt.md", "resolve-session.sh", "resolve-continue.sh", "rebase-state.sh", "placeholders.sh");
+    execFileSync("bash", [join(github, "placeholders.sh"), "record", clone, join(root, "host/baseline/protected-5")]);
     const ran = poisoned(root, resolve.draft, ["session1", "continue1"], {
       env: { GITHUB_WORKSPACE: join(root, "ws"), GIT_COMMITTER_NAME: "A", GIT_COMMITTER_EMAIL: "a@example.com" },
     });
@@ -4572,6 +4612,10 @@ describe("ci.yml with main's copies of its scripts", () => {
 
   it("fetches main in CI's test job", () => {
     expect(steps(jobs.test)[0].with).toMatchObject({ "fetch-depth": 0 });
+  });
+
+  it.runIf(process.env.GITHUB_JOB === "test")("can read origin/main in CI's test job", () => {
+    expect(spawnSync("git", ["rev-parse", "--verify", "-q", "origin/main"], { cwd: join(__dirname, "..") }).status, "CI's test job must fetch origin/main").toBe(0);
   });
 
   it.runIf(hasMain).each(["review", "classify"])("runs %s's steps with main's copies", (id) => {
