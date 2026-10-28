@@ -141,3 +141,15 @@ html:has(.flow-note-dialog[open]) { overflow: hidden; }
   .flow-zoom-controls { bottom: 10px; right: 10px; }
   .flow-pills button, .flow-toggle { font-size: 13px; padding: 6px 11px; }
 }
+
+/* A compact frame, such as a drawing embedded on another site (#75): smaller
+   switches, nearer the corners, and the server's SVG in the room
+   viewport.ts's COMPACT_INSET leaves, so a small frame keeps more of itself
+   for the drawing. */
+.flow-frame.compact .flow-static { inset: 52px 12px 52px 12px; width: calc(100% - 24px); height: calc(100% - 104px); }
+.flow-frame.compact .flow-controls { gap: 6px; }
+.flow-frame.compact .flow-switches { top: 8px; right: 8px; }
+.flow-frame.compact .flow-zoom-controls { bottom: 8px; right: 8px; }
+.flow-frame.compact .flow-pills button { min-height: 30px; padding: 4px 11px; font-size: 13px; }
+.flow-frame.compact .flow-zoom button { min-width: 32px; padding: 4px 8px; }
+.flow-frame.compact .flow-toggle { min-height: 36px; padding: 4px 12px 4px 10px; font-size: 13px; }

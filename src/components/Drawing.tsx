@@ -9,7 +9,7 @@ import { Arrowheads } from "./flow/Graphic";
 import { StaticDrawing } from "./flow/StaticDrawing";
 import { destination, followOf, followsOnKey, partInHash } from "./links";
 import { PartMenu } from "./PartLinks";
-import { fit, STEP, viewOf, type Box, type Viewport } from "./viewport";
+import { COMPACT_INSET, fit, INSET, STEP, viewOf, type Box, type Viewport } from "./viewport";
 
 // React Flow, loaded once the page runs, to take over from the server's SVG.
 const FlowCanvas = dynamic<FlowCanvasProps>(() => import("./flow/FlowCanvas"), { ssr: false });
@@ -23,20 +23,30 @@ export const FRAME_LABEL = "Workflow drawing. Drag a part to move it; drag the b
 // part overlaps (#78). Its switch: Flow only (#51). A part's notes are behind an icon
 // (#60). A part linked to other workflows (#55), and a workflow's box on a
 // system's map (#61), opens what it leads to.
+//
+// A drawing embedded on another site (#75) may start with Flow only on, opens
+// every link in a new tab, never in its frame, and is `compact`: smaller
+// switches, leaving a small frame more of itself.
 export function Drawing({
   drawings,
   links = [],
   hrefs = {},
   label = FRAME_LABEL,
+  startFlowOnly = false,
+  newTab = false,
+  compact = false,
 }: {
   drawings: Drawings;
   links?: PartLink[];
   hrefs?: Record<string, string>;
   label?: string;
+  startFlowOnly?: boolean;
+  newTab?: boolean;
+  compact?: boolean;
 }) {
   const id = "flow" + useId().replace(/[^a-zA-Z0-9]/g, "");
   const frame = useRef<HTMLDivElement>(null);
-  const [flowOnly, setFlowOnly] = useState(false);
+  const [flowOnly, setFlowOnly] = useState(startFlowOnly);
   const [start, setStart] = useState<Viewport>();
   const [live, setLive] = useState(false);
   const [note, setNote] = useState<{ title: string; notes: Note[] }>();
@@ -75,8 +85,9 @@ export function Drawing({
   }, []);
 
   const fitOf = useCallback(
-    (box: Rect) => fit({ width: frame.current?.clientWidth ?? 0, height: frame.current?.clientHeight ?? 0 }, box),
-    [],
+    (box: Rect) =>
+      fit({ width: frame.current?.clientWidth ?? 0, height: frame.current?.clientHeight ?? 0 }, box, compact ? COMPACT_INSET : INSET),
+    [compact],
   );
   const onReady = useCallback(() => setLive(true), []);
   const onApi = useCallback((a: FlowApi) => (api.current = a), []);
@@ -88,7 +99,7 @@ export function Drawing({
     (part: string, e: { ctrlKey: boolean; metaKey: boolean; button?: number }) => {
       const link = links.find((l) => l.part === part);
       const to = hrefs[part] ?? (link ? destination(link) : null);
-      const f = followOf(to, e, menu?.link.part === part);
+      const f = followOf(to, e, menu?.link.part === part, newTab);
       const node = api.current?.rectOf(part);
       if (f === "close") closeMenu();
       else if (f === "menu" && link && node) setMenu({ link, node });
@@ -96,7 +107,7 @@ export function Drawing({
       else if (f && f !== "menu") window.location.assign(f.to);
     },
     // closeMenu reads only the menu, which is a dependency.
-    [hrefs, links, menu],
+    [hrefs, links, menu, newTab],
   );
 
   // Closes the menu, giving the focus back to the part it opened from.
@@ -159,11 +170,20 @@ export function Drawing({
   }, [menu]);
 
   return (
-    <div ref={frame} className={`flow-frame${live ? " live" : ""}`} data-flow={id} role="group" aria-label={label} tabIndex={0} onKeyDown={onKeyDown} onFocus={onFocus}>
+    <div
+      ref={frame}
+      className={`flow-frame${compact ? " compact" : ""}${live ? " live" : ""}`}
+      data-flow={id}
+      role="group"
+      aria-label={label}
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      onFocus={onFocus}
+    >
       <svg className="flow-defs" width={0} height={0} aria-hidden>
         <Arrowheads id={id} />
       </svg>
-      <StaticDrawing drawing={drawing} id={id} links={links} hrefs={hrefs} hidden={live} defs={false} />
+      <StaticDrawing drawing={drawing} id={id} links={links} hrefs={hrefs} hidden={live} defs={false} newTab={newTab} />
       {start && (
         <div className="flow-canvas" style={live ? undefined : { visibility: "hidden" }}>
           <FlowCanvas
@@ -201,7 +221,7 @@ export function Drawing({
         </div>
       </div>
       <NoteDialog shown={note} onClose={() => setNote(undefined)} />
-      {menu && <PartMenu link={menu.link} node={menu.node} onClose={closeMenu} />}
+      {menu && <PartMenu link={menu.link} node={menu.node} onClose={closeMenu} newTab={newTab} />}
     </div>
   );
 }

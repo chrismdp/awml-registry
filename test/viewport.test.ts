@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { fit, INSET, MAX_ZOOM, placeMenu, viewOf } from "@/components/viewport";
+import { COMPACT_INSET, fit, INSET, MAX_ZOOM, placeMenu, viewOf } from "@/components/viewport";
 
 const frame = { width: 800, height: 600 };
 const room = { width: frame.width - INSET.left - INSET.right, height: frame.height - INSET.top - INSET.bottom };
@@ -48,6 +48,20 @@ describe("the drawing's viewport", () => {
     const { top, right, bottom, left } = INSET;
     expect(css).toContain(`.flow-frame .flow-static { position: absolute; inset: ${top}px ${right}px ${bottom}px ${left}px;`);
     expect(css).toContain(`width: calc(100% - ${left + right}px); height: calc(100% - ${top + bottom}px); margin: auto;`);
+  });
+
+  it("fits a compact frame, such as an embed's (#75), in the room its smaller controls leave, its SVG alike", () => {
+    const small = { width: 600, height: 400 };
+    const { top, right, bottom, left } = COMPACT_INSET;
+    const v = fit(small, { x: 0, y: 0, width: 4000, height: 1000 }, COMPACT_INSET);
+    expect(v.zoom).toBeCloseTo((small.width - left - right) / 4000);
+    expect(v.x).toBeCloseTo(left);
+    // More room than the page's frame leaves.
+    expect(v.zoom).toBeGreaterThan(fit(small, { x: 0, y: 0, width: 4000, height: 1000 }).zoom);
+    const css = fs.readFileSync(path.join(__dirname, "../src/components/flow/flow.css"), "utf8");
+    expect(css).toContain(
+      `.flow-frame.compact .flow-static { inset: ${top}px ${right}px ${bottom}px ${left}px; width: calc(100% - ${left + right}px); height: calc(100% - ${top + bottom}px); }`,
+    );
   });
 
   it("puts a part's menu under it, or above it when there's no room below, inside the frame", () => {

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { rowsOf } from "@/app/[owner]/[slug]/load";
 import type { CheckedFile } from "@/components/Checks";
 import type { ListedMember, SystemPanel, SystemViewProps } from "@/components/SystemView";
+import type { Db } from "@/db/client";
 import { engine, type Named } from "@/engine";
 import { layOut, mapLinks } from "@/server/drawing";
 import { asRead, descriptionAsRead } from "@/server/as-read";
@@ -9,6 +10,7 @@ import { followOldName, pageContext, systemPath, underOwner, type SystemTab } fr
 import { notePrivatePlatformView, visiblePlatforms } from "@/server/platforms";
 import { refPath } from "@/server/refs";
 import { readSystemVersion } from "@/server/systems";
+import type { Viewer } from "@/server/viewer";
 
 // One system version for its page, `n` or "latest", with the tab asked for.
 // A 404 for anyone who may not see it.
@@ -21,13 +23,24 @@ import { readSystemVersion } from "@/server/systems";
 // own is listed as not drawn and left out of the map, who waits and where it
 // runs, as a workflow with mistakes is not drawn.
 export async function loadSystem(owner: string, slug: string, n: string, tab: SystemTab): Promise<SystemViewProps> {
-  const { db, viewer } = await pageContext();
-  const s = await readSystemVersion(db, viewer, owner, slug, n === "latest" ? "latest" : n);
+  const context = await pageContext();
+  const s = await readSystemVersion(context.db, context.viewer, owner, slug, n === "latest" ? "latest" : n);
   if (!s) {
-    await followOldName(db, owner, `/systems${underOwner(slug, n, tab === "map" ? undefined : tab)}`);
+    await followOldName(context.db, owner, `/systems${underOwner(slug, n, tab === "map" ? undefined : tab)}`);
     notFound();
   }
+  return systemProps(context, s, n, tab);
+}
 
+// A system version as `viewer` may see its page, once it has been read for
+// them: a system's embed (#75) gives it nobody, as someone signed out, so a
+// member they may not see is left out exactly as it is for them.
+export async function systemProps(
+  { db, viewer }: { db: Db; viewer: Viewer },
+  s: NonNullable<Awaited<ReturnType<typeof readSystemVersion>>>,
+  n: string,
+  tab: SystemTab,
+): Promise<SystemViewProps> {
   const read = await Promise.all(
     s.members.map(async (m) => {
       if (m.state !== "found") return { member: m, file: null, error: null };

@@ -1,11 +1,6 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import type { ReactNode } from "react";
-import { Logo } from "@/components/Logo";
-import { SiteFrame, SiteNav } from "@/components/SiteFrame";
-import { edition } from "@/edition";
-import { organisationsOf } from "@/server/organisations";
-import { pageContext } from "@/server/page";
+import { SiteFrame } from "@/components/SiteFrame";
 import "./site.css";
 
 export const metadata: Metadata = {
@@ -13,40 +8,13 @@ export const metadata: Metadata = {
   description: "Store, version and draw AWML workflow files.",
 };
 
-const DOCS = "https://github.com/chrismdp/awml#readme";
-
-export default async function RootLayout({ children }: { children: ReactNode }) {
-  const { db, viewer } = await pageContext();
-  // Inventory goes to the viewer's first organisation, to making one, or to sign-in.
-  const [org] = viewer ? await organisationsOf(db, viewer.id) : [];
-  const inventory = org ? `/${org.slug}/inventory` : viewer ? "/settings" : "/login";
-  const header = (
-    <header className="site-header">
-      <div className="left">
-        <Logo />
-        <SiteNav
-          links={[
-            // `/` is the gallery too, unless the edition gives a home page.
-            { href: "/gallery", label: "Gallery", match: edition.homePage ? "^/gallery$" : "^/(gallery)?$" },
-            { href: inventory, label: "Inventory", match: "/inventory$" },
-            { href: DOCS, label: "Docs" },
-          ]}
-        />
-      </div>
-      {viewer ? (
-        <Link href="/settings" className="account">
-          <span>{viewer.username}</span>
-          <span className="avatar" aria-label="Your account">
-            {viewer.username.slice(0, 1).toUpperCase()}
-          </span>
-        </Link>
-      ) : (
-        <Link href="/login" className="button">
-          Sign in
-        </Link>
-      )}
-    </header>
-  );
+// Every page, its header from the chrome slot (src/app/@chrome): the site's
+// header, or nothing for an embed (#75). The layout never reads the session
+// or a cookie itself, so an embed reads none. Next also renders this layout
+// with no slot at all, as a hidden 404 for a slot that matches nothing, and
+// that copy shows no header either; an address no route answers gets the
+// header from src/app/global-not-found.tsx.
+export default function RootLayout({ children, chrome }: { children: ReactNode; chrome?: ReactNode }) {
   return (
     <html lang="en">
       <head>
@@ -58,7 +26,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         />
       </head>
       <body>
-        <SiteFrame header={header}>{children}</SiteFrame>
+        <SiteFrame header={chrome ?? null}>{children}</SiteFrame>
       </body>
     </html>
   );

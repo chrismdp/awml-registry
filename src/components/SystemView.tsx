@@ -177,7 +177,7 @@ function Panel(p: SystemViewProps) {
     return (
       <div className="figure pf-panel" role="tabpanel" aria-label={label}>
         <p className="cannot-draw">
-          AWML can&apos;t work this out for these workflows together: {panel.error} <a href={`${p.address}/checks`}>See Checks.</a>
+          {notTogether(panel.error)} <a href={`${p.address}/checks`}>See Checks.</a>
         </p>
       </div>
     );
@@ -206,8 +206,12 @@ function Panel(p: SystemViewProps) {
   );
 }
 
+// Why a tab shows nothing, in words a system's embed (#75) says too.
+export const NONE_DRAWN = "None of the workflows you can see in this system is drawn.";
+export const notTogether = (error: string) => `AWML can't work this out for these workflows together: ${error}`;
+
 function NoneDrawn() {
-  return <p className="cannot-draw">None of the workflows you can see in this system is drawn.</p>;
+  return <p className="cannot-draw">{NONE_DRAWN}</p>;
 }
 
 // What waits on a person across the workflows, and the parts they share.

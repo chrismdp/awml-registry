@@ -11,12 +11,20 @@ export type Page<P> = (props: {
   searchParams: Promise<Record<string, string | string[]>>;
 }) => Promise<ReactElement> | ReactElement;
 
+// A request whose headers throw when read, for a page that must read no
+// session or cookie: rendering it proves it reads none.
+export const sealed = new Proxy(new Headers(), {
+  get() {
+    throw new Error("The page read the request's headers, which hold its session and cookies.");
+  },
+}) as Headers;
+
 export async function renderPage<P>(
   page: Page<P>,
   params: P,
-  opts: { as?: Who; search?: Record<string, string | string[]> } = {},
+  opts: { as?: Who; search?: Record<string, string | string[]>; headers?: Headers } = {},
 ): Promise<{ status: number; html: string; location?: string }> {
-  pageRequest.headers = new Headers();
+  pageRequest.headers = opts.headers ?? new Headers();
   if (opts.as?.cookie) pageRequest.headers.set("cookie", opts.as.cookie);
   try {
     const element = await page({
