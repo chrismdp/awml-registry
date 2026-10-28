@@ -172,7 +172,7 @@ jobs:
           npm_config_registry: https://registry.npmjs.org/
         run: |
           mkdir -p "$RUNNER_TEMP/main"
-          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh AGENTS.md "$RUNNER_TEMP/main/"
+          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh AGENTS.md "$RUNNER_TEMP/main/"
           bot_id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
           case "$bot_id" in ''|*[!0-9]*) echo "The app's bot has no id: $bot_id"; exit 1 ;; esac
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
@@ -215,51 +215,59 @@ jobs:
           bwrap --dev-bind / / --unshare-pid true
           npm install -g @anthropic-ai/claude-code@2.1.312
 
-      # The branch's commits can steer each session. Its commands run in its sandbox, which reaches
-      # no network and sees none of Claude Code's own process. It loads only the settings
-      # claude-settings.sh writes in a home of its own, and no MCP servers, and reads only its clone
-      # and its inputs, never /proc. Under the scrub, Claude Code forces --permission-mode default,
-      # so every tool it may use is named, and denies its commands writes to .github/, scripts/,
-      # package.json, package-lock.json and git's config and hooks, so a rebase whose next commit
-      # touches those can't go on inside the session. This step runs no git of its own.
-      - name: Resolve each conflict
-        id: session
+      # The branch's commits can steer each session, so a session only edits the conflicted files
+      # and writes its note, and runs no git. Between sessions, a step that holds no Claude token
+      # adds what it resolved and continues the rebase with git, and a commit that conflicts in turn
+      # waits for the next round's session: three rounds in all, so a rebase that conflicts on more
+      # commits than that is left for a person. The scripts are main's, copied out above.
+      - name: Resolve the conflicts, round 1
+        id: session1
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
-          # So a plain git rebase --continue, which Claude may run, never waits for an editor.
-          GIT_EDITOR: "true"
         run: |
-          while read -r number _; do
-            input="$RUNNER_TEMP/input-$number"
-            clone="$RUNNER_TEMP/clone-$number"
-            session="$RUNNER_TEMP/sessions/resolve-$number"
-            mkdir -p "$session/out"
-            chmod -R a-w "$input"
-            bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home"
-            prompt="$(sed -e "s|INPUT_DIR|$input|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/resolve-prompt.md")"
-            (
-              cd "$clone"
-              HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
-                --setting-sources user --strict-mcp-config --add-dir "$input" --add-dir "$session/out" \
-                --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" \
-                --allowedTools "Read(./**)" "Read(/$input/**)" "Edit(./**)" "Write(./**)" \
-                  "Edit(/$session/out/**)" "Write(/$session/out/**)" \
-                  "Bash(npm run:*)" "Bash(npm test:*)" \
-                  "Bash(npx vitest:*)" "Bash(npx tsc:*)" "Bash(npx eslint:*)" \
-                  "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" \
-                  "Bash(git add:*)" "Bash(git rebase:*)" "Bash(ls:*)" \
-                > "$session/log" 2>&1
-            ) || echo "The session for #$number ended in failure."
-            stop="$(openssl rand -hex 16)"
-            echo "::stop-commands::$stop"
-            cat "$session/log"
-            echo "::$stop::"
-          done < "$RUNNER_TEMP/conflicted.txt"
+          bash "$RUNNER_TEMP/main/resolve-session.sh" 1
+      - name: Continue each rebase, round 1
+        id: continue1
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+        run: |
+          bash "$RUNNER_TEMP/main/resolve-continue.sh"
 
-      # Git reads each clone the session wrote, in a step without the Claude token, so it runs
-      # nothing the session's commands could have set: the clone's git config must be byte for byte
-      # as it was before the session, no global or system config is read, and no hook, fsmonitor or
+      - name: Resolve the conflicts, round 2
+        id: session2
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+        run: |
+          bash "$RUNNER_TEMP/main/resolve-session.sh" 2
+      - name: Continue each rebase, round 2
+        id: continue2
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+        run: |
+          bash "$RUNNER_TEMP/main/resolve-continue.sh"
+
+      - name: Resolve the conflicts, round 3
+        id: session3
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+        run: |
+          bash "$RUNNER_TEMP/main/resolve-session.sh" 3
+      - name: Continue each rebase, round 3
+        id: continue3
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+        run: |
+          bash "$RUNNER_TEMP/main/resolve-continue.sh"
+
+      # Git reads each clone the sessions wrote, in a step without the Claude token, so it runs
+      # nothing the sessions' commands could have set: the clone's git config must be byte for byte
+      # as it was before them, no global or system config is read, and no hook, fsmonitor or
       # external diff runs. A branch is bundled only if its rebase finished on main.
       - name: Bundle each resolved branch
         id: bundle
@@ -275,10 +283,12 @@ jobs:
             if [ -f "$out" ] && [ ! -L "$out" ]; then
               head -c 20000 "$out" > "$resolved/$number.md"
             fi
-            if ! cmp -s "$clone/.git/config" "$RUNNER_TEMP/git-config-$number"; then
+            if [ -e "$RUNNER_TEMP/gave-up-$number" ]; then
+              echo "The rebase of #$number stopped short."
+            elif ! cmp -s "$clone/.git/config" "$RUNNER_TEMP/git-config-$number"; then
               echo "The session for #$number changed its clone's git config, so no git runs there."
             elif [ -d "$clone/.git/rebase-merge" ] || [ -d "$clone/.git/rebase-apply" ]; then
-              echo "The session for #$number left its rebase unfinished."
+              echo "The rebase of #$number still conflicted after three rounds."
             elif git -C "$clone" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= merge-base --is-ancestor "$MAIN_SHA" HEAD; then
               git -C "$clone" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= bundle create -q "$resolved/$number.bundle" "$MAIN_SHA..HEAD"
             else
