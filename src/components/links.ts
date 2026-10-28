@@ -77,3 +77,51 @@ export class Press {
     this.dragged = false;
   }
 }
+
+// How far, in pixels, a press on a part moves before it drags the part, as React Flow is told
+// (FlowCanvas's nodeDragThreshold), and so how far a finger moves before a touch is a drag, a pan
+// or a pinch, not a tap.
+export const DRAG = 3;
+
+// A tap, on a touch screen or with a pen, which have no hover (decided 2026-10-28): a tap on a
+// part lights it as hovering does, and a second tap on it follows it as a click does, if it
+// leads anywhere. A tap on another part lights that one, and a tap on the background or a line
+// puts the light out. A box that leads somewhere is taken the same way, a scope lighting nothing.
+// `tapped` is what the last tap lit, `on` the part or box pressed, if any, and `follows` whether
+// a click on it follows a link. A mouse's click follows at once, as before, and leaves what a tap
+// lit as it was.
+export function tapOf(tapped: string | undefined, on: string | undefined, follows: boolean, touch: boolean): { lit?: string; follow: boolean } {
+  if (!touch) return { lit: tapped, follow: follows };
+  if (on === undefined) return { lit: undefined, follow: false };
+  return { lit: on, follow: follows && tapped === on };
+}
+
+// A pointer's event, as the drawing's frame sees it.
+type PointerAt = { pointerType: string; isPrimary: boolean; clientX: number; clientY: number };
+
+// What a press on the drawing was, from its pointer's events, for the click that ends it: by a
+// touch or a pen, or not; and whether it was a tap, one finger lifted no further than DRAG from
+// where it went down. A finger that moves further drags a part or pans, and a second finger
+// pinches, so neither is a tap.
+export class Gesture {
+  private press?: { touch: boolean; tap: boolean; x: number; y: number };
+  down(e: PointerAt) {
+    if (e.isPrimary) this.press = { touch: e.pointerType === "touch" || e.pointerType === "pen", tap: true, x: e.clientX, y: e.clientY };
+    else if (this.press) this.press.tap = false;
+  }
+  move(e: PointerAt) {
+    const p = this.press;
+    if (p && e.isPrimary && Math.hypot(e.clientX - p.x, e.clientY - p.y) > DRAG) p.tap = false;
+  }
+  // The browser took the press over, to scroll the page, say.
+  cancel() {
+    if (this.press) this.press.tap = false;
+  }
+  // What the press a click ends was, forgetting it. A click no pointer pressed, as a screen
+  // reader's may be, is taken as a mouse's.
+  ended(): { touch: boolean; tap: boolean } {
+    const p = this.press;
+    this.press = undefined;
+    return p ? { touch: p.touch, tap: p.tap } : { touch: false, tap: true };
+  }
+}

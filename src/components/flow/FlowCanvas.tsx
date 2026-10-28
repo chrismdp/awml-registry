@@ -37,7 +37,7 @@ import {
 } from "./drawing";
 import { LabelGraphic, LineGraphic, NoteIcon, NOTE_R, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import { startPhysics, type Body, type Physics } from "./physics";
-import { hrefOf, Press } from "../links";
+import { DRAG, Gesture, hrefOf, Press, tapOf } from "../links";
 import { notesBy, wholeNotes } from "./StaticDrawing";
 
 // React Flow drawing what the server laid out, so a dragged part takes its
@@ -46,8 +46,8 @@ import { notesBy, wholeNotes } from "./StaticDrawing";
 // tells the page once it shows, for the page to hide the SVG. The physics
 // (physics.ts) then tidies the drawing from there, and nudges what a dragged
 // part overlaps out of its way (#78). Nothing dragged is kept. The part the
-// pointer is over, or the keyboard is on, is lit, and everything not
-// connected to it is knocked back.
+// pointer is over, or the keyboard is on, or a tap lit, is lit, and everything
+// not connected to it is knocked back.
 
 // What the page's controls and keyboard ask of the drawing.
 export type FlowApi = {
@@ -114,6 +114,7 @@ function Canvas(p: FlowCanvasProps) {
   const [edges, setEdges] = useState<FlowEdge[]>([]);
   const physics = useRef<Physics>(undefined);
   const press = useRef(new Press());
+  const gesture = useRef(new Gesture());
   const flow = useReactFlow<FlowNode, FlowEdge>();
   const initialised = useNodesInitialized();
   const ready = useRef(false);
@@ -262,18 +263,15 @@ function Canvas(p: FlowCanvasProps) {
     setNodes((old) => old.map((n) => labelled(n, shared)));
   }, [shared, setNodes]);
 
-  // The part lit: the one a dragged part is, until it is dropped; else the one
-  // a mouse is over; else the one a keyboard is on. A touch has no hover, so it
-  // lights nothing. What is connected to each part is worked out once for a
-  // drawing, and lighting one marks only what is connected to it, so React
-  // Flow redraws only those, and flow.css knocks back the rest.
+  // The part lit (litOf). A touch has no hover, so a tap lights a part instead,
+  // and a second tap follows it (tapOf). What is connected to each part is
+  // worked out once for a drawing, and lighting one marks only what is
+  // connected to it, so React Flow redraws only those, and flow.css knocks back
+  // the rest.
   const connected = useMemo(() => connections(drawing), [drawing]);
   const [lit, setLit] = useState<string>();
-  const lights = useRef<{ drag?: string; hover?: string; focus?: string }>({});
-  const light = useCallback((change: { drag?: string; hover?: string; focus?: string }) => {
-    const l = Object.assign(lights.current, change);
-    setLit(l.drag ?? l.hover ?? l.focus);
-  }, []);
+  const lights = useRef<Lights>({});
+  const light = useCallback((change: Lights) => setLit(litOf(Object.assign(lights.current, change))), []);
   const near = lit === undefined ? undefined : connected.get(lit);
   const shownNodes = useMemo(() => litNodes(nodes, near), [nodes, near]);
   const shownEdges = useMemo(() => litLines(edges, near), [edges, near]);
@@ -285,13 +283,27 @@ function Canvas(p: FlowCanvasProps) {
 
   const centre = (n: Node) => ({ x: n.position.x + (n.width ?? 0) / 2, y: n.position.y + (n.height ?? 0) / 2 });
   // React Flow gives every node this handler, so it is the same one each render, and a
-  // render that changes no node redraws none.
-  const onNodeClick = useCallback<NodeMouseHandler<FlowNode>>((e, node) => {
-    const { links, hrefs } = latest.current;
-    if (!press.current.followsClick() || (e.target as Element).closest("button, a")) return;
-    const follows = node.type === "part" ? links.has(node.id) : Boolean(hrefOf(hrefs, node.id));
-    if (follows) follow.current(node.id, e);
-  }, []);
+  // render that changes no node redraws none. A click follows a linked part; a tap lights
+  // it, and a second tap follows it. A drag, a pan or a pinch is neither.
+  const onNodeClick = useCallback<NodeMouseHandler<FlowNode>>(
+    (e, node) => {
+      const { links, hrefs } = latest.current;
+      const { touch, tap } = gesture.current.ended();
+      if (!press.current.followsClick() || (touch && !tap) || (e.target as Element).closest("button, a")) return;
+      const follows = node.type === "part" ? links.has(node.id) : Boolean(hrefOf(hrefs, node.id));
+      const t = tapOf(lights.current.tap, node.id, follows, touch);
+      light({ tap: t.lit });
+      if (t.follow) follow.current(node.id, e);
+    },
+    [light],
+  );
+  // A tap on the background or a line puts out what a tap lit; a click on a node is onNodeClick's.
+  const onClick = (e: MouseEvent) => {
+    if ((e.target as Element).closest(".react-flow__node")) return;
+    const { touch, tap } = gesture.current.ended();
+    if (touch && !tap) return;
+    light({ tap: tapOf(lights.current.tap, undefined, false, touch).lit });
+  };
   const onAuxClick = (e: MouseEvent) => {
     const id = (e.target as Element).closest(".react-flow__node")?.getAttribute("data-id");
     if (e.button !== 1 || !id || (!shared.links.has(id) && !hrefOf(shared.hrefs, id))) return;
@@ -306,6 +318,10 @@ function Canvas(p: FlowCanvasProps) {
       edges={shownEdges}
       onPointerOver={(e) => e.pointerType === "mouse" && light({ hover: partAt(e.target) })}
       onPointerLeave={() => light({ hover: undefined })}
+      onPointerDownCapture={(e) => gesture.current.down(e)}
+      onPointerMoveCapture={(e) => gesture.current.move(e)}
+      onPointerCancelCapture={() => gesture.current.cancel()}
+      onClick={onClick}
       onFocus={(e) => light({ focus: e.target.matches(":focus-visible") ? partAt(e.target) : undefined })}
       onBlur={() => light({ focus: undefined })}
       onNodesChange={onNodesChange}
@@ -322,7 +338,7 @@ function Canvas(p: FlowCanvasProps) {
       zoomOnDoubleClick
       minZoom={0.1}
       maxZoom={2.5}
-      nodeDragThreshold={3}
+      nodeDragThreshold={DRAG}
       proOptions={{ hideAttribution: true }}
       onNodeClick={onNodeClick}
       onAuxClick={onAuxClick}
@@ -465,6 +481,14 @@ export function nodesOf(d: Drawing, bodies: Body[], boxes: Map<string, Rect>, sh
   const corner = d.notesAt && (Number.isFinite(is.x - was.x) ? { x: d.notesAt.x + is.x - was.x, y: d.notesAt.y + is.y - was.y } : d.notesAt);
   return [...hulls, ...moved, ...notesNode(d, shared, corner)].map((n) => labelled(n, shared));
 }
+
+// What lights a part: a dragged part, until it is dropped; the part a mouse is
+// over; the keyboard; and a tap on a touch screen, which has no hover.
+export type Lights = { drag?: string; hover?: string; focus?: string; tap?: string };
+
+// The part lit: the one being dragged; else the one a mouse is over; else the
+// one the keyboard is on, which only a key moves to; else the one a tap lit.
+export const litOf = (l: Lights) => l.drag ?? l.hover ?? l.focus ?? l.tap;
 
 // The nodes while a part is lit, `near` being what is connected to it: each
 // part connected to it marked `lit`, and each part whose note icon shows a

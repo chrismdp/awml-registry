@@ -1,9 +1,9 @@
-// A part the pointer is over, or the keyboard is on, once React Flow draws the drawing
-// (src/components/flow/FlowCanvas.tsx): what is connected to it stays as it is, and everything
-// else is knocked back. Connected is the part itself, every line with it at either end and
-// those lines' labels, the part at each line's other end, and the notes tied to it. A scope
-// stays as it is. What is connected to each part is worked out once for a drawing
-// (`connections`, in src/components/flow/drawing.ts).
+// A part the pointer is over, or the keyboard is on, or a tap lit on a touch screen, once React
+// Flow draws the drawing (src/components/flow/FlowCanvas.tsx): what is connected to it stays as
+// it is, and everything else is knocked back. Connected is the part itself, every line with it at
+// either end and those lines' labels, the part at each line's other end, and the notes tied to
+// it. A scope stays as it is. What is connected to each part is worked out once for a drawing
+// (`connections`, in src/components/flow/drawing.ts). What a tap does is in test/links.test.ts.
 import fs from "node:fs";
 import path from "node:path";
 import { Position, ReactFlow } from "@xyflow/react";
@@ -11,9 +11,10 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { connections, type Connected } from "@/components/flow/drawing";
-import { EDGE_TYPES, linesOf, litLines, litNodes, NODE_TYPES, nodesOf } from "@/components/flow/FlowCanvas";
+import { EDGE_TYPES, linesOf, litLines, litNodes, litOf, NODE_TYPES, nodesOf } from "@/components/flow/FlowCanvas";
 import { atServer } from "@/components/flow/physics";
 import { notesBy } from "@/components/flow/StaticDrawing";
+import { tapOf } from "@/components/links";
 import { layOut } from "@/server/drawing";
 import { laidOut } from "./drawn";
 import { example } from "./helpers";
@@ -190,5 +191,30 @@ describe("a part the pointer is over, once React Flow draws it", () => {
     const eased = ":is(.flow-part, .flow-scope, .flow-note-mark, .flow-edge, .flow-label-svg)";
     expect(rules).toContainEqual({ selectors: [`.flow-canvas ${eased}`], body: "transition: opacity 0.15s ease-out;" });
     expect(css).toContain(`@media (prefers-reduced-motion: reduce) { .flow-canvas ${eased} { transition: none; } }`);
+  });
+});
+
+describe("a part a tap lit, on a touch screen, which has no hover", () => {
+  it("is marked just as a part the pointer is over is, and so is all that is connected to it", async () => {
+    const tapped = tapOf(undefined, "check", false, true).lit;
+    const html = await drawn(dinners, litOf({ tap: tapped }));
+    expect(frameClasses(html)).toContain("flow-lit");
+    expect(nodeClasses(html, "check")).toContain("lit");
+    expect(html).toBe(await drawn(dinners, litOf({ hover: "check" })));
+  });
+
+  it("gives way to a part being dragged, the mouse is over or the keyboard is on", () => {
+    expect(litOf({ tap: "check", focus: "plan" })).toBe("plan");
+    expect(litOf({ tap: "check", hover: "plan" })).toBe("plan");
+    expect(litOf({ tap: "check", drag: "start" })).toBe("start");
+    expect(litOf({ tap: "check" })).toBe("check");
+  });
+
+  it("is put out by a tap on the background, and a tap on a scope lights nothing", async () => {
+    const out = await drawn(dinners, litOf({ tap: tapOf("check", undefined, false, true).lit }));
+    expect(out).not.toContain("flow-lit");
+    const scope = await drawn(dinners, litOf({ tap: tapOf("check", "kitchen", false, true).lit }));
+    expect(scope).not.toContain("flow-lit");
+    expect(scope).not.toMatch(/class="[^"]*\blit(-note)?\b/);
   });
 });
