@@ -22,7 +22,19 @@ import {
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { PartLink } from "@/server/part-links";
-import { pointAlong, squareRoute, type Drawing, type DrawnLine, type DrawnPart, type DrawnScope, type Note, type Point, type Rect } from "./drawing";
+import {
+  connections,
+  pointAlong,
+  squareRoute,
+  type Connected,
+  type Drawing,
+  type DrawnLine,
+  type DrawnPart,
+  type DrawnScope,
+  type Note,
+  type Point,
+  type Rect,
+} from "./drawing";
 import { LabelGraphic, LineGraphic, NoteIcon, NOTE_R, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import { startPhysics, type Body, type Physics } from "./physics";
 import { hrefOf, Press } from "../links";
@@ -33,7 +45,9 @@ import { notesBy, wholeNotes } from "./StaticDrawing";
 // (Drawing.tsx), each piece drawn by the same markup (Graphic.tsx), and
 // tells the page once it shows, for the page to hide the SVG. The physics
 // (physics.ts) then tidies the drawing from there, and nudges what a dragged
-// part overlaps out of its way (#78). Nothing dragged is kept.
+// part overlaps out of its way (#78). Nothing dragged is kept. The part the
+// pointer is over, or the keyboard is on, is lit, and everything not
+// connected to it is knocked back.
 
 // What the page's controls and keyboard ask of the drawing.
 export type FlowApi = {
@@ -58,8 +72,9 @@ type Shared = {
 type PartData = Shared & { part: DrawnPart };
 type ScopeData = Shared & { scope: DrawnScope; hull?: boolean };
 type NotesData = Shared & { whole: Note[] };
-// `along`: where its label has slid to along it, as a fraction of its length.
-type LineData = { id: string; line: DrawnLine; from?: Point; to?: Point; along?: number };
+// `along`: where its label has slid to along it, as a fraction of its length;
+// `lit`: whether it is connected to the part lit.
+type LineData = { id: string; line: DrawnLine; from?: Point; to?: Point; along?: number; lit?: boolean };
 type PartNode = Node<PartData, "part">;
 type ScopeNode = Node<ScopeData, "scope">;
 type NotesNode = Node<NotesData, "notes">;
@@ -115,8 +130,10 @@ function Canvas(p: FlowCanvasProps) {
     [p.id, p.links, p.hrefs, drawing.notes, p.target, p.menuFor, p.onNote],
   );
   const latest = useRef(shared);
+  const follow = useRef(p.onFollow);
   useEffect(() => {
     latest.current = shared;
+    follow.current = p.onFollow;
   });
 
   // The page shows React Flow, and hides its SVG, once every part is drawn,
@@ -245,12 +262,36 @@ function Canvas(p: FlowCanvasProps) {
     setNodes((old) => old.map((n) => labelled(n, shared)));
   }, [shared, setNodes]);
 
-  const centre = (n: Node) => ({ x: n.position.x + (n.width ?? 0) / 2, y: n.position.y + (n.height ?? 0) / 2 });
-  const onNodeClick: NodeMouseHandler<FlowNode> = (e, node) => {
-    if (!press.current.followsClick() || (e.target as Element).closest("button, a")) return;
-    const follows = node.type === "part" ? shared.links.has(node.id) : Boolean(hrefOf(shared.hrefs, node.id));
-    if (follows) p.onFollow(node.id, e);
+  // The part lit: the one a dragged part is, until it is dropped; else the one
+  // a mouse is over; else the one a keyboard is on. A touch has no hover, so it
+  // lights nothing. What is connected to each part is worked out once for a
+  // drawing, and lighting one marks only what is connected to it, so React
+  // Flow redraws only those, and flow.css knocks back the rest.
+  const connected = useMemo(() => connections(drawing), [drawing]);
+  const [lit, setLit] = useState<string>();
+  const lights = useRef<{ drag?: string; hover?: string; focus?: string }>({});
+  const light = useCallback((change: { drag?: string; hover?: string; focus?: string }) => {
+    const l = Object.assign(lights.current, change);
+    setLit(l.drag ?? l.hover ?? l.focus);
+  }, []);
+  const near = lit === undefined ? undefined : connected.get(lit);
+  const shownNodes = useMemo(() => litNodes(nodes, near), [nodes, near]);
+  const shownEdges = useMemo(() => litLines(edges, near), [edges, near]);
+  // The part, or box that holds nothing, an element is in.
+  const partAt = (el: EventTarget | null) => {
+    const id = (el as Element | null)?.closest?.(".react-flow__node")?.getAttribute("data-id");
+    return id && connected.has(id) ? id : undefined;
   };
+
+  const centre = (n: Node) => ({ x: n.position.x + (n.width ?? 0) / 2, y: n.position.y + (n.height ?? 0) / 2 });
+  // React Flow gives every node this handler, so it is the same one each render, and a
+  // render that changes no node redraws none.
+  const onNodeClick = useCallback<NodeMouseHandler<FlowNode>>((e, node) => {
+    const { links, hrefs } = latest.current;
+    if (!press.current.followsClick() || (e.target as Element).closest("button, a")) return;
+    const follows = node.type === "part" ? links.has(node.id) : Boolean(hrefOf(hrefs, node.id));
+    if (follows) follow.current(node.id, e);
+  }, []);
   const onAuxClick = (e: MouseEvent) => {
     const id = (e.target as Element).closest(".react-flow__node")?.getAttribute("data-id");
     if (e.button !== 1 || !id || (!shared.links.has(id) && !hrefOf(shared.hrefs, id))) return;
@@ -260,8 +301,13 @@ function Canvas(p: FlowCanvasProps) {
 
   return (
     <ReactFlow<FlowNode, FlowEdge>
-      nodes={nodes}
-      edges={edges}
+      className={near ? "flow-lit" : undefined}
+      nodes={shownNodes}
+      edges={shownEdges}
+      onPointerOver={(e) => e.pointerType === "mouse" && light({ hover: partAt(e.target) })}
+      onPointerLeave={() => light({ hover: undefined })}
+      onFocus={(e) => light({ focus: e.target.matches(":focus-visible") ? partAt(e.target) : undefined })}
+      onBlur={() => light({ focus: undefined })}
       onNodesChange={onNodesChange}
       nodeTypes={NODE_TYPES}
       edgeTypes={EDGE_TYPES}
@@ -288,6 +334,8 @@ function Canvas(p: FlowCanvasProps) {
         press.current.reset();
         opening.current = "done";
         physics.current?.hold(n.id, centre(n));
+        // A part the mouse lit stays lit while it is dragged, wherever the pointer goes.
+        if (lights.current.hover === n.id) light({ drag: n.id });
       }}
       onNodeDrag={(_, n) => {
         press.current.moved();
@@ -296,6 +344,7 @@ function Canvas(p: FlowCanvasProps) {
       onNodeDragStop={(_, n) => {
         physics.current?.drop(n.id);
         setTimeout(() => press.current.reset());
+        light({ drag: undefined });
       }}
     />
   );
@@ -417,7 +466,27 @@ export function nodesOf(d: Drawing, bodies: Body[], boxes: Map<string, Rect>, sh
   return [...hulls, ...moved, ...notesNode(d, shared, corner)].map((n) => labelled(n, shared));
 }
 
-function linesOf(d: Drawing, id: string): FlowEdge[] {
+// The nodes while a part is lit, `near` being what is connected to it: each
+// part connected to it marked `lit`, and each part whose note icon shows a
+// note tied to it, whether or not the part is lit, `lit-note`. Every other
+// node is left as it is, so React Flow redraws only those marked, and flow.css
+// knocks back the rest. A scope is never knocked back.
+export function litNodes(nodes: FlowNode[], near?: Connected): FlowNode[] {
+  if (!near) return nodes;
+  return nodes.map((n) => {
+    const notes = n.type === "notes" ? undefined : n.data.notes.get(n.id);
+    const marks = [near.parts.has(n.id) && "lit", notes?.some((note) => near.notes.has(note.id)) && "lit-note"].filter(Boolean);
+    return marks.length ? { ...n, className: marks.join(" ") } : n;
+  });
+}
+
+// The lines while a part is lit: each with it at one end marked, with its label.
+export function litLines(edges: FlowEdge[], near?: Connected): FlowEdge[] {
+  if (!near) return edges;
+  return edges.map((e) => (near.lines.has(e.id) ? { ...e, data: { ...e.data!, lit: true } } : e));
+}
+
+export function linesOf(d: Drawing, id: string): FlowEdge[] {
   const at = new Map([...d.parts, ...d.scopes].map((b) => [b.id, { x: b.x, y: b.y }]));
   return d.lines.map((line) => ({
     id: line.id,
@@ -544,19 +613,23 @@ export function lineRoute(
 
 // A line, routed by lineRoute, so it follows a dragged part. Each label is
 // drawn above every line, as the server's SVG draws them, so no other line
-// crosses over it (#78).
+// crosses over it (#78). A line connected to the part lit is marked, with its
+// label, so flow.css knocks back the others, arrowheads and all.
 function LineView({ source, target, data }: EdgeProps<FlowEdge>) {
   const s = useInternalNode(source);
   const t = useInternalNode(target);
   if (!s || !t || !data) return null;
   const { line } = data;
   const route = lineRoute(line, rectOf(s), rectOf(t), data.from, data.to, data.along);
+  const lit = data.lit ? " lit" : "";
   return (
     <>
-      <LineGraphic id={data.id} line={line} d={roundedPath(route.points)} />
+      <g className={`flow-edge${lit}`}>
+        <LineGraphic id={data.id} line={line} d={roundedPath(route.points)} />
+      </g>
       {line.label && (
         <EdgeLabelRenderer>
-          <svg className="flow-node-svg flow-label-svg" width={1} height={1} aria-hidden>
+          <svg className={`flow-node-svg flow-label-svg${lit}`} width={1} height={1} aria-hidden>
             <LabelGraphic label={line.label} at={route.label} style={line.style} />
           </svg>
         </EdgeLabelRenderer>
@@ -575,4 +648,4 @@ function NotesNodeView({ data }: NodeProps<NotesNode>) {
 }
 
 export const NODE_TYPES = { part: PartNodeView, scope: ScopeNodeView, notes: NotesNodeView };
-const EDGE_TYPES = { line: LineView };
+export const EDGE_TYPES = { line: LineView };
