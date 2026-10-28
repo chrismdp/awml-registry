@@ -247,7 +247,8 @@ describe("what the browser loads", () => {
       expect(modules).toContain(m);
     expect(roots.length).toBeGreaterThan(5);
     expect(packages).toContain("@xyflow/react");
-    expect(packages).toContain("d3-force");
+    // The drawing moves by overlap alone (#78), with no force layout.
+    expect(packages).not.toContain("d3-force");
     expect(packages).not.toContain("elkjs");
     expect(modules).not.toContain("server/drawing.ts");
   });

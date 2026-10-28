@@ -2,7 +2,7 @@
 // (src/components/flow/FlowCanvas.tsx), as React Flow renders them: a linked part (#55) is a
 // focusable link or a menu button named by where it leads, with its tooltip, a part it may not
 // follow is still named, the part the address names is outlined, and a workflow's box on a
-// system's map (#61) is a link to its page. A part the reader dropped shows it is pinned (#78).
+// system's map (#61) is a link to its page.
 import { ReactFlow } from "@xyflow/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -21,17 +21,10 @@ const text = `flowchart TB\n  list[("Shopping list")]\n  plan("<small>🤖</smal
 // The nodes React Flow draws for a drawing, as it renders them, where the server put them.
 async function rendered(
   source: string,
-  {
-    links = [],
-    hrefs = {},
-    target,
-    menuFor,
-    pinned = [],
-  }: { links?: PartLink[]; hrefs?: Record<string, string>; target?: string; menuFor?: string; pinned?: string[] },
+  { links = [], hrefs = {}, target, menuFor }: { links?: PartLink[]; hrefs?: Record<string, string>; target?: string; menuFor?: string },
 ) {
   const { full } = laidOut(await layOut(source, { map: Object.keys(hrefs).length > 0 }));
   const { bodies, hulls } = atServer(full);
-  for (const b of bodies) if (pinned.includes(b.id)) b.pinned = true;
   const nodes = nodesOf(full, bodies, hulls, { id: "t", links: new Map(links.map((l) => [l.part, l])), hrefs, notes: new Map(), target, menuFor, onNote: () => {} });
   return renderToStaticMarkup(<ReactFlow nodes={nodes} edges={[]} nodeTypes={NODE_TYPES} width={800} height={600} />);
 }
@@ -187,17 +180,6 @@ describe("a line, once a part is dragged (#67)", () => {
       expect(below.points.at(-1)!.y).toBe(t.y);
       expect(below.points.at(-2)!.x).toBe(below.points.at(-1)!.x);
     }
-  });
-});
-
-describe("a part the reader dropped (#78)", () => {
-  it("shows a small pin, a button that lets it go, and no other part does", async () => {
-    const html = await rendered(text, { pinned: ["plan"] });
-    const pin = /<button type="button" class="flow-pin-mark nodrag nopan" style="[^"]*" aria-label="([^"]*)" title="([^"]*)">/.exec(node(html, "plan").inside);
-    expect(pin?.[1]).toBe("Unpin Plan the week&#x27;s dinners");
-    expect(pin?.[2]).toBe("Pinned where you dropped it. Press the pin, or double-click the part, to let it go.");
-    expect(node(html, "list").inside).not.toContain("flow-pin-mark");
-    expect(await rendered(text, {})).not.toContain("flow-pin-mark");
   });
 });
 

@@ -12,7 +12,6 @@ import {
   useNodesInitialized,
   useNodesState,
   useReactFlow,
-  useStore,
   type Edge,
   type EdgeProps,
   type InternalNode,
@@ -23,7 +22,7 @@ import {
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { PartLink } from "@/server/part-links";
-import { labelAt, squareRoute, type Drawing, type DrawnLine, type DrawnPart, type DrawnScope, type Note, type Point, type Rect } from "./drawing";
+import { pointAlong, squareRoute, type Drawing, type DrawnLine, type DrawnPart, type DrawnScope, type Note, type Point, type Rect } from "./drawing";
 import { LabelGraphic, LineGraphic, NoteIcon, NOTE_R, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import { startPhysics, type Body, type Physics } from "./physics";
 import { Press } from "../links";
@@ -33,9 +32,8 @@ import { notesBy, wholeNotes } from "./StaticDrawing";
 // lines with it (issue #62). It starts exactly where the server's SVG was
 // (Drawing.tsx), each piece drawn by the same markup (Graphic.tsx), and
 // tells the page once it shows, for the page to hide the SVG. The physics
-// (physics.ts) then lets the drawing settle from there, and moves it as a
-// part is dragged; a part dropped stays where it was dropped (#78). Nothing
-// dragged is kept.
+// (physics.ts) then tidies the drawing from there, and nudges what a dragged
+// part overlaps out of its way (#78). Nothing dragged is kept.
 
 // What the page's controls and keyboard ask of the drawing.
 export type FlowApi = {
@@ -56,14 +54,12 @@ type Shared = {
   // The part whose menu is open.
   menuFor?: string;
   onNote: (title: string, notes: Note[]) => void;
-  // Lets a pinned part go.
-  onUnpin?: (id: string) => void;
 };
-// `pinned`: dropped by the reader, and kept where they left it.
-type PartData = Shared & { part: DrawnPart; pinned?: boolean };
-type ScopeData = Shared & { scope: DrawnScope; hull?: boolean; pinned?: boolean };
+type PartData = Shared & { part: DrawnPart };
+type ScopeData = Shared & { scope: DrawnScope; hull?: boolean };
 type NotesData = Shared & { whole: Note[] };
-type LineData = { id: string; line: DrawnLine; from?: Point; to?: Point };
+// `along`: where its label has slid to along it, as a fraction of its length.
+type LineData = { id: string; line: DrawnLine; from?: Point; to?: Point; along?: number };
 type PartNode = Node<PartData, "part">;
 type ScopeNode = Node<ScopeData, "scope">;
 type NotesNode = Node<NotesData, "notes">;
@@ -106,20 +102,6 @@ function Canvas(p: FlowCanvasProps) {
   const flow = useReactFlow<FlowNode, FlowEdge>();
   const initialised = useNodesInitialized();
   const ready = useRef(false);
-
-  // A part dropped is pinned where it was dropped, and shows it; a
-  // double-click on it, or a press on its pin, lets it go (#78).
-  const pin = useCallback(
-    (id: string, pinned: boolean) => setNodes((old) => old.map((n) => (n.id === id ? ({ ...n, data: { ...n.data, pinned } } as FlowNode) : n))),
-    [setNodes],
-  );
-  const unpin = useCallback(
-    (id: string) => {
-      physics.current?.release(id);
-      pin(id, false);
-    },
-    [pin],
-  );
   const shared = useMemo(
     () => ({
       id: p.id,
@@ -129,9 +111,8 @@ function Canvas(p: FlowCanvasProps) {
       target: p.target,
       menuFor: p.menuFor,
       onNote: p.onNote,
-      onUnpin: unpin,
     }),
-    [p.id, p.links, p.hrefs, drawing.notes, p.target, p.menuFor, p.onNote, unpin],
+    [p.id, p.links, p.hrefs, drawing.notes, p.target, p.menuFor, p.onNote],
   );
   const latest = useRef(shared);
   useEffect(() => {
@@ -212,7 +193,7 @@ function Canvas(p: FlowCanvasProps) {
     first.current = false;
     const sim = startPhysics(
       drawing,
-      (bodies, hulls, opened) => {
+      (bodies, hulls, opened, along) => {
         if (stopped) return;
         const next = nodesOf(drawing, bodies, hulls, latest.current);
         if (!drawn) {
@@ -227,6 +208,11 @@ function Canvas(p: FlowCanvasProps) {
             }),
           );
         }
+        // Each label where it has slid to along its line.
+        setEdges((old) => {
+          if (old.every((e) => e.data?.along === along.get(e.id))) return old;
+          return old.map((e) => (e.data?.along === along.get(e.id) ? e : { ...e, data: { ...e.data!, along: along.get(e.id) } }));
+        });
         const was = opening.current;
         if (opened === 0 || was === "done") return;
         if (fitted.current) {
@@ -309,11 +295,7 @@ function Canvas(p: FlowCanvasProps) {
       }}
       onNodeDragStop={(_, n) => {
         physics.current?.drop(n.id);
-        pin(n.id, true);
         setTimeout(() => press.current.reset());
-      }}
-      onNodeDoubleClick={(_, n) => {
-        if (n.type !== "notes" && n.data.pinned) unpin(n.id);
       }}
     />
   );
@@ -419,10 +401,9 @@ export function nodesOf(d: Drawing, bodies: Body[], boxes: Map<string, Rect>, sh
   });
   const moved = bodies.map((b): FlowNode => {
     const at = { position: { x: b.x! - b.width / 2, y: b.y! - b.height / 2 }, width: b.width, height: b.height };
-    const pinned = b.pinned ? { pinned: true } : {};
     const part = parts.get(b.id);
-    if (part) return { id: b.id, type: "part", ...at, data: { ...shared, part, ...pinned } };
-    return { id: b.id, type: "scope", ...at, data: { ...shared, scope: scopes.get(b.id)!, ...pinned } };
+    if (part) return { id: b.id, type: "part", ...at, data: { ...shared, part } };
+    return { id: b.id, type: "scope", ...at, data: { ...shared, scope: scopes.get(b.id)! } };
   });
   // The notes of the whole drawing keep to its top-left corner, where the
   // server put them, as it moves.
@@ -487,34 +468,6 @@ export function NoteTip({ notes }: { notes: Note[] }) {
   );
 }
 
-// The mark of a part the reader dropped, pinned where they left it (#78): a
-// small pin on its top-left corner, and a button that lets it go, as a
-// double-click on the part does.
-export const PIN_R = 9;
-export function PinButton({ id, title, onUnpin }: { id: string; title: string; onUnpin: Shared["onUnpin"] }) {
-  return (
-    <button
-      type="button"
-      className="flow-pin-mark nodrag nopan"
-      style={{ left: 2 - PIN_R, top: 2 - PIN_R }}
-      aria-label={`Unpin ${title}`}
-      title="Pinned where you dropped it. Press the pin, or double-click the part, to let it go."
-      onClick={(e) => {
-        e.stopPropagation();
-        onUnpin?.(id);
-      }}
-    >
-      <svg width={2 * PIN_R} height={2 * PIN_R} viewBox={`${-PIN_R} ${-PIN_R} ${2 * PIN_R} ${2 * PIN_R}`} aria-hidden>
-        <g className="flow-pin-icon">
-          <circle r={PIN_R - 0.5} />
-          <path className="flow-pin-head" d="M -2.6 -5.2 H 2.6 L 1.8 -1.8 L 4 0.6 H -4 L -1.8 -1.8 Z" />
-          <path className="flow-pin-needle" d="M 0 0.6 V 5.4" />
-        </g>
-      </svg>
-    </button>
-  );
-}
-
 function PartNodeView({ data }: NodeProps<PartNode>) {
   const { part } = data;
   const notes = data.notes.get(part.id);
@@ -527,7 +480,6 @@ function PartNodeView({ data }: NodeProps<PartNode>) {
       </svg>
       <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
       <Handle type="source" position={Position.Bottom} isConnectable={false} className="flow-handle" />
-      {data.pinned && <PinButton id={part.id} title={label} onUnpin={data.onUnpin} />}
       {notes && <NoteButton title={label} notes={notes} at={{ x: part.width - 3, y: part.height - 3 }} onNote={data.onNote} />}
     </div>
   );
@@ -543,7 +495,6 @@ function ScopeNodeView({ data, width = 0, height = 0 }: NodeProps<ScopeNode>) {
       </svg>
       <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
       <Handle type="source" position={Position.Bottom} isConnectable={false} className="flow-handle" />
-      {data.pinned && !data.hull && <PinButton id={scope.id} title={scope.lines.join(" ") || scope.name} onUnpin={data.onUnpin} />}
       {notes && !data.hull && <NoteButton title={scope.name} notes={notes} at={{ x: width - 3, y: height - 3 }} onNote={data.onNote} />}
     </div>
   );
@@ -561,42 +512,40 @@ const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y -
 // server's route while neither end has moved from where the server put it,
 // `from` and `to` (or both have moved together), and otherwise square, as the
 // server's routes are (#67): out of the side of one that faces the other,
-// across halfway between them, and into the other, its label as near halfway
-// along as it can be without covering any box in `clear`. So the drawing
-// first shows each line as the server's SVG does, and a line stays square as
-// the physics moves its ends.
+// across halfway between them, and into the other, its label halfway along.
+// A label the physics has slid along its line is `along` of the way along it.
+// So the drawing first shows each line as the server's SVG does, and a line
+// stays square as the physics moves its ends.
 export function lineRoute(
   line: DrawnLine,
   s: Rect,
   t: Rect,
   from?: Point,
   to?: Point,
-  clear: Rect[] = [],
+  along?: number,
 ): { points: Point[]; label: Point; server: boolean } {
+  const placed = (route: { points: Point[]; label: Point }) => (along === undefined ? route.label : pointAlong(route.points, along));
   if (line.points.length >= 2 && from && to) {
     const ds = { x: s.x - from.x, y: s.y - from.y };
     if (near(ds, { x: t.x - to.x, y: t.y - to.y })) {
       const moved = (p: Point) => ({ x: p.x + ds.x, y: p.y + ds.y });
       const points = line.points.map(moved);
-      return { points, label: line.label ? moved(line.label) : points[Math.floor(points.length / 2)], server: true };
+      return { points, label: placed({ points, label: line.label ? moved(line.label) : pointAlong(points, 0.5) }), server: true };
     }
   }
   const route = squareRoute(s, t);
-  return { ...route, ...(line.label ? { label: labelAt(route.points, line.label, clear) } : {}), server: false };
+  return { points: route.points, label: placed(route), server: false };
 }
 
-// A line, routed by lineRoute, so it follows a dragged part; its label, once
-// it leaves the server's route, clear of every part and box. Each label is
+// A line, routed by lineRoute, so it follows a dragged part. Each label is
 // drawn above every line, as the server's SVG draws them, so no other line
 // crosses over it (#78).
 function LineView({ source, target, data }: EdgeProps<FlowEdge>) {
   const s = useInternalNode(source);
   const t = useInternalNode(target);
-  const nodes = useStore((st) => st.nodeLookup);
   if (!s || !t || !data) return null;
   const { line } = data;
-  const clear = line.label ? [...nodes.values()].filter((n) => n.type === "part" || (n.type === "scope" && !(n.data as ScopeData).scope.holds)).map(rectOf) : [];
-  const route = lineRoute(line, rectOf(s), rectOf(t), data.from, data.to, clear);
+  const route = lineRoute(line, rectOf(s), rectOf(t), data.from, data.to, data.along);
   return (
     <>
       <LineGraphic id={data.id} line={line} d={roundedPath(route.points)} />

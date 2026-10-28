@@ -19,8 +19,8 @@ export const FRAME_LABEL = "Workflow drawing. Drag a part to move it; drag the b
 // A drawing of a workflow or a system's map, laid out by the server
 // (src/server/drawing.ts). The server's SVG shows it first, so it needs no
 // scripts; once the page runs, React Flow takes over from just where the SVG
-// was, to drag its parts, pan and zoom, and the physics lets it settle from
-// there (#78). Its switch: Flow only (#51). A part's notes are behind an icon
+// was, to drag its parts, pan and zoom; a drag moves only what the dragged
+// part overlaps (#78). Its switch: Flow only (#51). A part's notes are behind an icon
 // (#60). A part linked to other workflows (#55), and a workflow's box on a
 // system's map (#61), opens what it leads to.
 //
