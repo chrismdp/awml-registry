@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { evaluate, loadConfig, readConfig, type Verdict } from "../scripts/build-rule";
+import { countFixCommits, evaluate, loadConfig, readConfig, type Verdict } from "../scripts/build-rule";
 
 const made: string[] = [];
 
@@ -58,8 +58,8 @@ function numberedLines(prefix: string, count: number) {
   return Array.from({ length: count }, (_, n) => `${prefix} ${String(n).padStart(3, "0")}\n`).join("");
 }
 
-function expectVerdict(got: Verdict, review: boolean, reason: string) {
-  expect(got.review, got.reasons.join("; ")).toBe(review);
+function expectVerdict(got: Verdict, verdict: Verdict["verdict"], reason: string) {
+  expect(got.verdict, got.reasons.join("; ")).toBe(verdict);
   expect(got.reasons).toContain(reason);
 }
 
@@ -98,79 +98,62 @@ describe("judging a staged change", () => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
 
-    expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
+    expectVerdict(evaluate(repo, plain), "ship", "No review rule matched this change.");
   });
 
-  // The reviews' findings and the classifier's verdict are files the build's review job wrote. A
-  // finding about code the change didn't write is shown, but leaves the change straightforward.
+  // Classify's verdict starts the rule off, and the rule can only move it towards ask.
   it.each([
-    ["an Important finding", `[{"severity": "Important"}]`, true, "The reviews left 1 finding open."],
-    ["a Nit and an Important finding", `[{"severity": "Nit"}, {"severity": "Important"}]`, true, "The reviews left 2 findings open."],
-    ["only a pre-existing finding", `[{"severity": "Pre-existing"}]`, false, "No review rule matched this change."],
-    ["no findings", "[]", false, "No review rule matched this change."],
-  ])("weighs %s", (_, findings, review, reason) => {
+    ["ship", "ship", "No review rule matched this change."],
+    ["show", "show", "Classify said show."],
+    ["ask", "ask", "Classify said ask."],
+  ] as const)("starts from Classify saying %s", (classified, verdict, reason) => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
-    const path = join(tempDir(), "findings.json");
-    writeFileSync(path, findings);
 
-    expectVerdict(evaluate(repo, plain, { findings: path }), review, reason);
+    expectVerdict(evaluate(repo, plain, { classified }), verdict, reason);
   });
 
-  it("sends a change to review when the classifier asks", () => {
+  it("asks when Classify gave no verdict", () => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
-    const path = join(tempDir(), "classification.json");
-    writeFileSync(path, `{"needs_review": true, "reasons": ["It changes who may see a private workflow."]}`);
 
-    expectVerdict(evaluate(repo, plain, { classification: path }), true, "The classifier asked for a review.");
+    expectVerdict(evaluate(repo, plain, { classified: "missing" }), "ask", "Classify gave no verdict.");
   });
 
-  // The classifier can add a review, never skip one.
-  it("keeps a review the rules require when the classifier finds the change low risk", () => {
+  it("keeps an ask the rules require when Classify says ship", () => {
     const repo = newRepo();
     stage(repo, "docs/SPEC.md", "changed\n");
-    const path = join(tempDir(), "classification.json");
-    writeFileSync(path, `{"needs_review": false, "reasons": ["It is a small fix."]}`);
 
     expectVerdict(
-      evaluate(repo, { reviewPaths: ["docs/SPEC.md"], maxChangedLines: 400 }, { classification: path }),
-      true,
+      evaluate(repo, { reviewPaths: ["docs/SPEC.md"], maxChangedLines: 400 }, { classified: "ship" }),
+      "ask",
       "`docs/SPEC.md` is a path that always needs review.",
     );
   });
 
-  it("adds nothing when the classifier finds the change low risk", () => {
+  it("shows a change the reviews left Nits on", () => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
-    const path = join(tempDir(), "classification.json");
-    writeFileSync(path, `{"needs_review": false, "reasons": ["It is a small fix."]}`);
 
-    expectVerdict(evaluate(repo, plain, { classification: path }), false, "No review rule matched this change.");
+    expectVerdict(evaluate(repo, plain, { classified: "ship", nits: 2 }), "show", "The reviews left 2 Nits unfixed.");
+    expectVerdict(evaluate(repo, plain, { classified: "ship", nits: 1 }), "show", "The reviews left 1 Nit unfixed.");
+  });
+
+  it("never moves an ask back to show", () => {
+    const repo = newRepo();
+    stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
+
+    expect(evaluate(repo, plain, { classified: "ask", nits: 3 }).verdict).toBe("ask");
   });
 
   it.each([
-    ["an unknown severity", { findings: `[{"severity": "Minor"}]` }],
-    ["findings that aren't a list", { findings: `{"severity": "Nit"}` }],
-    ["a finding that isn't an object", { findings: `["Nit"]` }],
-    ["findings that aren't JSON", { findings: "Nit" }],
-    ["a missing findings file", { findings: undefined }],
-    ["a verdict without needs_review", { classification: `{"reasons": []}` }],
-    ["a needs_review that isn't true or false", { classification: `{"needs_review": "yes"}` }],
-    ["a missing classification file", { classification: undefined }],
-  ])("refuses %s", (_, files: { findings?: string; classification?: string }) => {
+    ["an unknown verdict", { classified: "merge" }],
+    ["a negative count of Nits", { nits: -1 }],
+  ])("refuses %s", (_, judged) => {
     const repo = newRepo();
     stage(repo, "src/app/page.tsx", "export default function Page() {}\n");
-    const dir = tempDir();
-    const records: { findings?: string; classification?: string } = {};
-    for (const name of ["findings", "classification"] as const) {
-      if (!(name in files)) continue;
-      records[name] = join(dir, `${name}.json`);
-      const text = files[name];
-      if (text !== undefined) writeFileSync(records[name], text);
-    }
 
-    expect(() => evaluate(repo, plain, records)).toThrow();
+    expect(() => evaluate(repo, plain, judged as never)).toThrow();
   });
 
   it.each([
@@ -182,7 +165,7 @@ describe("judging a staged change", () => {
     stage(repo, path, "changed\n");
 
     const got = evaluate(repo, { reviewPaths: ["docs/SPEC.md", ".github/"], maxChangedLines: 400 });
-    expect(got.review, got.reasons.join("; ")).toBe(review);
+    expect(got.verdict, got.reasons.join("; ")).toBe(review ? "ask" : "ship");
     if (review) expect(got.reasons).toContain(`\`${path}\` is a path that always needs review.`);
   });
 
@@ -194,7 +177,7 @@ describe("judging a staged change", () => {
       commit(repo);
       git(repo, "rm", "-q", "--", path);
 
-      expectVerdict(evaluate(repo, plain), true, `\`${path}\` deletes a test file.`);
+      expectVerdict(evaluate(repo, plain), "ask", `\`${path}\` deletes a test file.`);
     },
   );
 
@@ -209,7 +192,7 @@ describe("judging a staged change", () => {
     commit(repo);
     stage(repo, "test/thing.test.ts", after);
 
-    expectVerdict(evaluate(repo, plain), true, "`test/thing.test.ts` removes a test.");
+    expectVerdict(evaluate(repo, plain), "ask", "`test/thing.test.ts` removes a test.");
   });
 
   it("lets a change add a test without review", () => {
@@ -218,7 +201,7 @@ describe("judging a staged change", () => {
     commit(repo);
     stage(repo, "test/thing.test.ts", "it(\"stays\", () => {});\nit(\"arrives\", () => {});\n");
 
-    expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
+    expectVerdict(evaluate(repo, plain), "ship", "No review rule matched this change.");
   });
 
   it("counts both added and removed lines against the limit", () => {
@@ -227,7 +210,7 @@ describe("judging a staged change", () => {
     commit(repo);
     stage(repo, "large.txt", numberedLines("new", 201));
 
-    expectVerdict(evaluate(repo, plain), true, "The patch changes 402 lines, more than the limit of 400.");
+    expectVerdict(evaluate(repo, plain), "ask", "The patch changes 402 lines, more than the limit of 400.");
   });
 
   // A change's own .gitattributes can tell git a file is binary, which would hide its lines from the
@@ -237,7 +220,7 @@ describe("judging a staged change", () => {
     const repo = newRepo();
     stage(repo, path, "*.ts text\n");
 
-    expectVerdict(evaluate(repo, plain), true, `\`${path}\` sets how git reads files, so it always needs review.`);
+    expectVerdict(evaluate(repo, plain), "ask", `\`${path}\` sets how git reads files, so it always needs review.`);
   });
 
   it("counts the lines of files the change's attributes call binary", () => {
@@ -248,7 +231,7 @@ describe("judging a staged change", () => {
     stage(repo, ".gitattributes", "* -diff\n");
 
     const got = evaluate(repo, plain);
-    expect(got.review).toBe(true);
+    expect(got.verdict).toBe("ask");
     expect(got.reasons).toContain("The patch changes 403 lines, more than the limit of 400.");
   });
 
@@ -259,7 +242,7 @@ describe("judging a staged change", () => {
     stage(repo, "test/thing.test.ts", 'it("stays", () => {});\n');
     stage(repo, ".gitattributes", "*.ts binary\n");
 
-    expectVerdict(evaluate(repo, plain), true, "`test/thing.test.ts` removes a test.");
+    expectVerdict(evaluate(repo, plain), "ask", "`test/thing.test.ts` removes a test.");
   });
 
   // A file git still finds binary, by a NUL byte in it, can't be counted or read, so it needs review,
@@ -271,7 +254,7 @@ describe("judging a staged change", () => {
     stage(repo, "src/fonts/Inter.woff2", Buffer.concat([signatures.woff2, Buffer.from("glyphs")]));
 
     const got = evaluate(repo, plain);
-    expect(got.review).toBe(true);
+    expect(got.verdict).toBe("ask");
     expect(got.reasons).toEqual(["`src/server/hidden.ts` is binary, so the rule can't count or read it."]);
   });
 
@@ -279,7 +262,7 @@ describe("judging a staged change", () => {
     const repo = newRepo();
     stage(repo, `public/thing.${kind}`, Buffer.concat([signatures[kind], Buffer.from("contents")]));
 
-    expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
+    expectVerdict(evaluate(repo, plain), "ship", "No review rule matched this change.");
   });
 
   // Any binary file can be named as an image or a font, so one that doesn't start as its name says
@@ -294,7 +277,7 @@ describe("judging a staged change", () => {
 
     expectVerdict(
       evaluate(repo, plain),
-      true,
+      "ask",
       `\`${path}\` is binary, and doesn't start as its name says, so the rule can't read it.`,
     );
   });
@@ -305,7 +288,7 @@ describe("judging a staged change", () => {
     commit(repo);
     git(repo, "rm", "-q", "--", "public/logo.png");
 
-    expectVerdict(evaluate(repo, plain), false, "No review rule matched this change.");
+    expectVerdict(evaluate(repo, plain), "ship", "No review rule matched this change.");
   });
 
   // A symbolic link's target is read wherever the link is followed, so a new or changed one always
@@ -325,7 +308,7 @@ describe("judging a staged change", () => {
     symlinkSync("/proc/self/environ", join(repo, "docs-link"));
     git(repo, "add", "--", "docs-link");
 
-    expectVerdict(evaluate(repo, plain), true, "`docs-link` is a symbolic link, so it always needs review.");
+    expectVerdict(evaluate(repo, plain), "ask", "`docs-link` is a symbolic link, so it always needs review.");
   });
 
   // A path's name reaches the pull request's description, so it's shown in a code span with nothing
@@ -337,5 +320,93 @@ describe("judging a staged change", () => {
     const got = evaluate(repo, { reviewPaths: ["docs/"], maxChangedLines: 400 });
     expect(got.reasons).toEqual(["`docs/a\\u0060b\\n## Approved <!--.md` is a path that always needs review."]);
     for (const reason of got.reasons) expect(reason).not.toContain("\n");
+  });
+});
+
+// Land reads the branch's commits since main from git: the factory's own carry the app's bot as
+// author and committer, and a fix commit carries the fix line in its message.
+describe("judging the branch's commits since main", () => {
+  const factory = "awml-factory[bot]";
+  const bot = ["-c", "user.name=awml-factory[bot]", "-c", "user.email=12345+awml-factory[bot]@users.noreply.github.com"];
+
+  function branch() {
+    const repo = newRepo();
+    stage(repo, "README.md", "A registry\n");
+    commit(repo);
+    const base = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    return { repo, base };
+  }
+
+  function commitAs(repo: string, who: string[], path: string, message: string) {
+    stage(repo, path, `${message}\n`);
+    execFileSync("git", ["-C", repo, ...who, "commit", "-qm", message], { stdio: "pipe" });
+  }
+
+  function judge(repo: string, base: string, nits = 0) {
+    const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    // The rule reads the change as land stages it: the head's tree in the index, at the base.
+    git(repo, "reset", "-q", "--soft", base);
+    return evaluate(repo, plain, { classified: "ship", nits, base, head, factory });
+  }
+
+  it("ships a branch of the factory's commits alone", () => {
+    const { repo, base } = branch();
+    commitAs(repo, bot, "src/app/page.tsx", "Build #7");
+
+    expectVerdict(judge(repo, base), "ship", "No review rule matched this change.");
+  });
+
+  it("asks when a commit since main isn't the factory's", () => {
+    const { repo, base } = branch();
+    commitAs(repo, bot, "src/app/page.tsx", "Build #7");
+    commitAs(repo, [], "src/app/other.tsx", "A person's commit");
+
+    expectVerdict(judge(repo, base), "ask", "1 commit since main isn't the factory's.");
+  });
+
+  it("asks when only the author is the factory's", () => {
+    const { repo, base } = branch();
+    stage(repo, "src/app/page.tsx", "page\n");
+    execFileSync(
+      "git",
+      ["-C", repo, "commit", "-qm", "Build #7", "--author", "awml-factory[bot] <12345+awml-factory[bot]@users.noreply.github.com>"],
+      { stdio: "pipe" },
+    );
+
+    expectVerdict(judge(repo, base), "ask", "1 commit since main isn't the factory's.");
+  });
+
+  it("asks when the branch merges another", () => {
+    const { repo, base } = branch();
+    commitAs(repo, bot, "src/app/page.tsx", "Build #7");
+    git(repo, "branch", "side", base);
+    git(repo, "switch", "-q", "side");
+    commitAs(repo, bot, "src/app/side.tsx", "Side");
+    git(repo, "switch", "-q", "-");
+    execFileSync("git", ["-C", repo, ...bot, "merge", "-q", "--no-edit", "side"], { stdio: "pipe" });
+
+    expectVerdict(judge(repo, base), "ask", "The branch since main holds a merge, which the factory never makes.");
+  });
+
+  it("shows a branch that carries a fix commit", () => {
+    const { repo, base } = branch();
+    commitAs(repo, bot, "src/app/page.tsx", "Build #7");
+    commitAs(repo, bot, "src/app/page2.tsx", "Fix the review findings\n\nFactory-Fix: https://github.com/owner/repo/actions/runs/9");
+
+    expectVerdict(judge(repo, base), "show", "The branch carries 1 fix commit.");
+  });
+
+  it("refuses a head the base isn't under", () => {
+    const { repo, base } = branch();
+    commitAs(repo, bot, "src/app/page.tsx", "Build #7");
+
+    expect(() => evaluate(repo, plain, { classified: "ship", base, head: "f".repeat(40), factory })).toThrow();
+  });
+});
+
+describe("counting fix commits", () => {
+  it("counts the commits whose message carries the fix line", () => {
+    expect(countFixCommits(["Build #7", "Fix\n\nFactory-Fix: https://x/runs/1", "Factory-Fix: in the subject"])).toBe(2);
+    expect(countFixCommits(["Fix\n\nsee Factory-Fix: elsewhere"])).toBe(0);
   });
 });
