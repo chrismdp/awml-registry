@@ -406,11 +406,11 @@ jobs:
             give_up "The fixer's fix doesn't apply to the reviewed commit."
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
           # A symbolic link is read wherever it's followed, so the app never pushes one either.
-          links="$(git diff --cached --raw --no-renames | awk '$2 == "120000" { print "link"; exit }')"
-          if [ -n "$links" ] || git diff --cached --name-only --no-renames -z | grep -zqE "$guarded"; then
+          links="$(git diff --cached --raw --no-renames | awk '$2 == "120000" { found = 1 } END { if (found) print "link" }')"
+          if [ -n "$links" ] || git diff --cached --name-only --no-renames -z | grep -zE "$guarded" > /dev/null; then
             # The names are the fix's, so they're printed as JSON, where none can start a workflow
             # command.
-            git diff --cached --name-only --no-renames -z | grep -zE "$guarded" | jq -Rs 'split("\u0000") | map(select(. != ""))'
+            git diff --cached --name-only --no-renames -z | { grep -zE "$guarded" || true; } | jq -Rs 'split("\u0000") | map(select(. != ""))'
             {
               echo "**The fixer's fix changes files the app never pushes, so it didn't push it.** The app holds back:"
               echo

@@ -110,7 +110,7 @@ jobs:
             # Every commit's files, not the net change: each commit is installed as the rebase replays
             # it, so one that adds a dependency and a later one that takes it out still count.
             if git "${safe[@]}" log --no-renames --name-only -z --format= "$(git merge-base "$MAIN_SHA" "$head_sha")..$head_sha" |
-              grep -zqE "$guarded"; then
+              grep -zE "$guarded" > /dev/null; then
               pulls="$(jq -c --argjson number "$number" --arg branch "$branch" --arg head_sha "$head_sha" \
                 '. + [{number: $number, branch: $branch, head_sha: $head_sha, clean: false, guarded: true}]' <<< "$pulls")"
               continue
@@ -368,7 +368,7 @@ jobs:
               safe_git -C "$fresh" fetch -q "$bundle" "HEAD:refs/rebased" &&
               safe_git -C "$fresh" merge-base --is-ancestor "$MAIN_SHA" refs/rebased &&
               ! safe_git -C "$fresh" grep -qE '^(<<<<<<<|>>>>>>>)( |$)' refs/rebased -- &&
-              ! safe_git -C "$fresh" log --format= --name-only --no-renames -z "$MAIN_SHA..refs/rebased" | grep -zqE "$guarded"; then
+              ! safe_git -C "$fresh" log --format= --name-only --no-renames -z "$MAIN_SHA..refs/rebased" | grep -zE "$guarded" > /dev/null; then
               base="$(safe_git -C "$fresh" merge-base "$head_sha" "$MAIN_SHA")"
               comm -23 <(safe_git -C "$fresh" diff --no-ext-diff --no-textconv "$MAIN_SHA" refs/rebased | LC_ALL=C grep -a '^+' | LC_ALL=C sort -u) \
                 <(safe_git -C "$fresh" diff --no-ext-diff --no-textconv "$base" "$head_sha" | LC_ALL=C grep -a '^+' | LC_ALL=C sort -u) \
@@ -482,7 +482,7 @@ jobs:
             refuse "The rebased branch still holds conflict markers."
           fi
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
-          if git "${safe[@]}" diff --name-only --no-renames -z "$MAIN_SHA" refs/rebased | grep -zqE "$guarded"; then
+          if git "${safe[@]}" diff --name-only --no-renames -z "$MAIN_SHA" refs/rebased | grep -zE "$guarded" > /dev/null; then
             refuse "The rebased branch changes .github/, Claude Code's own files, its dependencies, an .npmrc, a .yarnrc or node_modules/, which the factory doesn't push."
           fi
           { echo "result=push"; echo "new_sha=$(git rev-parse refs/rebased)"; } >> "$GITHUB_OUTPUT"

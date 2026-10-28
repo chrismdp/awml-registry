@@ -102,7 +102,7 @@ const workflowFiles = readdirSync(join(__dirname, "../.github/workflows")).filte
   file.endsWith(".yml"),
 );
 
-// A rehearsal runs one step's script as GitHub runs it, with bash -e, in a scratch RUNNER_TEMP,
+// A rehearsal runs one step's script as GitHub runs it, with bash -eo pipefail, in a scratch RUNNER_TEMP,
 // with gh replaced by a stub that logs each call, keeps what each call sends with --input -, and
 // answers from the case arms a test gives it. Nothing reaches GitHub.
 const canRehearse = ["bash", "git", "jq"].every(
@@ -268,7 +268,7 @@ function rehearse(
   put(join(bin, "gh"), ghStub(answers));
   chmodSync(join(bin, "gh"), 0o755);
   put(join(root, "step.sh"), script);
-  const ran = spawnSync("bash", ["-e", join(root, "step.sh")], {
+  const ran = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(root, "step.sh")], {
     cwd,
     encoding: "utf8",
     env: {
@@ -794,6 +794,27 @@ describe("the factory's workflows", () => {
     expect(readFileSync(join(github, "workflows/build.yml"), "utf8")).toContain("must NOT have the workflows permission");
   });
 
+  // Under pipefail, grep -q exits at its first match, its producer dies of SIGPIPE, and the pipe
+  // fails, so a match reads as none and a guard lets the file through. Every grep that ends a pipe
+  // reads all its input.
+  it("never end a pipe in a quiet grep", () => {
+    const texts: [string, string][] = readdirSync(github)
+      .filter((name) => name.endsWith(".sh"))
+      .map((name) => [name, readFileSync(join(github, name), "utf8")]);
+    for (const [file, id, job] of everyJob()) for (const each of steps(job)) texts.push([`${file} ${id} ${each.name}`, each.run ?? ""]);
+    for (const [where, text] of texts) {
+      const joined = text.replace(/\|\s*\\?\n\s*/g, "| ");
+      expect(joined, where).not.toMatch(/\|\s*grep\s+(-[A-Za-z]+\s+)*-[A-Za-z]*q/);
+    }
+  });
+
+  it.runIf(canRehearse)("finds a match early in a long pipe, under pipefail", () => {
+    const quiet = spawnSync("bash", ["-c", 'set -o pipefail; if seq 1 2000000 | grep -q "^1$"; then echo matched; fi'], { encoding: "utf8" });
+    expect(quiet.stdout, "the quiet grep this guards against no longer fails here").toBe("");
+    const whole = spawnSync("bash", ["-c", 'set -o pipefail; if seq 1 2000000 | grep "^1$" > /dev/null; then echo matched; fi'], { encoding: "utf8" });
+    expect(whole.stdout).toBe("matched\n");
+  });
+
   it("take each artifact's digest the same way everywhere", () => {
     for (const [file, id, job] of everyJob())
       for (const each of steps(job))
@@ -1052,6 +1073,10 @@ describe("scan-tokens.sh", () => {
   it.runIf(canRehearse)("refuses anything like the login token", () => {
     expect(scan("a key: sk-ant-oat01-abc\n").failed).toBe(true);
     expect(scan(`${"a1".repeat(45)}\n`).failed).toBe(true);
+  });
+
+  it.runIf(canRehearse)("refuses a token found early in a long file", () => {
+    expect(scan(`sk-ant-oat01-abc\n${`${"a1".repeat(45)}\n`.repeat(4000)}`).failed).toBe(true);
   });
 
   it.runIf(canRehearse)("names a file it refuses without letting its name start a workflow command", () => {
@@ -1839,7 +1864,7 @@ describe("build.yml", () => {
   // The push job runs none of the change's code. A draft touching .github/ or Claude Code's own
   // files is offered in a new comment, never pushed, and the build stops.
   describe("the open job's guard", () => {
-    const guard = (path: string, contents = "changed\n", stale = false) => {
+    const guard = (path: string, contents = "changed\n", stale = false, others = 0) => {
       const root = scratch();
       const repo = join(root, "repo");
       mkdirSync(repo);
@@ -1851,6 +1876,7 @@ describe("build.yml", () => {
       git(repo, "commit", "-qm", "main");
       if (contents.startsWith("->")) symlinkSync(contents.slice(2), join(repo, path));
       else put(join(repo, path), contents);
+      for (let n = 0; n < others; n++) put(join(repo, `src/generated/a-rather-long-file-name-${n}.ts`), "x\n");
       git(repo, "add", "-A");
       put(join(root, "runner/change/change.patch"), git(repo, "diff", "--cached", "--binary") + "\n");
       git(repo, "reset", "-q", "--hard");
@@ -1867,6 +1893,13 @@ describe("build.yml", () => {
       });
       return run;
     };
+
+    // git lists .github/ first, and well over a pipe's buffer of names after it.
+    it.runIf(canRehearse)("offers a change to .github/ among thousands of other files", () => {
+      const run = guard(".github/workflows/ci.yml", "changed\n", false, 4000);
+      expect(run.failed, run.printed).toBe(false);
+      expect(run.outputs.result).toBe("offer");
+    });
 
     it.runIf(canRehearse)("pushes a change to the registry's own code", () => {
       const run = guard("src/app/page.tsx");
