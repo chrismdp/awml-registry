@@ -678,7 +678,7 @@ describe("the factory's workflows", () => {
           const where = `${file} ${id} "${each.name}"`;
           if (/\bsafe_git\b/.test(line)) {
             expect(runOf(each), where).toContain(
-              'safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }',
+              'safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }',
             );
             if (/ diff /.test(line)) expect(line, where).toContain("--no-ext-diff --no-textconv");
             continue;
@@ -887,6 +887,12 @@ describe("the factory's workflows", () => {
       expect(text.indexOf("cmp -s"), `${file} ${id}`).toBeLessThan(text.search(/(^|\s)git\s/m));
       expect(firstGit?.env?.GIT_CONFIG_GLOBAL, `${file} ${id}`).toBe("/dev/null");
       expect(firstGit?.env?.GIT_CONFIG_NOSYSTEM, `${file} ${id}`).toBe("1");
+      // A session can write .git, so replace refs and grafts, which would change what git reads,
+      // count for nothing: replace refs are ignored, and a grafts file is refused.
+      expect(firstGit?.env?.GIT_NO_REPLACE_OBJECTS, `${file} ${id}`).toBe("1");
+      const commands = text.split("\n").filter((line) => !/^\s*echo /.test(line)).join("\n");
+      expect(commands.indexOf(".git/info/grafts"), `${file} ${id}`).toBeGreaterThan(-1);
+      expect(commands.indexOf(".git/info/grafts"), `${file} ${id}`).toBeLessThan(commands.search(/(^|\s)git\s/m));
       expect(firstGit ? runOf(firstGit) : "", `${file} ${id}`).toContain(
         'stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$HOST_DIR/baseline/workspace"',
       );
@@ -2377,13 +2383,38 @@ ${permissionStub}`,
       put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
       put(join(root, "runner/sessions/build/out/message.md"), "Change it\n");
       spoil(repo, root);
-      return { root, run: rehearse(stepWithId(jobs.draft, "patch").run ?? "", { root, cwd: repo, env: { GITHUB_WORKSPACE: repo } }) };
+      const step = stepWithId(jobs.draft, "patch");
+      return { root, run: rehearse(step.run ?? "", { root, cwd: repo, env: { ...step.env, GITHUB_WORKSPACE: repo } }) };
     };
 
     it.runIf(canRehearse)("makes the patch from an untouched workspace", () => {
       const { root, run } = patch(() => {});
       expect(run.failed, run.printed).toBe(false);
       expect(left(root, "change/change.patch")).toContain("+Changed");
+    });
+
+    // A session can write .git, so it could make a replace ref that swaps main's commit for one of
+    // its own, and the patch would be taken against that: replace refs are ignored.
+    it.runIf(canRehearse)("makes the patch against the real commit, whatever replace refs the session left", () => {
+      const { root, run } = patch((repo) => {
+        const head = git(repo, "rev-parse", "HEAD");
+        const blob = execFileSync("git", ["-C", repo, "hash-object", "-w", "--stdin"], { input: "Evil\n", encoding: "utf8" }).trim();
+        const tree = execFileSync("git", ["-C", repo, "mktree"], { input: `100644 blob ${blob}\tREADME.md\n`, encoding: "utf8" }).trim();
+        const fake = git(repo, "commit-tree", tree, "-m", "fake");
+        git(repo, "update-ref", `refs/replace/${head}`, fake);
+        expect(git(repo, "show", "HEAD:README.md"), "the replace ref takes effect").toBe("Evil");
+      });
+      expect(run.failed, run.printed).toBe(false);
+      const made = left(root, "change/change.patch");
+      expect(made).toContain("-A registry");
+      expect(made).toContain("+Changed");
+      expect(made).not.toContain("Evil");
+    });
+
+    it.runIf(canRehearse)("refuses a workspace with a grafts file", () => {
+      const { root, run } = patch((repo) => put(join(repo, ".git/info/grafts"), `${git(repo, "rev-parse", "HEAD")}\n`));
+      expect(run.failed).toBe(true);
+      expect(existsSync(join(root, "runner/change/change.patch"))).toBe(false);
     });
 
     it.runIf(canRehearse)("refuses a workspace whose .git was replaced", () => {
@@ -3743,7 +3774,7 @@ ${permissionStub}
       const resume = stepWithId(jobs.draft, `continue${round}`);
       expect(resume.run).toBe(`bash "$HOST_DIR/main/resolve-continue.sh"\n`);
       expect(resume.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
-      expect(resume.env).toMatchObject({ GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+      expect(resume.env).toMatchObject({ GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_NO_REPLACE_OBJECTS: "1" });
     }
     for (const id of ["prepare", "check"]) expect(stepWithId(jobs.draft, id).env?.CLAUDE_CODE_OAUTH_TOKEN, id).toBeUndefined();
     expect(jobs.draft.outputs?.digest).toBe("${{ steps.check.outputs.digest }}");
@@ -3897,6 +3928,7 @@ ${permissionStub}
     });
 
     it.runIf(canRehearse).each([
+      ["with a grafts file", (clone: string) => put(join(clone, ".git/info/grafts"), `${git(clone, "rev-parse", "HEAD")}\n`)],
       ["whose git config the session changed", (clone: string) =>
         writeFileSync(join(clone, ".git/config"), readFileSync(join(clone, ".git/config"), "utf8") + "[diff]\n\texternal = touch /tmp/owned\n")],
       ["whose .git was replaced", (clone: string, root: string) => {
@@ -4032,6 +4064,7 @@ ${permissionStub}
       ["a rebase given up on", (root: string) => put(join(root, "runner/baseline/gave-up-5"), "")],
       ["a clone whose git config changed", (root: string) =>
         writeFileSync(join(root, "runner/pr/5/work/.git/config"), "[diff]\n\texternal = touch /tmp/owned\n")],
+      ["a clone with a grafts file", (root: string) => put(join(root, "runner/pr/5/work/.git/info/grafts"), "")],
       ["a repository nested in the clone", (root: string) => git(join(root, "runner/pr/5/work"), "init", "-q", "src/inner")],
       ["a repository nested in the clone's node_modules", (root: string) =>
         git(join(root, "runner/pr/5/work"), "init", "-q", "node_modules/left-pad")],
@@ -4039,6 +4072,14 @@ ${permissionStub}
       const { root, run } = rebased(() => {}, spoil);
       expect(run.failed, run.printed).toBe(false);
       expect(existsSync(join(root, "runner/resolved/5.bundle"))).toBe(false);
+    });
+
+    it.runIf(canRehearse)("stops when the workspace has a grafts file", () => {
+      const { run } = rebased(
+        () => {},
+        (_, ws) => put(join(ws, ".git/info/grafts"), ""),
+      );
+      expect(run.failed).toBe(true);
     });
 
     it.runIf(canRehearse)("stops when the workspace or its .git was replaced", () => {

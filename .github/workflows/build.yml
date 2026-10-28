@@ -412,6 +412,7 @@ jobs:
         env:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$HOST_DIR/baseline/workspace"; then
             echo "The workspace or its .git isn't the one the session started in, so no git runs on it."
@@ -419,6 +420,12 @@ jobs:
           fi
           if ! cmp -s .git/config "$HOST_DIR/baseline/git-config"; then
             echo "Git's config changed during the session, so no git runs on the tree."
+            exit 1
+          fi
+          # A session can write .git: replace refs are ignored, by GIT_NO_REPLACE_OBJECTS, and a
+          # grafts file, which would change the commits git reads, is refused.
+          if [ -e .git/info/grafts ] || [ -L .git/info/grafts ]; then
+            echo "The session left a grafts file in .git, so no git runs on the tree."
             exit 1
           fi
           # node_modules counts too: a session may write there, apart from its .bin.

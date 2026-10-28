@@ -142,7 +142,7 @@ jobs:
           failed="$(jq -r '[.[] | select((.name | IN("Bug review", "Security review")) and .conclusion == "failure") | .name] | unique | join(" and ")' "$RUNNER_TEMP/jobs.json")"
           # The branch's commits and files since main, read with git: GitHub's compare lists at most
           # 300 files. Git runs here on data alone, with hooks, fsmonitor and global config off.
-          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
           GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
             safe_git fetch -q --no-tags origin "$HEAD_SHA"
@@ -342,6 +342,7 @@ jobs:
         env:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$HOST_DIR/baseline/workspace"; then
             echo "The workspace or its .git isn't the one the session started in, so no git runs on it."
@@ -349,6 +350,12 @@ jobs:
           fi
           if ! cmp -s .git/config "$HOST_DIR/baseline/git-config"; then
             echo "Git's config changed during the session, so no git runs on the tree."
+            exit 1
+          fi
+          # A session can write .git: replace refs are ignored, by GIT_NO_REPLACE_OBJECTS, and a
+          # grafts file, which would change the commits git reads, is refused.
+          if [ -e .git/info/grafts ] || [ -L .git/info/grafts ]; then
+            echo "The session left a grafts file in .git, so no git runs on the tree."
             exit 1
           fi
           # node_modules counts too: a session may write there, apart from its .bin.

@@ -248,7 +248,7 @@ jobs:
           id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
           case "$id" in ''|*[!0-9]*) echo "The app's bot has no id: $id"; exit 1 ;; esac
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
           : > "$HOST_DIR/pulls.tsv"
           while IFS=$'\t' read -r number head_sha; do
             case "$number" in ''|*[!0-9]*) continue ;; esac
@@ -321,6 +321,7 @@ jobs:
         env:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           bash "$HOST_DIR/main/resolve-continue.sh"
 
@@ -337,6 +338,7 @@ jobs:
         env:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           bash "$HOST_DIR/main/resolve-continue.sh"
 
@@ -353,6 +355,7 @@ jobs:
         env:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           bash "$HOST_DIR/main/resolve-continue.sh"
 
@@ -373,11 +376,12 @@ jobs:
           MAIN_SHA: ${{ github.sha }}
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
           trap 'echo "::$stop::"' EXIT
-          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
           if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$HOST_DIR/baseline/workspace"; then
             echo "The workspace or its .git isn't the one the sessions started beside, so nothing is read from it."
             exit 1
@@ -387,6 +391,12 @@ jobs:
           # from it, by their ids, never a branch a session could have moved.
           if ! cmp -s "$GITHUB_WORKSPACE/.git/config" "$HOST_DIR/baseline/workspace-git-config"; then
             echo "The workspace's git config changed during the sessions, so nothing is read from it."
+            exit 1
+          fi
+          # Replace refs are ignored, by GIT_NO_REPLACE_OBJECTS, and a grafts file, which would
+          # change the commits git reads, is refused, in the workspace and in each clone.
+          if [ -e "$GITHUB_WORKSPACE/.git/info/grafts" ] || [ -L "$GITHUB_WORKSPACE/.git/info/grafts" ]; then
+            echo "A session left a grafts file in the workspace's .git, so nothing is read from it."
             exit 1
           fi
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$|^vendor/awml/'
@@ -413,6 +423,8 @@ jobs:
               echo "The rebase of #$number still conflicted after three rounds."
             elif ! cmp -s "$work/.git/config" "$HOST_DIR/baseline/git-config-$number"; then
               echo "The clone of #$number has a changed git config, so no git runs there."
+            elif [ -e "$work/.git/info/grafts" ] || [ -L "$work/.git/info/grafts" ]; then
+              echo "The clone of #$number holds a grafts file, so no git runs there."
             elif [ -n "$(find "$work" -mindepth 2 -name .git -print -quit)" ]; then
               echo "The clone of #$number holds a nested repository, so no git runs there."
             else

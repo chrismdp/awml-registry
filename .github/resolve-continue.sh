@@ -12,7 +12,7 @@
 #   resolve-continue.sh
 set -euo pipefail
 
-safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
 baseline="$HOST_DIR/baseline"
 while IFS=$'\t' read -r number _; do
   case "$number" in ''|*[!0-9]*) continue ;; esac
@@ -27,6 +27,12 @@ while IFS=$'\t' read -r number _; do
   fi
   if ! cmp -s "$work/.git/config" "$baseline/git-config-$number"; then
     give_up "The session on #$number changed its clone's git config, so no git runs there."
+    continue
+  fi
+  # Replace refs are ignored, by GIT_NO_REPLACE_OBJECTS in safe_git, and a grafts file, which would
+  # change the commits git reads, is refused.
+  if [ -e "$work/.git/info/grafts" ] || [ -L "$work/.git/info/grafts" ]; then
+    give_up "The session on #$number left a grafts file in its clone's .git, so no git runs there."
     continue
   fi
   # node_modules counts too: a session may write there, apart from its .bin.
