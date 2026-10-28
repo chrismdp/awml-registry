@@ -689,6 +689,31 @@ describe("the factory's workflows", () => {
     }
   });
 
+  // The protected paths each tree holds are recorded before its first session, and the placeholders
+  // Claude Code leaves at the rest are taken away before host git reads the tree after it.
+  it("take away Claude Code's placeholders before host git reads a session's tree", () => {
+    const record = (tree: string, list: string) => `placeholders.sh" record ${tree} "$HOST_DIR/baseline/${list}"`;
+    const clear = (tree: string, list: string) => `placeholders.sh" clear ${tree} "$HOST_DIR/baseline/${list}"`;
+    for (const file of ["build.yml", "fix.yml"]) {
+      const job = Object.values(readJobs(file)).find(holdsClaude);
+      const all = steps(job);
+      const first = all.findIndex((each) => /\bclaude -p\b/.test(runOf(each)));
+      expect(all.slice(0, first).map(runOf).join("\n"), file).toContain(record(".", "protected"));
+      const patchStep = (stepWithId(job, "patch").run ?? "").split("\n").filter((line) => !/^\s*(#|echo )/.test(line)).join("\n");
+      const cleared = patchStep.indexOf(clear(".", "protected"));
+      expect(cleared, file).toBeGreaterThan(patchStep.indexOf("$HOST_DIR/baseline/workspace"));
+      expect(cleared, file).toBeLessThan(patchStep.search(/(^|\s)git\s/m));
+    }
+    const resolve = readJobs("resolve.yml");
+    const prepare = stepWithId(resolve.draft, "prepare").run ?? "";
+    expect(prepare).toContain(record('"$root/work"', "protected-$number"));
+    expect(prepare).toContain(record('"$GITHUB_WORKSPACE"', "protected-workspace"));
+    const resume = readFileSync(join(github, "resolve-continue.sh"), "utf8");
+    expect(resume.indexOf(clear('"$work"', "protected-$number").replace("$HOST_DIR/baseline", "$baseline"))).toBeLessThan(resume.indexOf("safe_git -C"));
+    expect(resume).toContain(clear('"$work"', "protected-$number").replace("$HOST_DIR/baseline", "$baseline"));
+    expect(stepWithId(resolve.draft, "check").run).toContain(clear('"$GITHUB_WORKSPACE"', "protected-workspace"));
+  });
+
   // Everything a session wrote is scanned for a token by main's scan-tokens.sh before it's
   // uploaded, pushed or posted.
   it("scan what a session wrote before any upload", () => {
@@ -2381,6 +2406,8 @@ ${permissionStub}`,
       put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", repo, join(repo, ".git")], { encoding: "utf8" }));
       put(join(repo, "README.md"), "Changed\n");
       put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
+      put(join(root, "runner/main/placeholders.sh"), readFileSync(join(github, "placeholders.sh"), "utf8"));
+      execFileSync("bash", [join(github, "placeholders.sh"), "record", repo, join(root, "runner/baseline/protected")]);
       put(join(root, "runner/sessions/build/out/message.md"), "Change it\n");
       spoil(repo, root);
       const step = stepWithId(jobs.draft, "patch");
@@ -2409,6 +2436,32 @@ ${permissionStub}`,
       expect(made).toContain("-A registry");
       expect(made).toContain("+Changed");
       expect(made).not.toContain("Evil");
+    });
+
+    // Claude Code leaves an empty placeholder at each protected path that wasn't there, which would
+    // otherwise reach the patch; anything else at one is refused.
+    it.runIf(canRehearse)("makes a clean patch when the session left Claude Code's placeholders", () => {
+      const { root, run } = patch((repo) => {
+        for (const file of [".npmrc", ".yarnrc", "yarn.lock", ".env", ".git/config.lock", ".git/config.worktree"]) put(join(repo, file), "");
+        mkdirSync(join(repo, ".claude/commands"), { recursive: true });
+        writeFileSync(join(repo, ".git/commondir"), ".");
+        // A command's own file, beside them, still counts.
+        put(join(repo, "src/new.ts"), "export {};\n");
+      });
+      expect(run.failed, run.printed).toBe(false);
+      const made = left(root, "change/change.patch");
+      expect(made).toContain("+Changed");
+      expect(made).toContain("src/new.ts");
+      for (const name of [".npmrc", ".yarnrc", "yarn.lock", ".env", ".claude"]) expect(made, name).not.toContain(name);
+    });
+
+    it.runIf(canRehearse).each([
+      ["something in it", (repo: string) => put(join(repo, ".npmrc"), "registry=https://example.com/\n")],
+      ["a link", (repo: string) => symlinkSync("/proc/self/environ", join(repo, ".npmrc"))],
+    ])("refuses a protected path the session left with %s", (_, spoil) => {
+      const { root, run } = patch(spoil);
+      expect(run.failed).toBe(true);
+      expect(existsSync(join(root, "runner/change/change.patch"))).toBe(false);
     });
 
     it.runIf(canRehearse)("refuses a workspace with a grafts file", () => {
@@ -3899,6 +3952,8 @@ ${permissionStub}
       put(join(root, "runner/conflicted-5.txt"), "a.txt\n");
       put(join(root, "runner/baseline/git-config-5"), readFileSync(join(clone, ".git/config"), "utf8"));
       put(join(root, "runner/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", clone, join(clone, ".git")], { encoding: "utf8" }));
+      put(join(root, "runner/main/placeholders.sh"), readFileSync(join(github, "placeholders.sh"), "utf8"));
+      execFileSync("bash", [join(github, "placeholders.sh"), "record", clone, join(root, "runner/baseline/protected-5")]);
       return { root, clone };
     };
     const resume = (root: string) =>
@@ -3919,6 +3974,26 @@ ${permissionStub}
       expect(resume(root).failed).toBe(false);
       expect(existsSync(join(clone, ".git/rebase-merge"))).toBe(false);
       expect(gaveUp(root)).toBe(false);
+    });
+
+    it.runIf(canRehearse)("takes away Claude Code's placeholders and continues", () => {
+      const { root, clone } = midRebase();
+      put(join(clone, "a.txt"), "both\n");
+      for (const file of [".npmrc", ".env", ".git/config.lock"]) put(join(clone, file), "");
+      mkdirSync(join(clone, ".claude/agents"), { recursive: true });
+      const run = resume(root);
+      expect(run.failed, run.printed).toBe(false);
+      expect(gaveUp(root), run.printed).toBe(false);
+      expect(existsSync(join(clone, ".npmrc"))).toBe(false);
+      expect(git(clone, "show", "--name-only", "--format=", "HEAD")).toBe("a.txt");
+    });
+
+    it.runIf(canRehearse)("gives up on a clone with something other than a placeholder at a protected path", () => {
+      const { root, clone } = midRebase();
+      put(join(clone, "a.txt"), "both\n");
+      put(join(clone, ".npmrc"), "registry=https://example.com/\n");
+      expect(resume(root).failed).toBe(false);
+      expect(gaveUp(root)).toBe(true);
     });
 
     it.runIf(canRehearse)("gives up on a clone whose conflicts still hold markers", () => {
@@ -3980,6 +4055,8 @@ ${permissionStub}
       put(join(root, "runner/pulls.tsv"), `5\t${head}\n`);
       put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", ws, join(ws, ".git")], { encoding: "utf8" }));
       put(join(root, "runner/baseline/workspace-git-config"), readFileSync(join(ws, ".git/config"), "utf8"));
+      put(join(root, "runner/main/placeholders.sh"), readFileSync(join(github, "placeholders.sh"), "utf8"));
+      execFileSync("bash", [join(github, "placeholders.sh"), "record", ws, join(root, "runner/baseline/protected-workspace")]);
       put(join(root, "runner/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", work, join(work, ".git")], { encoding: "utf8" }));
       put(join(root, "runner/main/scan-tokens.sh"), readFileSync(join(github, "scan-tokens.sh"), "utf8"));
       put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
@@ -4072,6 +4149,26 @@ ${permissionStub}
       const { root, run } = rebased(() => {}, spoil);
       expect(run.failed, run.printed).toBe(false);
       expect(existsSync(join(root, "runner/resolved/5.bundle"))).toBe(false);
+    });
+
+    it.runIf(canRehearse)("takes away the placeholders the sessions left in the workspace", () => {
+      const { root, run } = rebased(
+        () => {},
+        (_, ws) => {
+          for (const file of [".npmrc", ".git/config.lock", ".git/config.worktree"]) put(join(ws, file), "");
+          writeFileSync(join(ws, ".git/commondir"), ".");
+        },
+      );
+      expect(run.failed, run.printed).toBe(false);
+      expect(existsSync(join(root, "runner/resolved/5.bundle"))).toBe(true);
+    });
+
+    it.runIf(canRehearse)("stops when the workspace holds something other than a placeholder at a protected path", () => {
+      const { run } = rebased(
+        () => {},
+        (_, ws) => put(join(ws, ".npmrc"), "registry=https://example.com/\n"),
+      );
+      expect(run.failed).toBe(true);
     });
 
     it.runIf(canRehearse)("stops when the workspace has a grafts file", () => {
@@ -4509,5 +4606,84 @@ describe("ci.yml with main's copies of its scripts", () => {
       expect(verdict.failed, verdict.printed).toBe(false);
       expect(verdict.printed).toContain("::notice title=Verdict%3A show::It changes a page.");
     }
+  });
+});
+
+// Under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, Claude Code makes a placeholder at each path it protects,
+// in the folder a session starts in and in the workspace, that isn't there yet, for its sandbox to
+// mount over: an empty file, an empty folder, or .git/commondir holding ".". They're left in the
+// real tree, so each is taken away before host git reads it, and anything else at those paths is
+// refused.
+describe("placeholders.sh", () => {
+  // What Claude Code 2.1.312 left in a fresh repository, with bwrap's own mount points for the
+  // locks beside it.
+  const leaveStubs = (tree: string) => {
+    for (const file of [
+      ".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml", ".gitmodules", "yarn.lock", "pnpm-lock.yaml",
+      ".env", ".env.local", ".env.development", ".env.development.local", ".env.test", ".env.test.local",
+      ".env.production", ".env.production.local", ".git/config.worktree", ".git/config.lock", ".git/config.worktree.lock",
+    ])
+      put(join(tree, file), "");
+    for (const dir of [".claude/agents", ".claude/commands", "node_modules/.bin", ".git/modules", ".git/worktrees", ".git/glab-cli"])
+      mkdirSync(join(tree, dir), { recursive: true });
+    writeFileSync(join(tree, ".git/commondir"), ".");
+  };
+  const tree = () => {
+    const root = scratch();
+    const repo = join(root, "work");
+    mkdirSync(repo);
+    git(repo, "init", "-q");
+    put(join(repo, "package.json"), "{}\n");
+    put(join(repo, "README.md"), "A registry\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-qm", "main");
+    return { root, repo };
+  };
+  const listing = (dir: string) => spawnSync("find", [dir, "-path", join(dir, ".git/objects"), "-prune", "-o", "-print"], { encoding: "utf8" }).stdout.split("\n").sort();
+  const record = (root: string, repo: string) => rehearse(script("placeholders.sh", ["record", repo, join(root, "protected")]), { root });
+  const clear = (root: string, repo: string) => rehearse(script("placeholders.sh", ["clear", repo, join(root, "protected")]), { root });
+
+  it.runIf(canRehearse)("takes away every placeholder that appeared, and leaves the tree as it was", () => {
+    const { root, repo } = tree();
+    expect(record(root, repo).failed).toBe(false);
+    const before = listing(repo);
+    leaveStubs(repo);
+    const run = clear(root, repo);
+    expect(run.failed, run.printed).toBe(false);
+    expect(listing(repo)).toEqual(before);
+    expect(git(repo, "status", "--porcelain", "--ignored")).toBe("");
+  });
+
+  it.runIf(canRehearse)("leaves a protected path that was there before alone, empty or not", () => {
+    const { root, repo } = tree();
+    put(join(repo, ".npmrc"), "");
+    mkdirSync(join(repo, ".claude/commands"), { recursive: true });
+    put(join(repo, ".claude/commands/x.md"), "A command\n");
+    record(root, repo);
+    leaveStubs(repo);
+    expect(clear(root, repo).failed).toBe(false);
+    expect(existsSync(join(repo, ".npmrc"))).toBe(true);
+    expect(existsSync(join(repo, ".claude/commands/x.md"))).toBe(true);
+  });
+
+  it.runIf(canRehearse).each([
+    ["a file with something in it", (repo: string) => writeFileSync(join(repo, ".npmrc"), "registry=https://example.com/\n")],
+    ["a link", (repo: string) => {
+      rmSync(join(repo, ".npmrc"));
+      symlinkSync("/proc/self/environ", join(repo, ".npmrc"));
+    }],
+    ["a folder with something in it", (repo: string) => put(join(repo, ".claude/commands/x.md"), "A command\n")],
+    ["a commondir that names another folder", (repo: string) => writeFileSync(join(repo, ".git/commondir"), "../other")],
+    ["a fifo", (repo: string) => {
+      rmSync(join(repo, ".gitmodules"));
+      execFileSync("mkfifo", [join(repo, ".gitmodules")]);
+    }],
+  ])("refuses %s where a placeholder would be", (_, spoil) => {
+    const { root, repo } = tree();
+    record(root, repo);
+    leaveStubs(repo);
+    spoil(repo);
+    const run = clear(root, repo);
+    expect(run.failed).toBe(true);
   });
 });

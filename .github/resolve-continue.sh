@@ -25,6 +25,12 @@ while IFS=$'\t' read -r number _; do
     give_up "The clone of #$number or its .git isn't the one its session started in, so no git runs there."
     continue
   fi
+  # Claude Code leaves an empty placeholder at each path it protects that wasn't there; each goes,
+  # and anything else at one is refused.
+  if ! bash "$HOST_DIR/main/placeholders.sh" clear "$work" "$baseline/protected-$number"; then
+    give_up "The session on #$number left something other than a placeholder at a path Claude Code protects, so no git runs there."
+    continue
+  fi
   if ! cmp -s "$work/.git/config" "$baseline/git-config-$number"; then
     give_up "The session on #$number changed its clone's git config, so no git runs there."
     continue

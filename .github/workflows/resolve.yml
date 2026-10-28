@@ -244,7 +244,7 @@ jobs:
           echo "::stop-commands::$stop"
           trap 'echo "::$stop::"' EXIT
           mkdir -p "$HOST_DIR/main" "$HOST_DIR/baseline" "$HOST_DIR/check" "$HOST_DIR/resolved"
-          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh .github/check-out.sh AGENTS.md "$HOST_DIR/main/"
+          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh AGENTS.md "$HOST_DIR/main/"
           id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
           case "$id" in ''|*[!0-9]*) echo "The app's bot has no id: $id"; exit 1 ;; esac
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
@@ -281,9 +281,13 @@ jobs:
             chmod -R a-w "$root/in"
             cp "$root/work/.git/config" "$HOST_DIR/baseline/git-config-$number"
             stat -c %d:%i "$root/work" "$root/work/.git" > "$HOST_DIR/baseline/clone-$number"
+            bash "$HOST_DIR/main/placeholders.sh" record "$root/work" "$HOST_DIR/baseline/protected-$number"
             printf '%s\t%s\n' "$number" "$head_sha" >> "$HOST_DIR/pulls.tsv"
           done < <(jq -r '.[] | select(.clean == false and .guarded == false) | [.number, .head_sha] | @tsv' <<< "$PULLS")
           stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$HOST_DIR/baseline/workspace"
+          # Which of the paths Claude Code protects each clone and the workspace hold, so the
+          # placeholders it leaves at the rest can be taken away after the sessions.
+          bash "$HOST_DIR/main/placeholders.sh" record "$GITHUB_WORKSPACE" "$HOST_DIR/baseline/protected-workspace"
           cp "$GITHUB_WORKSPACE/.git/config" "$HOST_DIR/baseline/workspace-git-config"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
@@ -386,6 +390,8 @@ jobs:
             echo "The workspace or its .git isn't the one the sessions started beside, so nothing is read from it."
             exit 1
           fi
+          # Every session leaves Claude Code's placeholders in the workspace too.
+          bash "$HOST_DIR/main/placeholders.sh" clear "$GITHUB_WORKSPACE" "$HOST_DIR/baseline/protected-workspace"
           # No session is denied the workspace, whose .git holds the scrub's own mount points, so its
           # config, which git's fetch from it reads, must be as it was, and only commits are taken
           # from it, by their ids, never a branch a session could have moved.

@@ -200,7 +200,7 @@ jobs:
       - name: Copy main's prompt, scripts, AGENTS.md and REVIEW.md out
         run: |
           mkdir -p "$HOST_DIR/main" "$RUNNER_TEMP/input"
-          cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh "$HOST_DIR/main/"
+          cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh "$HOST_DIR/main/"
           # Main's engine build script and pin, for the engine every session needs, built below.
           mkdir -p "$HOST_DIR/engine/scripts" "$HOST_DIR/engine/vendor/awml"
           cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"
@@ -327,6 +327,9 @@ jobs:
           mkdir -p "$HOST_DIR/baseline"
           cp .git/config "$HOST_DIR/baseline/git-config"
           stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$HOST_DIR/baseline/workspace"
+          # Which of the paths Claude Code protects the tree holds, so the placeholders it leaves at
+          # the rest can be taken away after the session.
+          bash "$HOST_DIR/main/placeholders.sh" record . "$HOST_DIR/baseline/protected"
 
       # A session that checks or draws a workflow needs the AWML engine, which npm ci --ignore-scripts
       # doesn't build. Main's copy of the build script builds it from main's pin, outside the sandbox
@@ -418,6 +421,9 @@ jobs:
             echo "The workspace or its .git isn't the one the session started in, so no git runs on it."
             exit 1
           fi
+          # Claude Code leaves an empty placeholder at each path it protects that wasn't there; each
+          # goes, and anything else at one is refused.
+          bash "$HOST_DIR/main/placeholders.sh" clear . "$HOST_DIR/baseline/protected"
           if ! cmp -s .git/config "$HOST_DIR/baseline/git-config"; then
             echo "Git's config changed during the session, so no git runs on the tree."
             exit 1
