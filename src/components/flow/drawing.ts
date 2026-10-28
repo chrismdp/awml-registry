@@ -214,6 +214,31 @@ export function depths(g: Graph) {
   return depth;
 }
 
+// What is connected to a part: the part itself, every line with it at either
+// end, the part at each line's other end, and the notes tied to it.
+export type Connected = { parts: Set<string>; lines: Set<string>; notes: Set<string> };
+
+// What is connected to each part, and to each box that holds nothing, such as
+// a workflow's box on a system's map, which is drawn as a part is. A scope
+// drawn round what it holds has none. Each line and note is looked at once,
+// so it takes no longer than the drawing is big.
+export function connections(d: Pick<Drawing, "parts" | "scopes" | "lines" | "notes">): Map<string, Connected> {
+  const of = new Map<string, Connected>();
+  for (const { id } of [...d.parts, ...d.scopes.filter((s) => !s.holds)]) of.set(id, { parts: new Set([id]), lines: new Set(), notes: new Set() });
+  for (const line of d.lines) {
+    for (const [end, other] of [
+      [line.from, line.to],
+      [line.to, line.from],
+    ]) {
+      const c = of.get(end);
+      c?.lines.add(line.id);
+      c?.parts.add(other);
+    }
+  }
+  for (const note of d.notes) if (note.on) of.get(note.on)?.notes.add(note.id);
+  return of;
+}
+
 // A square route from box `s` to box `t`, as the server's routes are (#67):
 // out of the side of `s` that faces `t`, across halfway between them, and into
 // `t`, with its label halfway along. Boxes far enough across from each other

@@ -111,6 +111,18 @@
 .flow-line-label text { fill: var(--ink-soft); }
 .flow-line-label.dotted text { fill: var(--ink-faint); }
 
+/* Once React Flow draws it, the part the pointer is over, or the keyboard is
+   on, is lit with what is connected to it: every line with it at either end,
+   their labels, the part at each line's other end, and the notes tied to it,
+   wherever their icons are. Every other part, line, label and note is knocked
+   back, keeping its own colours, so an untrusted line stays orange, green or
+   red (#83). A scope stays as it is. */
+.flow-canvas :is(.flow-part, .flow-scope, .flow-note-mark, .flow-edge, .flow-label-svg) { transition: opacity 0.15s ease-out; }
+.react-flow.flow-lit .react-flow__node:not(.lit) :is(.flow-part, .flow-scope:not(.hull)),
+.react-flow.flow-lit .react-flow__node:not(.lit, .lit-note) .flow-note-mark,
+.react-flow.flow-lit :is(.flow-edge, .flow-label-svg):not(.lit) { opacity: 0.25; }
+@media (prefers-reduced-motion: reduce) { .flow-canvas :is(.flow-part, .flow-scope, .flow-note-mark, .flow-edge, .flow-label-svg) { transition: none; } }
+
 /* A part's notes (#60): an icon at its bottom right, its text on hover, and in a
    small modal on a click or a tap. */
 .flow-note-icon circle { fill: var(--paper); stroke: var(--edge); stroke-width: 1px; }
