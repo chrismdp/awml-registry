@@ -152,7 +152,8 @@ jobs:
 
   # Resolves each real conflict, with a read-only token. Each pull request gets a folder of its own
   # under $RUNNER_TEMP/pr, made before any session starts: a clone of the branch outside the
-  # workspace, its rebase started there, its inputs, made read-only, and its sessions' output. A
+  # workspace, its rebase started there, its inputs, made read-only, and its sessions' output;
+  # what the host reads after a session is kept in the host-only folder instead. A
   # session only edits the conflicted files and writes its note; Claude Code's scrub denies its
   # commands writes to scripts/, package.json and the lockfile, so git, which writes them when it
   # replays a commit, never runs in a session. Between sessions a step that holds no Claude token
@@ -171,6 +172,8 @@ jobs:
       pull-requests: read
     outputs:
       digest: ${{ steps.check.outputs.digest }}
+    env:
+      HOST_DIR: /var/lib/awml-host
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -183,6 +186,14 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
+      # A session may rename any folder it can reach under the runner's home and build a fake tree in
+      # its place, which a denial, a bind mount of the old path, doesn't stop. /var/lib is root's, so
+      # nothing running as the runner's user can rename the host-only folder made here, which holds
+      # all the host reads after a session apart from the session's checked output and the trees it
+      # checks by device and inode, and which every session's sandbox denies.
+      - name: Make the host-only folder
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 "$HOST_DIR"
+
       # Main's prompt, scripts and AGENTS.md are copied out first. Each conflicting branch's head is
       # fetched into a local branch of the workspace, so its clone carries it and the check can read
       # it, and cloned with no hardlinks outside the workspace. The clone has no hooks, no fsmonitor
@@ -191,7 +202,8 @@ jobs:
       # back any branch that changes an .npmrc, a .yarnrc or node_modules/. Git runs here with hooks,
       # fsmonitor and global config off, before any session starts, and starts the rebase, which stops
       # at the first conflict. Each clone's git config and its and its .git's device and inode, and the
-      # workspace's, are kept in a baseline folder no session may write, for the git after it.
+      # workspace's, are kept in the host-only folder's baseline, with the list of each clone's
+      # conflicted files, for the git after it.
       - name: Prepare a clone of each conflicting branch, before any session starts
         id: prepare
         env:
@@ -205,18 +217,18 @@ jobs:
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
           trap 'echo "::$stop::"' EXIT
-          mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/check" "$RUNNER_TEMP/resolved"
-          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh .github/check-out.sh AGENTS.md "$RUNNER_TEMP/main/"
+          mkdir -p "$HOST_DIR/main" "$HOST_DIR/baseline" "$HOST_DIR/check" "$HOST_DIR/resolved"
+          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh .github/check-out.sh AGENTS.md "$HOST_DIR/main/"
           id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
           case "$id" in ''|*[!0-9]*) echo "The app's bot has no id: $id"; exit 1 ;; esac
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
-          : > "$RUNNER_TEMP/pulls.tsv"
+          : > "$HOST_DIR/pulls.tsv"
           while IFS=$'\t' read -r number head_sha; do
             case "$number" in ''|*[!0-9]*) continue ;; esac
             [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
             root="$RUNNER_TEMP/pr/$number"
-            mkdir -p "$root/in" "$root/out" "$root/home"
+            mkdir -p "$root/in" "$root/out"
             GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0="$auth" \
               safe_git fetch -q --no-tags origin "$head_sha:refs/heads/factory-rebase-$number"
             safe_git clone -q --no-hardlinks --no-checkout "$GITHUB_WORKSPACE" "$root/work"
@@ -229,22 +241,22 @@ jobs:
             base="$(safe_git merge-base "$head_sha" "$MAIN_SHA")"
             safe_git log --oneline "$base..$head_sha" > "$root/in/branch-log.txt"
             safe_git log --oneline "$base..$MAIN_SHA" > "$root/in/main-log.txt"
-            cp "$RUNNER_TEMP/main/AGENTS.md" "$root/in/"
+            cp "$HOST_DIR/main/AGENTS.md" "$root/in/"
             gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '"# " + .title + "\n\n" + (.body // "")' > "$root/in/pull-request.md"
             if safe_git -C "$root/work" rebase -q "$MAIN_SHA" > /dev/null 2>&1; then
               echo "#$number rebased cleanly here after all."
             fi
-            safe_git -C "$root/work" diff --name-only --no-ext-diff --no-textconv --diff-filter=U > "$root/in/conflicted-files.txt"
+            safe_git -C "$root/work" diff --name-only --no-ext-diff --no-textconv --diff-filter=U > "$HOST_DIR/conflicted-$number.txt"
             # The rebase stopped at its conflict on top of main, and find held back any branch that
             # changes its dependencies, so this installs main's lockfile.
-            bash "$RUNNER_TEMP/main/check-lockfile.sh" "$root/work"
+            bash "$HOST_DIR/main/check-lockfile.sh" "$root/work"
             (cd "$root/work" && npm ci --ignore-scripts --no-audit --no-fund)
             chmod -R a-w "$root/in"
-            cp "$root/work/.git/config" "$RUNNER_TEMP/baseline/git-config-$number"
-            stat -c %d:%i "$root/work" "$root/work/.git" > "$RUNNER_TEMP/baseline/clone-$number"
-            printf '%s\t%s\n' "$number" "$head_sha" >> "$RUNNER_TEMP/pulls.tsv"
+            cp "$root/work/.git/config" "$HOST_DIR/baseline/git-config-$number"
+            stat -c %d:%i "$root/work" "$root/work/.git" > "$HOST_DIR/baseline/clone-$number"
+            printf '%s\t%s\n' "$number" "$head_sha" >> "$HOST_DIR/pulls.tsv"
           done < <(jq -r '.[] | select(.clean == false and .guarded == false) | [.number, .head_sha] | @tsv' <<< "$PULLS")
-          stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$RUNNER_TEMP/baseline/workspace"
+          stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$HOST_DIR/baseline/workspace"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
@@ -269,7 +281,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         run: |
-          { STEP_SCRIPT="$0" bash "$RUNNER_TEMP/main/resolve-session.sh" 1; exit; }
+          { STEP_SCRIPT="$0" bash "$HOST_DIR/main/resolve-session.sh" 1; exit; }
       - name: Continue each rebase, round 1
         id: continue1
         if: ${{ !cancelled() }}
@@ -277,7 +289,7 @@ jobs:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
-          bash "$RUNNER_TEMP/main/resolve-continue.sh"
+          bash "$HOST_DIR/main/resolve-continue.sh"
 
       - name: Resolve the conflicts, round 2
         id: session2
@@ -285,7 +297,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         run: |
-          { STEP_SCRIPT="$0" bash "$RUNNER_TEMP/main/resolve-session.sh" 2; exit; }
+          { STEP_SCRIPT="$0" bash "$HOST_DIR/main/resolve-session.sh" 2; exit; }
       - name: Continue each rebase, round 2
         id: continue2
         if: ${{ !cancelled() }}
@@ -293,7 +305,7 @@ jobs:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
-          bash "$RUNNER_TEMP/main/resolve-continue.sh"
+          bash "$HOST_DIR/main/resolve-continue.sh"
 
       - name: Resolve the conflicts, round 3
         id: session3
@@ -301,7 +313,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         run: |
-          { STEP_SCRIPT="$0" bash "$RUNNER_TEMP/main/resolve-session.sh" 3; exit; }
+          { STEP_SCRIPT="$0" bash "$HOST_DIR/main/resolve-session.sh" 3; exit; }
       - name: Continue each rebase, round 3
         id: continue3
         if: ${{ !cancelled() }}
@@ -309,7 +321,7 @@ jobs:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
-          bash "$RUNNER_TEMP/main/resolve-continue.sh"
+          bash "$HOST_DIR/main/resolve-continue.sh"
 
       # Each finished rebase is bundled from its clone, and the bundle read as data into a fresh
       # repository, whose config no session ever touched, with no global or system config, hooks,
@@ -333,33 +345,33 @@ jobs:
           echo "::stop-commands::$stop"
           trap 'echo "::$stop::"' EXIT
           safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
-          if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$RUNNER_TEMP/baseline/workspace"; then
+          if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$HOST_DIR/baseline/workspace"; then
             echo "The workspace or its .git isn't the one the sessions started beside, so nothing is read from it."
             exit 1
           fi
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
-          resolved="$RUNNER_TEMP/resolved"
-          mkdir -p "$resolved" "$RUNNER_TEMP/check"
+          resolved="$HOST_DIR/resolved"
+          mkdir -p "$resolved" "$HOST_DIR/check"
           while IFS=$'\t' read -r number head_sha; do
             case "$number" in ''|*[!0-9]*) continue ;; esac
             [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
             out="$RUNNER_TEMP/pr/$number/out"
-            if ! bash "$RUNNER_TEMP/main/check-out.sh" "$out" "$RUNNER_TEMP/pr"; then
+            if ! bash "$HOST_DIR/main/check-out.sh" "$out" "$RUNNER_TEMP/pr"; then
               echo "The out folder of #$number isn't plain files and folders where it should be, so nothing is read from it."
               continue
             fi
             work="$RUNNER_TEMP/pr/$number/work"
-            if ! stat -c %d:%i "$work" "$work/.git" | cmp -s - "$RUNNER_TEMP/baseline/clone-$number"; then
+            if ! stat -c %d:%i "$work" "$work/.git" | cmp -s - "$HOST_DIR/baseline/clone-$number"; then
               echo "The clone of #$number or its .git isn't the one its session started in, so nothing is read from it."
               continue
             fi
-            fresh="$RUNNER_TEMP/check/$number"
-            bundle="$RUNNER_TEMP/check/$number.bundle"
-            if [ -e "$RUNNER_TEMP/baseline/gave-up-$number" ]; then
+            fresh="$HOST_DIR/check/$number"
+            bundle="$HOST_DIR/check/$number.bundle"
+            if [ -e "$HOST_DIR/baseline/gave-up-$number" ]; then
               echo "The rebase of #$number stopped short."
             elif [ -d "$work/.git/rebase-merge" ] || [ -d "$work/.git/rebase-apply" ]; then
               echo "The rebase of #$number still conflicted after three rounds."
-            elif ! cmp -s "$work/.git/config" "$RUNNER_TEMP/baseline/git-config-$number"; then
+            elif ! cmp -s "$work/.git/config" "$HOST_DIR/baseline/git-config-$number"; then
               echo "The clone of #$number has a changed git config, so no git runs there."
             elif [ -n "$(find "$work" -mindepth 2 -name .git -print -quit)" ]; then
               echo "The clone of #$number holds a nested repository, so no git runs there."
@@ -377,8 +389,8 @@ jobs:
               base="$(safe_git -C "$fresh" merge-base "$head_sha" "$MAIN_SHA")"
               comm -23 <(safe_git -C "$fresh" diff --no-ext-diff --no-textconv "$MAIN_SHA" refs/rebased | LC_ALL=C grep -a '^+' | LC_ALL=C sort -u) \
                 <(safe_git -C "$fresh" diff --no-ext-diff --no-textconv "$base" "$head_sha" | LC_ALL=C grep -a '^+' | LC_ALL=C sort -u) \
-                > "$RUNNER_TEMP/check/$number.added"
-              if bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/check/$number.added"; then
+                > "$HOST_DIR/check/$number.added"
+              if bash "$HOST_DIR/main/scan-tokens.sh" "$HOST_DIR/check/$number.added"; then
                 cp "$bundle" "$resolved/$number.bundle"
               else
                 echo "The resolution of #$number adds what looks like a token, so it isn't kept."
@@ -387,12 +399,12 @@ jobs:
               echo "The session on #$number left no rebase that sits on main without conflict markers or files the app never pushes."
             fi
             if [ -f "$out/message.md" ] && [ ! -L "$out/message.md" ]; then
-              head -c 20000 "$out/message.md" > "$RUNNER_TEMP/check/$number.md"
-              if bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/check/$number.md"; then
-                cp "$RUNNER_TEMP/check/$number.md" "$resolved/$number.md"
+              head -c 20000 "$out/message.md" > "$HOST_DIR/check/$number.md"
+              if bash "$HOST_DIR/main/scan-tokens.sh" "$HOST_DIR/check/$number.md"; then
+                cp "$HOST_DIR/check/$number.md" "$resolved/$number.md"
               fi
             fi
-          done < "$RUNNER_TEMP/pulls.tsv"
+          done < "$HOST_DIR/pulls.tsv"
           digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c 1-64; }
           echo "digest=$(digest "$resolved")" >> "$GITHUB_OUTPUT"
 
@@ -400,7 +412,7 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: resolved
-          path: ${{ runner.temp }}/resolved
+          path: ${{ env.HOST_DIR }}/resolved
           if-no-files-found: ignore
 
   push:

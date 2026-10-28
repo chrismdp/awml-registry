@@ -92,6 +92,8 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+    env:
+      HOST_DIR: /var/lib/awml-host
     steps:
       # A fork's pull request, or one opened by anyone who may not write to the repository, could
       # steer the sessions, which hold the maintainer's login token. Trust is by what GitHub says
@@ -139,11 +141,19 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
+      # A session may rename any folder it can reach under the runner's home and build a fake tree in
+      # its place, which a denial, a bind mount of the old path, doesn't stop. /var/lib is root's, so
+      # nothing running as the runner's user can rename the host-only folder made here, which holds
+      # all the host reads after a session apart from the session's checked output and the trees it
+      # checks by device and inode, and which every session's sandbox denies.
+      - name: Make the host-only folder
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 "$HOST_DIR"
+
       - name: Copy main's prompts, scripts, AGENTS.md and REVIEW.md out
         run: |
-          mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
+          mkdir -p "$HOST_DIR/main" "$RUNNER_TEMP/input"
           cp .github/review-bugs-prompt.md .github/review-security-prompt.md .github/claude-settings.sh \
-            .github/scan-tokens.sh .github/post-findings.sh .github/bring-patch.sh .github/check-out.sh "$RUNNER_TEMP/main/"
+            .github/scan-tokens.sh .github/post-findings.sh .github/bring-patch.sh .github/check-out.sh "$HOST_DIR/main/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
 
       - name: Bring in the pull request's patch against main
@@ -152,7 +162,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: bash "$RUNNER_TEMP/main/bring-patch.sh" "$RUNNER_TEMP/input"
+        run: bash "$HOST_DIR/main/bring-patch.sh" "$RUNNER_TEMP/input"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
@@ -188,12 +198,12 @@ jobs:
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/review"
           rm -rf "$session"
-          mkdir -p "$session/out" "$RUNNER_TEMP/host"
+          mkdir -p "$session/out" "$HOST_DIR/logs"
           # The log goes to the host-only folder, which the session can't write, so it can't turn
           # it into a link for the host's cat to follow. The inputs are denied too.
-          log="$RUNNER_TEMP/host/$(basename "$session").log"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR"
-          prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/$PROMPT")"
+          log="$HOST_DIR/logs/$(basename "$session").log"
+          bash "$HOST_DIR/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR"
+          prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$HOST_DIR/main/$PROMPT")"
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 100 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
@@ -218,9 +228,9 @@ jobs:
         run: |
           unread="$UNREAD"
           [ "$REVIEW_NAME" = "Bug review" ] || unread=0
-          bash "$RUNNER_TEMP/main/check-out.sh" "$RUNNER_TEMP/sessions/review/out" "$RUNNER_TEMP/sessions"
-          bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/sessions/review/out"
-          bash "$RUNNER_TEMP/main/post-findings.sh" "$RUNNER_TEMP/sessions/review/out/$FINDINGS" "$unread"
+          bash "$HOST_DIR/main/check-out.sh" "$RUNNER_TEMP/sessions/review/out" "$RUNNER_TEMP/sessions"
+          bash "$HOST_DIR/main/scan-tokens.sh" "$RUNNER_TEMP/sessions/review/out"
+          bash "$HOST_DIR/main/post-findings.sh" "$RUNNER_TEMP/sessions/review/out/$FINDINGS" "$unread"
 
   # On a factory branch, once both reviews have ended, a third session sorts the change by risk,
   # reading the patch and both reviews' findings from their checks: ship, show or ask. Its verdict
@@ -241,6 +251,8 @@ jobs:
       actions: read
       checks: read
       contents: read
+    env:
+      HOST_DIR: /var/lib/awml-host
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -252,11 +264,19 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
+      # A session may rename any folder it can reach under the runner's home and build a fake tree in
+      # its place, which a denial, a bind mount of the old path, doesn't stop. /var/lib is root's, so
+      # nothing running as the runner's user can rename the host-only folder made here, which holds
+      # all the host reads after a session apart from the session's checked output and the trees it
+      # checks by device and inode, and which every session's sandbox denies.
+      - name: Make the host-only folder
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 "$HOST_DIR"
+
       - name: Copy main's prompts, scripts, AGENTS.md and REVIEW.md out
         run: |
-          mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
+          mkdir -p "$HOST_DIR/main" "$RUNNER_TEMP/input"
           cp .github/classify-prompt.md .github/claude-settings.sh .github/scan-tokens.sh \
-            .github/review-findings.sh .github/bring-patch.sh .github/check-out.sh "$RUNNER_TEMP/main/"
+            .github/review-findings.sh .github/bring-patch.sh .github/check-out.sh "$HOST_DIR/main/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
 
       - name: Bring in the patch and both reviews' findings
@@ -267,8 +287,8 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          bash "$RUNNER_TEMP/main/bring-patch.sh" "$RUNNER_TEMP/input"
-          bash "$RUNNER_TEMP/main/review-findings.sh" findings "$GITHUB_RUN_ID" > "$RUNNER_TEMP/input/findings.json"
+          bash "$HOST_DIR/main/bring-patch.sh" "$RUNNER_TEMP/input"
+          bash "$HOST_DIR/main/review-findings.sh" findings "$GITHUB_RUN_ID" > "$RUNNER_TEMP/input/findings.json"
 
       - name: Install Claude Code and bubblewrap
         if: steps.bring.outcome == 'success'
@@ -299,12 +319,12 @@ jobs:
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/classify"
           rm -rf "$session"
-          mkdir -p "$session/out" "$RUNNER_TEMP/host"
+          mkdir -p "$session/out" "$HOST_DIR/logs"
           # The log goes to the host-only folder, which the session can't write, so it can't turn
           # it into a link for the host's cat to follow. The inputs are denied too.
-          log="$RUNNER_TEMP/host/$(basename "$session").log"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR"
-          prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/classify-prompt.md")"
+          log="$HOST_DIR/logs/$(basename "$session").log"
+          bash "$HOST_DIR/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR"
+          prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$HOST_DIR/main/classify-prompt.md")"
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 100 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
@@ -327,8 +347,8 @@ jobs:
           file="$RUNNER_TEMP/sessions/classify/out/classification.json"
           verdict=ask
           reasons="Classify left no readable verdict."
-          if bash "$RUNNER_TEMP/main/check-out.sh" "$RUNNER_TEMP/sessions/classify/out" "$RUNNER_TEMP/sessions" &&
-            [ -f "$file" ] && bash "$RUNNER_TEMP/main/scan-tokens.sh" "$file" &&
+          if bash "$HOST_DIR/main/check-out.sh" "$RUNNER_TEMP/sessions/classify/out" "$RUNNER_TEMP/sessions" &&
+            [ -f "$file" ] && bash "$HOST_DIR/main/scan-tokens.sh" "$file" &&
             jq -e '(.verdict | IN("ship", "show", "ask")) and
               (.reasons | type == "array" and length >= 1 and length <= 5 and all(.[]; type == "string"))' \
               "$file" > /dev/null 2>&1; then

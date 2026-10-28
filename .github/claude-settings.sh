@@ -9,7 +9,7 @@
 # Writes are also denied, whatever the flags say, to the places on the runner a command could use to
 # reach beyond its job's sandbox: the runner's file-command folder, which sets a step's outputs and
 # environment, the tool cache, which later steps run from, the runner's own folders in the job's
-# real home, and the host-only folders under RUNNER_TEMP that host steps read after the session. With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB set, Claude Code 2.1.312 itself denies writes, in
+# real home, and the host-only folder, HOST_DIR, that host steps read after the session. With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB set, Claude Code 2.1.312 itself denies writes, in
 # a list no setting can loosen, to the launch folder's .github, scripts, node_modules/.bin,
 # package.json, package-lock.json, .npmrc, .claude and git's hooks and config, and to the runner's
 # file-command folder and event file; but it reckons the runner's folders from HOME, which here is
@@ -52,12 +52,15 @@ for file in "${GITHUB_ENV:-}" "${GITHUB_PATH:-}" "${GITHUB_OUTPUT:-}" "${GITHUB_
   case "$file" in /*) denied+=("$(dirname "$file")") ;; esac
 done
 case "${GITHUB_EVENT_PATH:-}" in /*) denied+=("$GITHUB_EVENT_PATH") ;; esac
-# The host's own folders under RUNNER_TEMP, which host steps read after the session: main's scripts
-# and prompts, the baseline of what the session mustn't change, and the host-only folder that holds
-# the session's log. A command that replaced a file there with a link would have the host read it.
-if [ -n "${RUNNER_TEMP:-}" ]; then
-  for dir in main baseline host; do denied+=("$RUNNER_TEMP/$dir"); done
+# The host-only folder, which holds everything host steps read after the session apart from its
+# checked output and the trees they check by device and inode: main's scripts and prompts, the
+# baselines, the logs and what the job keeps. A command that replaced a file there with a link
+# would have the host read it, so every session needs one, made where no command can rename it.
+if [ -z "${HOST_DIR:-}" ] || [ ! -d "$HOST_DIR" ]; then
+  echo "The session needs a host-only folder, HOST_DIR, made before it starts." >&2
+  exit 1
 fi
+denied+=("$HOST_DIR")
 if [ -n "${RUNNER_TEMP:-}" ]; then
   for dir in "$(dirname "$RUNNER_TEMP")/_actions" "$(dirname "$RUNNER_TEMP")/_tool"; do
     if [ -d "$dir" ]; then denied+=("$dir"); fi

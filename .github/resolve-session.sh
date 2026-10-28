@@ -10,8 +10,8 @@
 #
 # Each session runs its commands in its sandbox, which reaches no network, sees none of Claude
 # Code's own process, and can't write its clone's .git, its inputs, another pull request's folder,
-# main's scripts, the check folders, the baseline, the host-only folder or the workspace. It loads only the settings
-# claude-settings.sh writes in a home of its own for this round, and no MCP servers, and reads only
+# the host-only folder or the workspace. It loads only the settings claude-settings.sh writes in a
+# new home of its own for this round, and no MCP servers, and reads only
 # its clone and its own folders, never /proc. Under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, Claude Code
 # forces --permission-mode default, so every tool it may use is named. Its log, kept in the host-only
 # folder, is printed with workflow commands stopped.
@@ -26,23 +26,26 @@ set -euo pipefail
     case "$number" in ''|*[!0-9]*) continue ;; esac
     root="$RUNNER_TEMP/pr/$number"
     [ -d "$root/work/.git/rebase-merge" ] || [ -d "$root/work/.git/rebase-apply" ] || continue
-    [ ! -e "$RUNNER_TEMP/baseline/gave-up-$number" ] || continue
+    [ ! -e "$HOST_DIR/baseline/gave-up-$number" ] || continue
     denied=(--deny-write ./.git --deny-write "$root/in" --deny-write "$0" --deny-write "$STEP_SCRIPT")
     for other in "$RUNNER_TEMP"/pr/*; do
       if [ "$other" != "$root" ]; then denied+=(--deny-write "$other"); fi
     done
-    for shared in main check resolved baseline pulls.tsv; do denied+=(--deny-write "$RUNNER_TEMP/$shared"); done
     denied+=(--deny-write "$GITHUB_WORKSPACE")
-    round_dir="$root/round-$round"
-    # The log goes to the host-only folder, which the session can't write, so it can't turn it into
-    # a link for the host's cat to follow.
-    log="$RUNNER_TEMP/host/resolve-$number-round-$round.log"
-    mkdir -p "$round_dir" "$RUNNER_TEMP/host"
-    bash "$RUNNER_TEMP/main/claude-settings.sh" "$round_dir/home" "${denied[@]}"
-    prompt="$(sed -e "s|INPUT_DIR|$root/in|g" -e "s|OUT_DIR|$root/out|g" "$RUNNER_TEMP/main/resolve-prompt.md")"
+    # An earlier round's session could have renamed a folder above this one and built a fake in its
+    # place, so the host writes nothing there: the home is a new folder of mktemp's under /tmp,
+    # which no command can rename, and the files that conflict now, kept in the host-only folder,
+    # go in the prompt. The log goes to the host-only folder too, so no session can turn it into a
+    # link for the host's cat to follow.
+    home="$(mktemp -d "${TMPDIR:-/tmp}/resolve-home.XXXXXXXX")"
+    log="$HOST_DIR/logs/resolve-$number-round-$round.log"
+    mkdir -p "$HOST_DIR/logs"
+    bash "$HOST_DIR/main/claude-settings.sh" "$home" "${denied[@]}"
+    prompt="$(sed -e "s|INPUT_DIR|$root/in|g" -e "s|OUT_DIR|$root/out|g" "$HOST_DIR/main/resolve-prompt.md")"
+    prompt+=$'\n\nThe files that conflict now, one a line:\n\n'"$(cat "$HOST_DIR/conflicted-$number.txt")"
     (
       cd "$root/work"
-      HOME="$round_dir/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
+      HOME="$home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
         --setting-sources user --strict-mcp-config --add-dir "$root/in" --add-dir "$root/out" \
         --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" \
         --allowedTools "Read(./**)" "Read(/$root/in/**)" "Read(/$root/out/**)" "Edit(./**)" "Write(./**)" \
@@ -56,6 +59,6 @@ set -euo pipefail
     echo "::stop-commands::$stop"
     cat "$log"
     echo "::$stop::"
-  done < "$RUNNER_TEMP/pulls.tsv"
+  done < "$HOST_DIR/pulls.tsv"
   exit 0
 }

@@ -2,9 +2,9 @@
 # Continues each rebase a round of resolve-session.sh left, in a step of resolve.yml that holds no
 # Claude token. Git reads a clone a session wrote, so it runs there only if the clone and its .git
 # are the ones the session started in, by device and inode, its git config is byte for byte as it
-# was, both as kept in the baseline folder no session may write, and no repository is nested below
-# its top; and only with no hook, fsmonitor, external diff or editor of the tree's, and no global or
-# system config. A clone that fails any of these, or whose conflicted files still hold conflict
+# was, both as kept in the host-only folder's baseline, which no session may write, and no
+# repository is nested below its top; and only with no hook, fsmonitor, external diff or editor of
+# the tree's, and no global or system config. A clone that fails any of these, or whose conflicted files still hold conflict
 # markers, is given up on, and no round starts a session there again. Otherwise the resolved files
 # are added and the rebase continues; if the next commit conflicts, its conflicted files are listed
 # for the next round's session.
@@ -13,7 +13,7 @@
 set -euo pipefail
 
 safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
-baseline="$RUNNER_TEMP/baseline"
+baseline="$HOST_DIR/baseline"
 while IFS=$'\t' read -r number _; do
   case "$number" in ''|*[!0-9]*) continue ;; esac
   root="$RUNNER_TEMP/pr/$number"
@@ -38,7 +38,7 @@ while IFS=$'\t' read -r number _; do
   while IFS= read -r path; do
     # A link is left alone: the host reads nothing through one, and the check step refuses it.
     if [ -f "$work/$path" ] && [ ! -L "$work/$path" ] && grep -qE '^(<<<<<<<|>>>>>>>)( |$)' "$work/$path"; then marked=true; fi
-  done < "$root/in/conflicted-files.txt"
+  done < "$HOST_DIR/conflicted-$number.txt"
   if [ "$marked" = true ]; then
     give_up "The session on #$number left conflict markers, so its rebase stops here."
     continue
@@ -48,11 +48,9 @@ while IFS=$'\t' read -r number _; do
     echo "#$number's rebase went on to its end, or to its next conflict."
   fi
   if [ -d "$work/.git/rebase-merge" ] || [ -d "$work/.git/rebase-apply" ]; then
-    chmod u+w "$root/in" "$root/in/conflicted-files.txt"
-    safe_git -C "$work" diff --name-only --no-ext-diff --no-textconv --diff-filter=U > "$root/in/conflicted-files.txt"
-    chmod a-w "$root/in/conflicted-files.txt" "$root/in"
-    if [ ! -s "$root/in/conflicted-files.txt" ]; then
+    safe_git -C "$work" diff --name-only --no-ext-diff --no-textconv --diff-filter=U > "$HOST_DIR/conflicted-$number.txt"
+    if [ ! -s "$HOST_DIR/conflicted-$number.txt" ]; then
       give_up "#$number's rebase stopped without a conflict, so it stops here."
     fi
   fi
-done < "$RUNNER_TEMP/pulls.tsv"
+done < "$HOST_DIR/pulls.tsv"

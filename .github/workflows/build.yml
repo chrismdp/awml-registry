@@ -170,6 +170,8 @@ jobs:
       changed: ${{ steps.patch.outputs.changed }}
       pictures: ${{ steps.patch.outputs.pictures }}
       digest: ${{ steps.pack.outputs.digest }}
+    env:
+      HOST_DIR: /var/lib/awml-host
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -180,11 +182,19 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
+      # A session may rename any folder it can reach under the runner's home and build a fake tree in
+      # its place, which a denial, a bind mount of the old path, doesn't stop. /var/lib is root's, so
+      # nothing running as the runner's user can rename the host-only folder made here, which holds
+      # all the host reads after a session apart from the session's checked output and the trees it
+      # checks by device and inode, and which every session's sandbox denies.
+      - name: Make the host-only folder
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 "$HOST_DIR"
+
       # The session follows main's prompt, AGENTS.md and REVIEW.md, copied out before it starts.
       - name: Copy main's prompt, scripts, AGENTS.md and REVIEW.md out
         run: |
-          mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
-          cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh "$RUNNER_TEMP/main/"
+          mkdir -p "$HOST_DIR/main" "$RUNNER_TEMP/input"
+          cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh "$HOST_DIR/main/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
 
       # The label approves the issue as it reads then, and a try drafts from it only if it hasn't
@@ -296,12 +306,12 @@ jobs:
         run: |
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
-          bash "$RUNNER_TEMP/main/check-lockfile.sh" .
+          bash "$HOST_DIR/main/check-lockfile.sh" .
           npm ci --ignore-scripts --no-audit --no-fund
           echo "::$stop::"
-          mkdir -p "$RUNNER_TEMP/baseline"
-          cp .git/config "$RUNNER_TEMP/baseline/git-config"
-          stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$RUNNER_TEMP/baseline/workspace"
+          mkdir -p "$HOST_DIR/baseline"
+          cp .git/config "$HOST_DIR/baseline/git-config"
+          stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$HOST_DIR/baseline/workspace"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
@@ -338,13 +348,12 @@ jobs:
           chmod -R a-w "$INPUT_DIR"
           session="$RUNNER_TEMP/sessions/build"
           rm -rf "$session"
-          mkdir -p "$session/out" "$RUNNER_TEMP/host"
+          mkdir -p "$session/out" "$HOST_DIR/logs"
           # The log goes to the host-only folder, which the session can't write, so it can't turn
           # it into a link for the host's cat to follow. The inputs are denied too.
-          log="$RUNNER_TEMP/host/build.log"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR" --deny-write ./.git --deny-write "$RUNNER_TEMP/baseline" \
-            --deny-write "$RUNNER_TEMP/change"
-          prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/build-prompt.md")"
+          log="$HOST_DIR/logs/build.log"
+          bash "$HOST_DIR/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR" --deny-write ./.git
+          prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$HOST_DIR/main/build-prompt.md")"
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
@@ -375,11 +384,11 @@ jobs:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
-          if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$RUNNER_TEMP/baseline/workspace"; then
+          if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$HOST_DIR/baseline/workspace"; then
             echo "The workspace or its .git isn't the one the session started in, so no git runs on it."
             exit 1
           fi
-          if ! cmp -s .git/config "$RUNNER_TEMP/baseline/git-config"; then
+          if ! cmp -s .git/config "$HOST_DIR/baseline/git-config"; then
             echo "Git's config changed during the session, so no git runs on the tree."
             exit 1
           fi
@@ -389,9 +398,9 @@ jobs:
             exit 1
           fi
           out="$RUNNER_TEMP/sessions/build/out"
-          bash "$RUNNER_TEMP/main/check-out.sh" "$out" "$RUNNER_TEMP/sessions"
+          bash "$HOST_DIR/main/check-out.sh" "$out" "$RUNNER_TEMP/sessions"
           # Made afresh, so nothing a session put there goes into the artifact.
-          change="$RUNNER_TEMP/change"
+          change="$HOST_DIR/change"
           rm -rf "$change"
           mkdir "$change"
           git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= add -A
@@ -418,19 +427,19 @@ jobs:
         id: pack
         run: |
           # Only regular files are kept: a link a session planted would be uploaded as what it points at.
-          if [ -n "$(find "$RUNNER_TEMP/change" ! -type f ! -type d -print -quit)" ]; then
+          if [ -n "$(find "$HOST_DIR/change" ! -type f ! -type d -print -quit)" ]; then
             echo "The change folder holds something other than files, so nothing is kept."
             exit 1
           fi
-          bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/change"
+          bash "$HOST_DIR/main/scan-tokens.sh" "$HOST_DIR/change"
           digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c 1-64; }
-          echo "digest=$(digest "$RUNNER_TEMP/change")" >> "$GITHUB_OUTPUT"
+          echo "digest=$(digest "$HOST_DIR/change")" >> "$GITHUB_OUTPUT"
 
       # Kept for 30 days, so a draft that's offered rather than pushed can be downloaded.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: change
-          path: ${{ runner.temp }}/change
+          path: ${{ env.HOST_DIR }}/change
           retention-days: 30
 
   # Runs the registry itself, from main and from the change, with a token that can only read and no
