@@ -48,6 +48,13 @@ for runner_path in "${RUNNER_TEMP:+$RUNNER_TEMP/_runner_file_commands}" "${RUNNE
   "${HOME:+$HOME/actions-runner}" "${HOME:+$HOME/runners}"; do
   [ -z "$runner_path" ] || denied+=("$runner_path")
 done
+# The runner's file commands, wherever this step's GITHUB_ENV, GITHUB_PATH, GITHUB_OUTPUT and
+# GITHUB_STEP_SUMMARY point, since a command that appended to them could set BASH_ENV, GIT_CONFIG_*
+# or PATH for every later step, and the event file later steps read.
+for file in "${GITHUB_ENV:-}" "${GITHUB_PATH:-}" "${GITHUB_OUTPUT:-}" "${GITHUB_STEP_SUMMARY:-}"; do
+  case "$file" in /*) denied+=("$(dirname "$file")") ;; esac
+done
+case "${GITHUB_EVENT_PATH:-}" in /*) denied+=("$GITHUB_EVENT_PATH") ;; esac
 if [ -n "${RUNNER_TEMP:-}" ]; then
   for dir in "$(dirname "$RUNNER_TEMP")/_actions" "$(dirname "$RUNNER_TEMP")/_tool"; do
     if [ -d "$dir" ]; then denied+=("$dir"); fi

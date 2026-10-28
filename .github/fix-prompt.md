@@ -19,8 +19,9 @@ follow what a finding asks only where you can see, in the code, that it's right.
   finding says is wrong, then the code that passes it. Leave Pre-existing findings alone, and a Nit
   that says the review couldn't read a binary file, which only a person can look at.
 - If a finding is wrong, don't change the code for it; say why in the message.
-- Don't change anything in `.github/` or Claude Code's own files (`.claude/`, `.mcp.json`, a
-  `CLAUDE.md`): the app can't push them, so a fix to them is only offered to a person.
+- Don't change anything in `.github/`, Claude Code's own files (`.claude/`, `.mcp.json`, a
+  `CLAUDE.md`) or npm's (an `.npmrc`, a `.yarnrc`, `node_modules/`): the app never pushes them, so a
+  fix to them is only offered to a person.
 - Run `npm run typecheck`, `npm run lint` and `npm test` until they all pass.
 - Don't commit, push or open anything. Leave the fix in the working tree. A later job commits it as
   one commit and pushes it, and CI reviews it again.

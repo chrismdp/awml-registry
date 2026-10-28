@@ -36,8 +36,9 @@ reason.
 - Run `npm run typecheck`, `npm run lint` and `npm test` until they all pass.
 - Don't commit, push or open anything. Leave the change in the working tree. A later job pushes it
   and opens the pull request, and CI runs the checks again and reviews it there.
-- Don't change anything in `.github/` or Claude Code's own files (`.claude/`, `.mcp.json`, a
-  `CLAUDE.md`): the app can't push them, so a change to them is only offered to the maintainer.
+- Don't change anything in `.github/`, Claude Code's own files (`.claude/`, `.mcp.json`, a
+  `CLAUDE.md`) or npm's (an `.npmrc`, a `.yarnrc`, `node_modules/`): the app never pushes them, so a
+  change to them is only offered to the maintainer.
 - Something new that the issue doesn't ask for goes in the message as a suggested issue, not in
   the change.
 

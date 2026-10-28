@@ -795,6 +795,26 @@ describe("claude-settings.sh", () => {
     expect(denied).not.toContain("");
   });
 
+  // A command that appended to the runner's file commands could set BASH_ENV, GIT_CONFIG_* or PATH
+  // for every later step, so wherever they point is denied, as is the event file.
+  it.runIf(canRehearse)("denies writes to the folders of the runner's file commands and to the event file", () => {
+    const root = scratch();
+    const home = join(root, "home");
+    const commands = join(root, "files");
+    const env = {
+      GITHUB_ENV: join(commands, "env/set_env_1"),
+      GITHUB_PATH: join(commands, "path/add_path_1"),
+      GITHUB_OUTPUT: join(commands, "output/set_output_1"),
+      GITHUB_STEP_SUMMARY: join(commands, "summary/step_summary_1"),
+      GITHUB_EVENT_PATH: join(root, "workflow/event.json"),
+    };
+    const run = rehearse(script("claude-settings.sh", [home]), { root, env });
+    expect(run.failed, run.printed).toBe(false);
+    const denied = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")).sandbox.filesystem.denyWrite;
+    for (const want of [join(commands, "env"), join(commands, "path"), join(commands, "output"), join(commands, "summary"), env.GITHUB_EVENT_PATH])
+      expect(denied).toContain(want);
+  });
+
   it.runIf(canRehearse)("allows no host at all when none is named", () => {
     const root = scratch();
     const home = join(root, "home");
@@ -1379,6 +1399,22 @@ describe("build.yml", () => {
 
   // Why the last try failed comes from CI itself: the failed test log of CI's latest pull_request
   // run on the issue's branch, from this repository, and never a fork's run that took the name.
+  // An empty log would tell the draft a try failed with nothing to show, so the file is written
+  // only when it has something in it.
+  it.runIf(canRehearse)("writes no failed log when the failed tests left none", () => {
+    const root = scratch();
+    const run = rehearse(stepWithId(jobs.draft, "why").run ?? "", {
+      root,
+      env: { ISSUE: "7" },
+      answers: `
+  *"actions/workflows/ci.yml/runs"*) answer <<< '${JSON.stringify({ workflow_runs: [{ id: 50, conclusion: "failure", event: "pull_request", head_repository: { full_name: "owner/repo" } }] })}' ;;
+  *"actions/runs/50/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ id: 9, name: "test", conclusion: "failure" }] })}' ;;
+  *"run view --job 9"*) ;;`,
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(existsSync(join(root, "runner/input/failed.log"))).toBe(false);
+  });
+
   it.runIf(canRehearse)("brings in the failed tests' log of CI's latest run on the branch", () => {
     const root = scratch();
     const runs_ = {
@@ -1432,6 +1468,14 @@ describe("build.yml", () => {
     for (const rule of allowed) expect(rule).not.toMatch(/^(Read|Edit|Write|Glob|Grep|Bash)$/);
     expect(allowed.filter((rule) => rule.startsWith("Bash(")).every((rule) => /^Bash\((npm (run|test)|npx (vitest|tsc|eslint)|git (status|diff|log)|ls)\b/.test(rule))).toBe(true);
     expect(allowed).not.toContain("Bash(npm ci:*)");
+  });
+
+  it("tells the draft and the fixer which files the app never pushes", () => {
+    for (const name of ["build-prompt.md", "fix-prompt.md"]) {
+      const prompt = squash(readFileSync(join(github, name), "utf8"));
+      for (const path of ["`.github/`", "`.claude/`", "`.mcp.json`", "`CLAUDE.md`", "`.npmrc`", "`.yarnrc`", "`node_modules/`"])
+        expect(prompt, `${name} ${path}`).toContain(path);
+    }
   });
 
   it("keeps the change for 30 days, so an offered draft can be downloaded", () => {

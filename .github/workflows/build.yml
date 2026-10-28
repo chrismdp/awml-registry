@@ -224,7 +224,9 @@ jobs:
             while read -r job; do
               case "$job" in ''|*[!0-9]*) continue ;; esac
               gh run view --job "$job" --repo "$GITHUB_REPOSITORY" --log-failed || true
-            done | tail -n 300 > "$input/failed.log"
+            done | tail -n 300 > "$RUNNER_TEMP/failed.log"
+          # Only a log with something in it tells the draft why the last try failed.
+          if [ -s "$RUNNER_TEMP/failed.log" ]; then mv "$RUNNER_TEMP/failed.log" "$input/failed.log"; fi
 
       # The session runs the checks but can't install: under the scrub, Claude Code denies its
       # commands writes to node_modules/.bin and package-lock.json, and its sandbox has no network.
