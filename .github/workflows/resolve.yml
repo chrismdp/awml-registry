@@ -305,7 +305,8 @@ jobs:
       # fsmonitor or external diff, beside no login token. Only if the workspace and the clone are
       # the ones the sessions started beside and in, the clone's git config is as it was, no
       # repository is nested in it, its rebase finished and wasn't given up on, and the out folder
-      # is reached through no symbolic link. It must sit on main, carry no conflict marker, and
+      # is reached through no symbolic link. Every commit since main is tested against the held-back
+      # pattern, not only the net change, so a change added and then reverted still counts. It must sit on main, carry no conflict marker, and
       # change nothing the app never pushes. The lines its resolution adds, beyond those the branch
       # already added, and Claude's note, must carry nothing like a token. The digest of what's kept
       # is the job's output, which the push job checks it against.
@@ -367,7 +368,7 @@ jobs:
               safe_git -C "$fresh" fetch -q "$bundle" "HEAD:refs/rebased" &&
               safe_git -C "$fresh" merge-base --is-ancestor "$MAIN_SHA" refs/rebased &&
               ! safe_git -C "$fresh" grep -qE '^(<<<<<<<|>>>>>>>)( |$)' refs/rebased -- &&
-              ! safe_git -C "$fresh" diff --name-only --no-ext-diff --no-textconv --no-renames -z "$MAIN_SHA" refs/rebased | grep -zqE "$guarded"; then
+              ! safe_git -C "$fresh" log --format= --name-only --no-renames -z "$MAIN_SHA..refs/rebased" | grep -zqE "$guarded"; then
               base="$(safe_git -C "$fresh" merge-base "$head_sha" "$MAIN_SHA")"
               comm -23 <(safe_git -C "$fresh" diff --no-ext-diff --no-textconv "$MAIN_SHA" refs/rebased | LC_ALL=C grep -a '^+' | LC_ALL=C sort -u) \
                 <(safe_git -C "$fresh" diff --no-ext-diff --no-textconv "$base" "$head_sha" | LC_ALL=C grep -a '^+' | LC_ALL=C sort -u) \

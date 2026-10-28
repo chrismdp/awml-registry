@@ -2804,6 +2804,7 @@ describe("retry.yml", () => {
     runPulls = [12],
     actor = { login: "awml-factory[bot]", type: "Bot" },
     personCommits = false,
+    earlierTaken = false,
   } = {}) => {
     const root = scratch();
     // The branch's commits, the factory's, then a person's if asked.
@@ -2835,7 +2836,9 @@ describe("retry.yml", () => {
     const ciRuns = {
       workflow_runs: [
         { id: 77, event: "pull_request", conclusion: "failure", head_repository: { full_name: "owner/repo" } },
-        ...(earlierFailure ? [{ id: 70, event: "pull_request", conclusion: "failure", head_repository: { full_name: "owner/repo" } }] : []),
+        ...(earlierFailure
+          ? [{ id: 70, event: "pull_request", conclusion: "failure", head_sha: "7".repeat(40), head_repository: { full_name: "owner/repo" } }]
+          : []),
         { id: 69, event: "pull_request", conclusion: "failure", head_repository: { full_name: "stranger/repo" } },
       ],
     };
@@ -2851,6 +2854,12 @@ ${permissionStub}
   *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })), triggering_actor: actor })}' ;;
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(sha), appPull(at, pullRepository)])}' ;;
   *"actions/workflows/ci.yml/runs"*) answer <<< '${JSON.stringify(ciRuns)}' ;;
+  *"compare/main...${"7".repeat(40)}"*) answer <<< '${JSON.stringify({
+    commits: [
+      { parents: [{}], commit: { author: { email: "1+awml-factory[bot]@users.noreply.github.com" }, committer: { email: "1+awml-factory[bot]@users.noreply.github.com" } } },
+      ...(earlierTaken ? [{ parents: [{}], commit: { author: { email: "person@example.com" }, committer: { email: "person@example.com" } } }] : []),
+    ],
+  })}' ;;
   *"actions/runs/70/jobs"*) answer <<< '${JSON.stringify({
     jobs: [
       { name: "test", conclusion: earlierFailure === "review" ? "success" : "failure" },
@@ -2915,15 +2924,29 @@ ${permissionStub}
 
   // A person's commit on the branch means they've taken it on: the build doesn't redraft over it,
   // and says so once, by the first run whose tests failed since that commit.
+  // Told once, by GitHub's record: an earlier run whose tests failed on a head that already held a
+  // commit not the factory's said it. An earlier failed run of the factory's own commits didn't, so
+  // a person whose commits were written before it, and pushed after, is still told.
   it.runIf(canRehearse)("leaves a branch a person has committed to, and says so once", () => {
     const run = tries({ personCommits: true });
     expect(run.failed, run.printed).toBe(false);
     expect(run.calls).not.toContain("workflow run");
     expect(run.calls.match(/issue comment 7 /g)).toHaveLength(1);
     expect(run.calls).toMatch(/> .*a person has taken it over/);
-    expect(run.calls).toContain("created=>=2026-10-03T00:00:00");
-    const again = tries({ personCommits: true, earlierFailure: true });
-    expect(again.calls).not.toMatch(/workflow run|issue comment/);
+    const factoryOnlyBefore = tries({ personCommits: true, earlierFailure: true });
+    expect(factoryOnlyBefore.calls.match(/issue comment 7 /g)).toHaveLength(1);
+    const told = tries({ personCommits: true, earlierFailure: true, earlierTaken: true });
+    expect(told.calls).not.toMatch(/workflow run|issue comment/);
+  });
+
+  it("is drawn with its takeover, and says so in its header", () => {
+    const drawing = readFileSync(join(github, "drawings/retry-a-build.yaml"), "utf8");
+    expect(drawing).toMatch(/- \{ id: takenover, kind: code, op: do, cleans: true, label: "[^"]+"/);
+    expect(drawing).toContain('{ from: tries, to: takenover, kind: start, label: "[a commit since main isn\'t the factory\'s]" }');
+    expect(drawing).toMatch(/- \{ id: takenovernote, kind: outside, label: "Comment on the issue: Allow"/);
+    expect(drawing).toContain("{ from: takenover, to: takenovernote, kind: data }");
+    const text = readFileSync(join(github, "workflows/retry.yml"), "utf8");
+    expect(squash(text.slice(0, text.indexOf("\nname:")))).toContain("a person has taken it over");
   });
 
   it.runIf(canRehearse)("exits quietly on a CI run that isn't the app's pull request's own", () => {
@@ -3331,6 +3354,16 @@ ${permissionStub}
       ["a change to .github/", (work: string) => put(join(work, ".github/workflows/x.yml"), "on: push\n")],
       ["a change to an .npmrc", (work: string) => put(join(work, ".npmrc"), "registry=https://example.com/\n")],
       ["a change to the dependencies", (work: string) => put(join(work, "package.json"), '{"dependencies": {"c": "git+ssh://x"}}\n')],
+      // A session could add a change and revert it in a later commit, leaving none in the net diff.
+      [
+        "a workflow added and taken out again",
+        (work: string) => {
+          put(join(work, ".github/workflows/x.yml"), "on: push\n");
+          git(work, "add", "-A");
+          git(work, "commit", "-qm", "add a workflow");
+          git(work, "rm", "-q", ".github/workflows/x.yml");
+        },
+      ],
     ])("keeps no bundle with %s", (_, resolve) => {
       const { root, run } = rebased(resolve);
       expect(run.failed, run.printed).toBe(false);

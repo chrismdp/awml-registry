@@ -2,11 +2,16 @@
 # When CI's tests fail on a build's pull request, whatever else failed, this starts the build again
 # for the branch's issue, up to three builds since the label was last added. The tests own a run
 # where both they and a review failed, so this acts then and the fixer doesn't, and a fix commit
-# that breaks a test lands here too. It reads only GitHub: the CI run that woke it, the pull request,
-# the build runs named for the issue, the label's events and the issue's last edit. It hands the
-# build nothing but the issue's number, and the build reads why the last try failed from CI itself.
-# After three builds, or if the issue was edited since the label went on, a new comment on the issue
-# says a person must act.
+# that breaks a test lands here too. It reads GitHub, the CI run that woke it, the pull request, the
+# build runs named for the issue, the label's events and the issue's last edit, and the branch's
+# commits with git. It hands the build nothing but the issue's number, and the build reads why the
+# last try failed from CI itself. After three builds, or if the issue was edited since the label went
+# on, a new comment on the issue says a person must act.
+#
+# A commit on the branch since main that isn't the factory's, or a merge, means that
+# a person has taken it over. The build won't redraft over their work, and one new comment on the
+# issue says so, posted by the first run whose tests failed on a head that held such a commit, by
+# GitHub's record of each earlier run's commits.
 name: Retry a build
 
 # GitHub runs this from main's copy. It checks out main to read the branch's commits with git, and
@@ -71,6 +76,27 @@ jobs:
             done < "$RUNNER_TEMP/earlier.txt"
             return 1
           }
+          # Whether an earlier CI pull_request run on the branch, from this repository, had failed
+          # tests on a head that already held a commit since main that isn't the factory's, by
+          # GitHub's record of that head's commits, and so said a person had taken it over.
+          told_taken() {
+            gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=$BRANCH&event=pull_request&per_page=100" |
+              jq -rs --arg repository "$GITHUB_REPOSITORY" --argjson run "$CI_RUN" \
+                '.[].workflow_runs[] | select(.event == "pull_request" and .head_repository.full_name == $repository
+                  and .conclusion == "failure" and .id < $run) | "\(.id)\t\(.head_sha)"' > "$RUNNER_TEMP/earlier-heads.txt"
+            while IFS=$'\t' read -r earlier earlier_head; do
+              case "$earlier" in ''|*[!0-9]*) continue ;; esac
+              [[ "$earlier_head" =~ ^[0-9a-f]{40}$ ]] || continue
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$earlier/jobs" --paginate --jq '.jobs[]' |
+                jq -se 'any(.[]; .name == "test" and .conclusion == "failure")' > /dev/null || continue
+              if gh api "repos/$GITHUB_REPOSITORY/compare/main...$earlier_head" |
+                jq -e --arg factory "$factory" 'any(.commits[]; (.parents | length) > 1 or
+                  (.commit.author.email | test($factory) | not) or (.commit.committer.email | test($factory) | not))' > /dev/null; then
+                return 0
+              fi
+            done < "$RUNNER_TEMP/earlier-heads.txt"
+            return 1
+          }
           [ "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ] && [ "$CI_EVENT" = pull_request ] ||
             leave "CI didn't run on a pull request from a branch of this repository."
           case "$BRANCH" in build/issue-*) issue="${BRANCH#build/issue-}" ;; *) leave "This isn't a build's branch." ;; esac
@@ -110,8 +136,7 @@ jobs:
             safe_git fetch -q --no-tags origin "$HEAD_SHA"
           base="$(safe_git merge-base HEAD "$HEAD_SHA")"
           factory='^[0-9]+\+awml-factory\[bot\]@users\.noreply\.github\.com$'
-          # The author date of the oldest such commit, which a rebase keeps, in UTC.
-          taken="$(TZ=UTC safe_git log --date=format-local:%Y-%m-%dT%H:%M:%SZ --format='%P%x09%ae%x09%ce%x09%ad' "$base..$HEAD_SHA" |
+          taken="$(safe_git log --format='%P%x09%ae%x09%ce%x09%H' "$base..$HEAD_SHA" |
             FACTORY="$factory" awk -F '\t' 'split($1, parents, " ") > 1 || $2 !~ ENVIRON["FACTORY"] || $3 !~ ENVIRON["FACTORY"] { taken = $4 } END { print taken }')"
 
           # shellcheck disable=SC2016 # The query's variables are GraphQL's.
@@ -136,8 +161,7 @@ jobs:
 
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$CI_RUN"
           if [ -n "$taken" ]; then
-            [[ "$taken" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || leave "The person's commit has no date."
-            ! told_since "$taken" || leave "An earlier CI run's tests failed since a person took the branch on, and that run said so."
+            ! told_taken || leave "An earlier CI run's tests failed on a head a person had committed to, and that run said so."
             {
               echo "**CI's tests failed on #$pr, and a commit on its branch isn't the factory's, so a person has taken it over.** The build won't redraft over their work."
               echo
