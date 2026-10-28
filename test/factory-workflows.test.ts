@@ -2402,7 +2402,7 @@ describe("land.yml", () => {
 
   it("is drawn as it runs: its concurrency, and the commit read at its merge-base with main", () => {
     const drawing = readFileSync(join(github, "drawings/land-a-pull-request.yaml"), "utf8");
-    expect(drawing).toContain("nothing is cancelled, neither a reading nor a land that has started");
+    expect(drawing).toContain("Its reading has no concurrency group, so nothing cancels it");
     expect(drawing).not.toContain("cancels an older reading");
     expect(drawing).toContain("at its merge-base with main");
     expect(drawing).not.toContain("keyed on the pull request and the run");
@@ -2413,15 +2413,14 @@ describe("land.yml", () => {
     expect(land.on).toEqual({ workflow_run: { workflows: ["CI"], types: ["completed"], branches: ["build/issue-*"] } });
   });
 
-  // Nothing cancels a reading or a land that has started: a run started by someone else's pull
-  // request from a branch of the same name could otherwise cancel the real reading.
+  // Nothing cancels a reading or a land that has started. GitHub keeps one run waiting in a group
+  // and cancels it for a newer one, whatever cancel-in-progress says, so the reading, which only
+  // reads and leaves quietly, has no group: a run started by someone else's pull request from a
+  // branch of the same name could otherwise cancel the real reading.
   it("never cancels a reading or a land that has started", () => {
     expect(land.concurrency).toBeUndefined();
+    expect(jobs.find.concurrency).toBeUndefined();
     // A fork's branch can carry the same name, so the group names the repository the run came from.
-    expect(jobs.find.concurrency).toEqual({
-      group: "land-find-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
-      "cancel-in-progress": false,
-    });
     expect(jobs.land.concurrency).toEqual({
       group: "land-merge-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
       "cancel-in-progress": false,

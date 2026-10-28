@@ -29,13 +29,12 @@ on:
     branches: ["build/issue-*"]
 
 jobs:
-  # Readings of one branch run one at a time, and none cancels another: a run started by someone
-  # else's pull request from a branch of the same name could otherwise cancel the real reading. A
-  # reading that no longer matches the branch's head lands nothing, as the land job checks.
+  # The reading has no concurrency group, since GitHub keeps one run waiting in a group and cancels
+  # it for a newer one whatever cancel-in-progress says, and a run started by someone else's pull
+  # request from a branch of the same name could then cancel the real reading. It only reads and
+  # leaves quietly, and a reading that no longer matches the branch's head lands nothing, as the
+  # land job checks.
   find:
-    concurrency:
-      group: land-find-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
-      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
