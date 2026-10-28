@@ -115,8 +115,10 @@ function Canvas(p: FlowCanvasProps) {
     [p.id, p.links, p.hrefs, drawing.notes, p.target, p.menuFor, p.onNote],
   );
   const latest = useRef(shared);
+  const follow = useRef(p.onFollow);
   useEffect(() => {
     latest.current = shared;
+    follow.current = p.onFollow;
   });
 
   // The page shows React Flow, and hides its SVG, once every part is drawn,
@@ -246,11 +248,14 @@ function Canvas(p: FlowCanvasProps) {
   }, [shared, setNodes]);
 
   const centre = (n: Node) => ({ x: n.position.x + (n.width ?? 0) / 2, y: n.position.y + (n.height ?? 0) / 2 });
-  const onNodeClick: NodeMouseHandler<FlowNode> = (e, node) => {
+  // React Flow gives every node this handler, so it is the same one each render, and a
+  // render that changes no node redraws none.
+  const onNodeClick = useCallback<NodeMouseHandler<FlowNode>>((e, node) => {
+    const { links, hrefs } = latest.current;
     if (!press.current.followsClick() || (e.target as Element).closest("button, a")) return;
-    const follows = node.type === "part" ? shared.links.has(node.id) : Boolean(hrefOf(shared.hrefs, node.id));
-    if (follows) p.onFollow(node.id, e);
-  };
+    const follows = node.type === "part" ? links.has(node.id) : Boolean(hrefOf(hrefs, node.id));
+    if (follows) follow.current(node.id, e);
+  }, []);
   const onAuxClick = (e: MouseEvent) => {
     const id = (e.target as Element).closest(".react-flow__node")?.getAttribute("data-id");
     if (e.button !== 1 || !id || (!shared.links.has(id) && !hrefOf(shared.hrefs, id))) return;
