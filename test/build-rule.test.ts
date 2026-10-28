@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { countFixCommits, evaluate, loadConfig, readConfig, type Verdict } from "../scripts/build-rule";
+import { evaluate, fixLine, loadConfig, readConfig, type Verdict } from "../scripts/build-rule";
 
 const made: string[] = [];
 
@@ -476,6 +476,26 @@ describe("judging the branch's commits since main", () => {
     expectVerdict(judge(repo, base), "show", "The branch carries 1 fix commit.");
   });
 
+  // A try is a commit, so one that carries the line twice counts once, and the line counts only at
+  // the start of a line of the message.
+  it("counts the commits whose message carries the fix line at the start of a line", () => {
+    const { repo, base } = branch();
+    commitAs(repo, bot, "src/app/page.tsx", "Build #7");
+    commitAs(repo, bot, "src/app/a.tsx", "Fix\n\nFactory-Fix: https://x/runs/1");
+    commitAs(repo, bot, "src/app/b.tsx", "Factory-Fix: in the subject");
+    commitAs(repo, bot, "src/app/c.tsx", "Fix\n\nsee Factory-Fix: elsewhere");
+    commitAs(repo, bot, "src/app/d.tsx", "Fix\n\nFactory-Fix: https://x/runs/2\nFactory-Fix: https://x/runs/3");
+
+    expectVerdict(judge(repo, base), "show", "The branch carries 3 fix commits.");
+  });
+
+  // fix.yml counts its tries by the same line, so the two can't drift apart.
+  it("matches fix.yml's count of fix commits", () => {
+    const fix = readFileSync(join(__dirname, "../.github/workflows/fix.yml"), "utf8");
+    expect(fixLine.flags).toBe("");
+    expect(fix).toContain(`map(select(test("${fixLine.source}")))`);
+  });
+
   it("refuses a head the base isn't under", () => {
     const { repo, base } = branch();
     commitAs(repo, bot, "src/app/page.tsx", "Build #7");
@@ -488,11 +508,3 @@ describe("judging the branch's commits since main", () => {
   });
 });
 
-describe("counting fix commits", () => {
-  it("counts the commits whose message carries the fix line", () => {
-    expect(countFixCommits(["Build #7", "Fix\n\nFactory-Fix: https://x/runs/1", "Factory-Fix: in the subject"])).toBe(2);
-    expect(countFixCommits(["Fix\n\nsee Factory-Fix: elsewhere"])).toBe(0);
-    // A try is a commit, so one that carries the line twice is still one.
-    expect(countFixCommits(["Fix\n\nFactory-Fix: https://x/runs/1\nFactory-Fix: https://x/runs/2"])).toBe(1);
-  });
-});

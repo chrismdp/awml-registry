@@ -34,12 +34,8 @@ const verdicts = ["ship", "show", "ask"] as const;
 // The factory's app's bot, which makes the build's and the fixer's commits.
 const factory = "awml-factory[bot]";
 // The line each fix commit's message carries, which survives a rebase. fix.yml writes it, and counts
-// the fix commits on a branch by it, as the rule does.
-const fixLine = /^Factory-Fix: /m;
-
-export function countFixCommits(messages: string[]): number {
-  return messages.filter((message) => fixLine.test(message)).length;
-}
+// the fix commits on a branch by the same pattern, in jq, as the rule does.
+export const fixLine = /(^|\n)Factory-Fix: /;
 
 const testFile = /\.test\.(ts|tsx|mjs)$/;
 // A removed line that declared a test or a group of them, including one that was only changed to
@@ -242,15 +238,15 @@ function readCommits(repo: string, judged: Judged) {
   const email = new RegExp(`^[0-9]+\\+${factory.replace(/[[\]]/g, "\\$&")}@users\\.noreply\\.github\\.com$`);
   let foreign = 0;
   let merges = 0;
-  const messages: string[] = [];
+  let fixes = 0;
   const records = nulFields(run(repo, ["log", "-z", "--format=%P%x1f%ae%x1f%ce%x1f%B", `${base}..${head}`]));
   for (const record of records) {
     const [parents, author, committer, message] = record.split("\x1f");
     if (parents.trim().split(" ").length > 1) merges++;
     else if (!email.test(author) || !email.test(committer)) foreign++;
-    messages.push(message ?? "");
+    if (fixLine.test(message ?? "")) fixes++;
   }
-  return { foreign, merges, fixes: countFixCommits(messages) };
+  return { foreign, merges, fixes };
 }
 
 // numstat counts a binary file's lines as "-", so those files are named instead.

@@ -4,7 +4,7 @@
 # starts claude with HOME set to that home and --setting-sources user, so these are the only
 # settings it loads, and none in the tree can loosen them.
 #
-#   claude-settings.sh HOME [--write DIR]... [--deny-write PATH]... [--domain HOST]...
+#   claude-settings.sh HOME [--deny-write PATH]...
 #
 # Writes are also denied, whatever the flags say, to the places on the runner a command could use to
 # reach beyond its job's sandbox: the runner's file-command folder, which sets a step's outputs and
@@ -21,22 +21,18 @@
 # refusing to start without it; no retry of a command outside it, and no command excluded from it;
 # a fresh /proc, so a command sees no process outside the sandbox, Claude Code's own included,
 # whose environment holds the login token; no user namespaces inside it; writes to the working
-# directory, the session's own temporary directory, the added folders and each --write folder, but
-# never to a --deny-write path; no read of Docker's socket, through which a command could start a
-# privileged container; and the network only to the --domain hosts, every other host refused
-# rather than asked about.
+# directory, the session's own temporary directory and the added folders, but never to a
+# --deny-write path; no read of Docker's socket, through which a command could start a
+# privileged container; and no network, every host refused rather than asked about, since the
+# dependencies are installed before a session starts.
 set -euo pipefail
 
 home="$1"
 shift
-writable=()
 denied=()
-domains=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --write) writable+=("$2"); shift 2 ;;
     --deny-write) denied+=("$2"); shift 2 ;;
-    --domain) domains+=("$2"); shift 2 ;;
     *) echo "claude-settings.sh doesn't know $1" >&2; exit 1 ;;
   esac
 done
@@ -84,9 +80,7 @@ fi
 mkdir -p "$home/.claude"
 list() { if [ $# -gt 0 ]; then printf '%s\n' "$@"; fi | jq -Rsc 'split("\n") | map(select(. != "")) | reduce .[] as $p ([]; if index([$p]) then . else . + [$p] end)'; }
 jq -n \
-  --argjson write "$(list "${writable[@]}")" \
   --argjson deny "$(list "${denied[@]}")" \
-  --argjson domains "$(list "${domains[@]}")" \
   '{
     sandbox: {
       enabled: true,
@@ -96,7 +90,7 @@ jq -n \
       excludedCommands: [],
       enableWeakerNestedSandbox: false,
       allowNestedUserNamespaces: false,
-      filesystem: {allowWrite: $write, denyWrite: $deny, denyRead: ["/var/run/docker.sock", "/run/docker.sock"]},
-      network: {allowedDomains: $domains, strictAllowlist: true}
+      filesystem: {allowWrite: [], denyWrite: $deny, denyRead: ["/var/run/docker.sock", "/run/docker.sock"]},
+      network: {allowedDomains: [], strictAllowlist: true}
     }
   }' > "$home/.claude/settings.json"

@@ -940,13 +940,13 @@ describe("the factory's path patterns", () => {
 describe("claude-settings.sh", () => {
   // The keys and values are Claude Code's own, from its sandboxing documentation: the sandbox on,
   // refusing to start without it, no retry outside it, no command excluded from it, a fresh /proc
-  // so a command can't see Claude Code's process, no nested namespaces, and only the hosts the
-  // session needs, with every other host refused.
-  it.runIf(canRehearse)("writes the session's user settings with the sandbox on and its network held to the named hosts", () => {
+  // so a command can't see Claude Code's process, no nested namespaces, and no host at all: the
+  // dependencies are installed before a session starts.
+  it.runIf(canRehearse)("writes the session's user settings with the sandbox on and no network", () => {
     const root = scratch();
     const home = join(root, "home");
     const run = rehearse(
-      script("claude-settings.sh", [home, "--write", "/tmp/npm-cache", "--deny-write", "./.git", "--domain", "registry.npmjs.org"]),
+      script("claude-settings.sh", [home, "--deny-write", "./.git"]),
       { root, env: { RUNNER_TOOL_CACHE: "/opt/hostedtoolcache", HOME: "/home/runner" } },
     );
     expect(run.failed, run.printed).toBe(false);
@@ -961,7 +961,7 @@ describe("claude-settings.sh", () => {
         enableWeakerNestedSandbox: false,
         allowNestedUserNamespaces: false,
         filesystem: {
-          allowWrite: ["/tmp/npm-cache"],
+          allowWrite: [],
           denyWrite: expect.arrayContaining([
             "./.git",
             join(root, "runner/_runner_file_commands"),
@@ -971,7 +971,7 @@ describe("claude-settings.sh", () => {
           ]),
           denyRead: ["/var/run/docker.sock", "/run/docker.sock"],
         },
-        network: { allowedDomains: ["registry.npmjs.org"], strictAllowlist: true },
+        network: { allowedDomains: [], strictAllowlist: true },
       },
     });
     // Docker's socket would let a command start a privileged container, so no command reads it.
@@ -1027,28 +1027,6 @@ describe("claude-settings.sh", () => {
     const home = join(root, "home");
     put(join(home, ".claude/settings.json"), "{}");
     expect(rehearse(script("claude-settings.sh", [home]), { root }).failed).toBe(true);
-  });
-
-  // The dependencies are installed before a session starts, with their scripts off, so no session
-  // needs the network at all.
-  it("gives no session any host", () => {
-    const domains: string[] = [];
-    for (const [file, id, job] of everyJob())
-      for (const each of steps(job)) {
-        const text = runOf(each);
-        if (!text.includes('bash "$RUNNER_TEMP/main/claude-settings.sh"')) continue;
-        const named = [...text.matchAll(/--domain ([^\s"]+)/g)].map((match) => match[1]);
-        domains.push(`${file} ${id}: ${named.join(" ")}`);
-      }
-    expect(domains.sort()).toEqual([
-      "build.yml draft: ",
-      "ci.yml classify: ",
-      "ci.yml review: ",
-      "fix.yml fix: ",
-      "resolve.yml draft: ",
-      "resolve.yml draft: ",
-      "resolve.yml draft: ",
-    ]);
   });
 });
 
@@ -3146,12 +3124,6 @@ ${permissionStub}`,
     for (const [id, job] of Object.entries(jobs))
       for (const each of steps(job))
         if (JSON.stringify(each.env ?? {}).includes("steps.app.outputs.token")) expect(`${id} ${each.id}`).toBe("write push");
-  });
-
-  it.runIf(canRehearse)("counts fix commits by the line build-rule.ts counts them by", () => {
-    const rule = readFileSync(join(__dirname, "../scripts/build-rule.ts"), "utf8");
-    expect(rule).toContain("const fixLine = /^Factory-Fix: /m;");
-    expect(stepWithId(jobs.decide, "ready").run).toContain('test("(^|\\n)Factory-Fix: ")');
   });
 });
 
