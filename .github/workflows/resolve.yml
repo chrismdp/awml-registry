@@ -287,6 +287,15 @@ jobs:
           # placeholders it leaves at the rest can be taken away after the sessions.
           bash "$HOST_DIR/main/placeholders.sh" record "$GITHUB_WORKSPACE" "$HOST_DIR/baseline/protected-workspace"
           cp "$GITHUB_WORKSPACE/.git/config" "$HOST_DIR/baseline/workspace-git-config"
+          # actions/checkout leaves .git/config.worktree, which git reads once worktreeConfig is on,
+          # so it's kept too, if it's there, and only as a plain file.
+          if [ -e "$GITHUB_WORKSPACE/.git/config.worktree" ] || [ -L "$GITHUB_WORKSPACE/.git/config.worktree" ]; then
+            if [ ! -f "$GITHUB_WORKSPACE/.git/config.worktree" ] || [ -L "$GITHUB_WORKSPACE/.git/config.worktree" ]; then
+              echo "The checkout's .git/config.worktree isn't a plain file."
+              exit 1
+            fi
+            cp "$GITHUB_WORKSPACE/.git/config.worktree" "$HOST_DIR/baseline/workspace-git-config-worktree"
+          fi
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
@@ -395,6 +404,12 @@ jobs:
           # from it, by their ids, never a branch a session could have moved.
           if ! cmp -s "$GITHUB_WORKSPACE/.git/config" "$HOST_DIR/baseline/workspace-git-config"; then
             echo "The workspace's git config changed during the sessions, so nothing is read from it."
+            exit 1
+          fi
+          if [ -e "$HOST_DIR/baseline/workspace-git-config-worktree" ] &&
+            { [ -L "$GITHUB_WORKSPACE/.git/config.worktree" ] ||
+              ! cmp -s "$GITHUB_WORKSPACE/.git/config.worktree" "$HOST_DIR/baseline/workspace-git-config-worktree"; }; then
+            echo "The workspace's git config.worktree changed during the sessions, so nothing is read from it."
             exit 1
           fi
           # Replace refs are ignored, by GIT_NO_REPLACE_OBJECTS, and a grafts file, which would

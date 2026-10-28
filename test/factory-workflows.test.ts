@@ -2382,7 +2382,7 @@ ${permissionStub}`,
   // After the session, git runs only on the workspace it started in, and only on a tree with no
   // repository nested inside it, whose own config git would read.
   describe("the patch step", () => {
-    const patch = (spoil: (repo: string, root: string) => void) => {
+    const patch = (spoil: (repo: string, root: string) => void, before: (repo: string) => void = () => {}) => {
       const root = scratch();
       const repo = join(root, "work");
       mkdirSync(repo);
@@ -2390,6 +2390,8 @@ ${permissionStub}`,
       put(join(repo, "README.md"), "A registry\n");
       git(repo, "add", "-A");
       git(repo, "commit", "-qm", "main");
+      before(repo);
+      if (existsSync(join(repo, ".git/config.worktree"))) put(join(root, "runner/baseline/git-config-worktree"), readFileSync(join(repo, ".git/config.worktree"), "utf8"));
       put(join(root, "runner/baseline/git-config"), readFileSync(join(repo, ".git/config"), "utf8"));
       put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", repo, join(repo, ".git")], { encoding: "utf8" }));
       put(join(repo, "README.md"), "Changed\n");
@@ -2448,6 +2450,27 @@ ${permissionStub}`,
       ["a link", (repo: string) => symlinkSync("/proc/self/environ", join(repo, ".npmrc"))],
     ])("refuses a protected path the session left with %s", (_, spoil) => {
       const { root, run } = patch(spoil);
+      expect(run.failed).toBe(true);
+      expect(existsSync(join(root, "runner/change/change.patch"))).toBe(false);
+    });
+
+    // GitHub's clone action leaves .git/config.worktree, with its sparse settings, before any
+    // session, and git reads it once extensions.worktreeConfig is on: it must be as it was.
+    const checkedOut = (repo: string) => {
+      git(repo, "config", "extensions.worktreeConfig", "true");
+      put(join(repo, ".git/config.worktree"), `[core]\n\tsparse${CLONE[0].toUpperCase()}${CLONE.slice(1)} = false\n`);
+    };
+    it.runIf(canRehearse)("makes the patch when the clone action's config.worktree is as it was", () => {
+      const { root, run } = patch(() => {}, checkedOut);
+      expect(run.failed, run.printed).toBe(false);
+      expect(left(root, "change/change.patch")).toContain("+Changed");
+    });
+
+    it.runIf(canRehearse)("refuses a changed config.worktree", () => {
+      const { root, run } = patch(
+        (repo) => writeFileSync(join(repo, ".git/config.worktree"), "[diff]\n\texternal = touch /tmp/owned\n"),
+        checkedOut,
+      );
       expect(run.failed).toBe(true);
       expect(existsSync(join(root, "runner/change/change.patch"))).toBe(false);
     });
@@ -4078,7 +4101,11 @@ ${permissionStub}
       put(join(root, "runner/baseline/git-config-5"), readFileSync(join(work, ".git/config"), "utf8"));
       put(join(root, "runner/pulls.tsv"), `5\t${head}\n`);
       put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", ws, join(ws, ".git")], { encoding: "utf8" }));
+      // As GitHub's clone action leaves the workspace: a config.worktree git reads.
+      git(ws, "config", "extensions.worktreeConfig", "true");
+      put(join(ws, ".git/config.worktree"), `[core]\n\tsparse${CLONE[0].toUpperCase()}${CLONE.slice(1)} = false\n`);
       put(join(root, "runner/baseline/workspace-git-config"), readFileSync(join(ws, ".git/config"), "utf8"));
+      put(join(root, "runner/baseline/workspace-git-config-worktree"), readFileSync(join(ws, ".git/config.worktree"), "utf8"));
       put(join(root, "runner/main/placeholders.sh"), readFileSync(join(github, "placeholders.sh"), "utf8"));
       execFileSync("bash", [join(github, "placeholders.sh"), "record", ws, join(root, "runner/baseline/protected-workspace")]);
       put(join(root, "runner/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", work, join(work, ".git")], { encoding: "utf8" }));
@@ -4179,7 +4206,8 @@ ${permissionStub}
       const { root, run } = rebased(
         () => {},
         (_, ws) => {
-          for (const file of [".npmrc", ".git/config.lock", ".git/config.worktree"]) put(join(ws, file), "");
+          // The clone action's config.worktree is already there, so no placeholder is made for it.
+          for (const file of [".npmrc", ".git/config.lock", ".git/config.worktree.lock"]) put(join(ws, file), "");
           writeFileSync(join(ws, ".git/commondir"), ".");
         },
       );
@@ -4191,6 +4219,14 @@ ${permissionStub}
       const { run } = rebased(
         () => {},
         (_, ws) => put(join(ws, ".npmrc"), "registry=https://example.com/\n"),
+      );
+      expect(run.failed).toBe(true);
+    });
+
+    it.runIf(canRehearse)("stops when the workspace's config.worktree changed", () => {
+      const { run } = rebased(
+        () => {},
+        (_, ws) => writeFileSync(join(ws, ".git/config.worktree"), "[uploadpack]\n\tpackObjectsHook = touch /tmp/owned\n"),
       );
       expect(run.failed).toBe(true);
     });

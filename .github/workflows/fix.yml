@@ -259,6 +259,15 @@ jobs:
           echo "::$stop::"
           mkdir -p "$HOST_DIR/baseline"
           cp .git/config "$HOST_DIR/baseline/git-config"
+          # actions/checkout leaves .git/config.worktree, which git reads once worktreeConfig is on,
+          # so it's kept too, if it's there, and only as a plain file.
+          if [ -e .git/config.worktree ] || [ -L .git/config.worktree ]; then
+            if [ ! -f .git/config.worktree ] || [ -L .git/config.worktree ]; then
+              echo "The checkout's .git/config.worktree isn't a plain file."
+              exit 1
+            fi
+            cp .git/config.worktree "$HOST_DIR/baseline/git-config-worktree"
+          fi
           stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$HOST_DIR/baseline/workspace"
           # Which of the paths Claude Code protects the tree holds, so the placeholders it leaves at
           # the rest can be taken away after the session.
@@ -358,6 +367,13 @@ jobs:
           bash "$HOST_DIR/main/placeholders.sh" clear . "$HOST_DIR/baseline/protected"
           if ! cmp -s .git/config "$HOST_DIR/baseline/git-config"; then
             echo "Git's config changed during the session, so no git runs on the tree."
+            exit 1
+          fi
+          # The checkout's config.worktree, if there was one, as it was; one that wasn't there and
+          # isn't an empty placeholder the clear above took away is refused there.
+          if [ -e "$HOST_DIR/baseline/git-config-worktree" ] &&
+            { [ -L .git/config.worktree ] || ! cmp -s .git/config.worktree "$HOST_DIR/baseline/git-config-worktree"; }; then
+            echo "Git's config.worktree changed during the session, so no git runs on the tree."
             exit 1
           fi
           # A session can write .git: replace refs are ignored, by GIT_NO_REPLACE_OBJECTS, and a
