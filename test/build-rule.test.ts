@@ -407,7 +407,6 @@ describe("judging a staged change", () => {
 // Land reads the branch's commits since main from git: the factory's own carry the app's bot as
 // author and committer, and a fix commit carries the fix line in its message.
 describe("judging the branch's commits since main", () => {
-  const factory = "awml-factory[bot]";
   const bot = ["-c", "user.name=awml-factory[bot]", "-c", "user.email=12345+awml-factory[bot]@users.noreply.github.com"];
 
   function branch() {
@@ -427,7 +426,7 @@ describe("judging the branch's commits since main", () => {
     const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     // The rule reads the change as land stages it: the head's tree in the index, at the base.
     git(repo, "reset", "-q", "--soft", base);
-    return evaluate(repo, plain, { classified: "ship", nits, base, head, factory });
+    return evaluate(repo, plain, { classified: "ship", nits, base, head });
   }
 
   it("ships a branch of the factory's commits alone", () => {
@@ -485,7 +484,7 @@ describe("judging the branch's commits since main", () => {
     commitAs(repo, bot, "src/app/side.tsx", "Side");
     const side = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
-    expect(() => evaluate(repo, plain, { classified: "ship", base: side, head, factory })).toThrow();
+    expect(() => evaluate(repo, plain, { classified: "ship", base: side, head })).toThrow();
   });
 });
 

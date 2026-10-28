@@ -186,7 +186,7 @@ jobs:
           git -C "$RUNNER_TEMP/judged" read-tree "$HEAD_SHA"
           node --experimental-strip-types "$RUNNER_TEMP/build-rule.mts" --repo "$RUNNER_TEMP/judged" \
             --rules "$RUNNER_TEMP/build-rules.yml" --classified "$classified" --nits "$nits" \
-            --base "$base" --head "$HEAD_SHA" --factory 'awml-factory[bot]' > "$RUNNER_TEMP/verdict.txt"
+            --base "$base" --head "$HEAD_SHA" > "$RUNNER_TEMP/verdict.txt"
           if [ "$LABELLED" != true ]; then
             {
               echo ask

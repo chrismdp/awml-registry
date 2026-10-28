@@ -1,6 +1,6 @@
 # Every pull request into main is checked each time it's opened or pushed to, and every commit
 # that lands on main is checked, so each commit has one CI run. A pull request from a branch of this
-# repository, opened by its own people or the app, is also reviewed, as jobs of the same run. The tests run
+# repository, opened by someone with write access, or the build's app, is also reviewed, as jobs of the same run. The tests run
 # npm ci, the type check, the lint and vitest. Beside them, three fresh Claude sessions read the
 # pull request's patch against main, one reviewing it for bugs and one for security. On a factory
 # branch, once both reviews have ended, a third session classifies the change: ship, show or ask.
@@ -21,7 +21,7 @@ parts:
   - { id: commit, kind: context, label: "The commit as pushed, and its pull request's title and description, if it has one", in: public, untrusted: true }
   - { id: tests, kind: code, op: check, label: "Run npm ci, the type check, the lint and the tests", in: public }
   - { id: record, kind: code, op: do, label: "Record each test job's result as its check on the commit", in: public }
-  - { id: whose, kind: code, op: sort, label: "Sort by rule: is this a pull_request run from a branch of this repository, opened by its own people or the app? A push to main runs the tests only", in: public }
+  - { id: whose, kind: code, op: sort, label: "Sort by rule: is this a pull_request run from a branch of this repository, opened by someone with write access, or the build's app? A push to main runs the tests only", in: public }
   - { id: bring, kind: code, op: bring-in, label: "Bring in the pull request's patch against main as data, and list the binary files it changes in a file of the job's own", in: public }
   - { id: patch, kind: context, label: "The patch applied to main, made read-only, with the list of binary files", in: public }
   - { id: repo, kind: context, label: "Main's review prompts, AGENTS.md and REVIEW.md, copied out before any session starts", in: public }
@@ -46,7 +46,7 @@ lines:
   - { from: commit, to: tests, kind: data, label: "the commit's code" }
   - { from: tests, to: record, kind: start, label: "[pass or fail]" }
   - { from: record, to: checks, kind: data }
-  - { from: whose, to: bring, kind: start, label: "[its own people's]" }
+  - { from: whose, to: bring, kind: start, label: "[someone with write access's, or the build's app's]" }
   - { from: token, to: bring, kind: data, label: "the patch and the pull request's text" }
   - { from: commit, to: bring, kind: data }
   - { from: bring, to: patch, kind: data }

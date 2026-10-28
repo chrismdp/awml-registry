@@ -22,7 +22,8 @@
 # a fresh /proc, so a command sees no process outside the sandbox, Claude Code's own included,
 # whose environment holds the login token; no user namespaces inside it; writes to the working
 # directory, the session's own temporary directory, the added folders and each --write folder, but
-# never to a --deny-write path; and the network only to the --domain hosts, every other host refused
+# never to a --deny-write path; no read of Docker's socket, through which a command could start a
+# privileged container; and the network only to the --domain hosts, every other host refused
 # rather than asked about.
 set -euo pipefail
 
@@ -89,7 +90,7 @@ jq -n \
       excludedCommands: [],
       enableWeakerNestedSandbox: false,
       allowNestedUserNamespaces: false,
-      filesystem: {allowWrite: $write, denyWrite: $deny},
+      filesystem: {allowWrite: $write, denyWrite: $deny, denyRead: ["/var/run/docker.sock", "/run/docker.sock"]},
       network: {allowedDomains: $domains, strictAllowlist: true}
     }
   }' > "$home/.claude/settings.json"

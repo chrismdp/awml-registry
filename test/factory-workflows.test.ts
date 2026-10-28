@@ -712,6 +712,22 @@ describe("the factory's workflows", () => {
     for (const [file, id, job] of everyJob()) expect(runs(job), `${file} ${id}`).not.toContain("acceptEdits");
   });
 
+  // The runner user could start a privileged container through Docker's socket from inside the
+  // sandbox, so each job that runs a session closes the socket to it before the session starts.
+  it("close Docker's socket before any session starts", () => {
+    const closed: string[] = [];
+    for (const [file, id, job] of everyJob()) {
+      if (!holdsClaude(job)) continue;
+      const all = steps(job);
+      const first = all.findIndex((each) => /\bclaude -p\b|bash "\$RUNNER_TEMP\/main\/resolve-session\.sh"/.test(each.run ?? ""));
+      const before = all.slice(0, first).map(runOf).join("\n");
+      expect(first, `${file} ${id}`).toBeGreaterThan(0);
+      expect(before, `${file} ${id}`).toContain("if [ -e /var/run/docker.sock ]; then sudo chmod 600 /var/run/docker.sock; fi");
+      closed.push(`${file} ${id}`);
+    }
+    expect(closed.sort()).toEqual(["build.yml draft", "ci.yml classify", "ci.yml review", "fix.yml fix", "resolve.yml draft"]);
+  });
+
   it("install one exact version of Claude Code everywhere", () => {
     const installs: string[] = [];
     for (const [file, id, job] of everyJob())
@@ -953,10 +969,13 @@ describe("claude-settings.sh", () => {
             "/home/runner/actions-runner",
             "/home/runner/runners",
           ]),
+          denyRead: ["/var/run/docker.sock", "/run/docker.sock"],
         },
         network: { allowedDomains: ["registry.npmjs.org"], strictAllowlist: true },
       },
     });
+    // Docker's socket would let a command start a privileged container, so no command reads it.
+    expect(settings.sandbox.filesystem.denyRead).toEqual(["/var/run/docker.sock", "/run/docker.sock"]);
   });
 
   it.runIf(canRehearse)("denies writes to every PATH entry and every bin folder in the tool cache", () => {
@@ -1947,7 +1966,11 @@ ${permissionStub}`,
   });
 
   it("name who's trusted as someone with write access, or the build's app", () => {
-    const texts = [...workflowFiles.map((file) => join(github, "workflows", file)), join(github, "build-prompt.md")].map((path) =>
+    const texts = [
+      ...workflowFiles.map((file) => join(github, "workflows", file)),
+      join(github, "build-prompt.md"),
+      ...readdirSync(join(github, "drawings")).map((file) => join(github, "drawings", file)),
+    ].map((path) =>
       squash(readFileSync(path, "utf8").replace(/^\s*# ?/gm, "")),
     );
     for (const text of texts) expect(text).not.toMatch(/own people|owner, members?|members and collaborators/);
@@ -2565,6 +2588,10 @@ ${permissionStub}
   });
 
   // A person who takes the label off means the factory shouldn't land it by itself.
+  it("gives the rule no factory login, which it holds itself", () => {
+    expect(stepWithId(jobs.find, "judge").run).not.toContain("--factory");
+  });
+
   it.runIf(canRehearse)("asks when the build label was taken off the issue", () => {
     const { run } = judge("success", { labelled: "false" });
     expect(run.failed, run.printed).toBe(false);

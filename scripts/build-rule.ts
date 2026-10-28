@@ -8,7 +8,7 @@
 //
 // It needs nothing but Node and git, so the job that runs it installs nothing:
 //   node --experimental-strip-types scripts/build-rule.ts --repo . --rules .github/build-rules.yml \
-//     --classified ship --nits 0 --base <sha> --head <sha> --factory awml-factory[bot]
+//     --classified ship --nits 0 --base <sha> --head <sha>
 // This is the registry's copy of AWML's internal/buildrule, with the registry's own test files.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -22,17 +22,17 @@ import { parseArgs } from "node:util";
 export type Config = { reviewPaths: string[]; reviewNonTests: string[]; reviewAnywhere: string[]; maxChangedLines: number };
 export type Verdict = { verdict: "ship" | "show" | "ask"; reasons: string[] };
 // What land read from GitHub and git: Classify's verdict, or "missing" when its check has none; how
-// many Nits the reviews' checks carry; and the branch's commits since main, from base to head, with
-// the login of the factory's app, whose bot makes the factory's commits.
+// many Nits the reviews' checks carry; and the branch's commits since main, from base to head.
 export type Judged = {
   classified?: string;
   nits?: number;
   base?: string;
   head?: string;
-  factory?: string;
 };
 
 const verdicts = ["ship", "show", "ask"] as const;
+// The factory's app's bot, which makes the build's and the fixer's commits.
+const factory = "awml-factory[bot]";
 // The line each fix commit's message carries, which survives a rebase. fix.yml writes it, and counts
 // the fix commits on a branch by it, as the rule does.
 const fixLine = /^Factory-Fix: /m;
@@ -234,11 +234,10 @@ export function evaluate(repo: string, config: Config, judged: Judged = {}): Ver
 // commit. Only people with write access can push to a branch here, and they are trusted, so the
 // rule takes the emails as given, though such a person could forge them. The factory never merges, so a commit with two parents is counted apart.
 function readCommits(repo: string, judged: Judged) {
-  const { base, head, factory } = judged;
+  const { base, head } = judged;
   if (!base || !head || !/^[0-9a-f]{40}$/.test(base) || !/^[0-9a-f]{40}$/.test(head)) {
     throw new Error("the branch's base and head must both be commit ids");
   }
-  if (!factory || !/^[a-z0-9-]+\[bot\]$/.test(factory)) throw new Error("the factory's bot must be an app's login");
   run(repo, ["merge-base", "--is-ancestor", base, head]);
   const email = new RegExp(`^[0-9]+\\+${factory.replace(/[[\]]/g, "\\$&")}@users\\.noreply\\.github\\.com$`);
   let foreign = 0;
@@ -345,7 +344,6 @@ function main() {
       nits: { type: "string", default: "0" },
       base: { type: "string" },
       head: { type: "string" },
-      factory: { type: "string" },
     },
   });
   if (!/^[0-9]+$/.test(values.nits)) throw new Error(`the count of Nits must be a whole number: ${values.nits}`);
@@ -354,7 +352,6 @@ function main() {
     nits: Number(values.nits),
     base: values.base,
     head: values.head,
-    factory: values.factory,
   });
   console.log(verdict.verdict);
   for (const reason of verdict.reasons) console.log(reason);
