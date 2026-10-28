@@ -1,10 +1,11 @@
 // A workflow's drawing as a graph the server lays out (issue #62), read from
 // the engine's own model of what it draws: `graph`, which gives the parts,
 // the boxes, the lines and the comments as data, with nothing laid out (AWML
-// 0.7.1, issue #69). Every text field the engine gives is exactly as the file
-// wrote it, unescaped, line breaks included, so it reaches the page only as
-// React text or an attribute React escapes: never as HTML, and never in SVG
-// built from strings.
+// 0.7.1, issue #69), and from AWML 0.8 where untrusted text goes (#83).
+// Every text field the engine gives is exactly as the file wrote it,
+// unescaped, line breaks included, so it reaches the page only as React text
+// or an attribute React escapes: never as HTML, and never in SVG built from
+// strings.
 
 export type PartKind = "trigger" | "context" | "connection" | "surface" | "outside" | "ai" | "code" | "person" | "part";
 
@@ -19,7 +20,10 @@ export type Part = {
   // The scope or box it is drawn in.
   scope?: string;
   // Marked untrusted in the file: its text may not be what it seems.
-  untrusted?: boolean;
+  untrusted?: true;
+  // Its text reaches an outside action that nothing stops and nobody
+  // accepted the risk of (AWML 0.8).
+  unstopped?: true;
 };
 
 // A scope (dashed, who may see), a place a platform view puts parts (filled,
@@ -37,6 +41,13 @@ export type Scope = {
 
 export type LineStyle = "solid" | "dotted" | "thick";
 
+// How a line carries untrusted text, as AWML 0.8's graph says (#83): it
+// carries the text, up to and into what stops it; it is the line out of what
+// stopped it; or it is on the text's way to an outside action that nothing
+// stops and nobody accepted the risk of.
+export type Untrusted = "carries" | "stopped" | "unstopped";
+const UNTRUSTED = new Set<string>(["carries", "stopped", "unstopped"]);
+
 export type Line = {
   id: string;
   from: string;
@@ -49,6 +60,7 @@ export type Line = {
   broken?: boolean;
   // A read the design refuses, which ends in a cross.
   refused?: boolean;
+  untrusted?: Untrusted;
 };
 
 // A note, and the part (or scope) it belongs to: a note tied to several
@@ -75,6 +87,7 @@ export type EngineGraph = {
     op?: string;
     tier?: string;
     untrusted?: boolean;
+    unstopped?: boolean;
   }[];
   lines: {
     from: string;
@@ -85,6 +98,7 @@ export type EngineGraph = {
     publishes?: boolean;
     widens?: string[];
     breaks?: string[];
+    untrusted?: string;
   }[];
   comments: { id: string; label: string; in?: string; gap: boolean; ties: string[] }[];
   places: { id: string; fill: string; stroke: string }[];
@@ -115,8 +129,42 @@ const BESIDE = new Set(["context", "connector", "surface"]);
 const folded = (text: unknown) => String(text ?? "").replace(/\s+/g, " ").trim();
 
 // A colour, when it is one: only a hex colour is taken, so nothing but a
-// colour reaches the page's styles.
-const colour = (value: unknown) => (typeof value === "string" && /^#[0-9a-fA-F]{3,8}$/.test(value) ? value.toLowerCase() : undefined);
+// colour reaches the page's styles. A drawing has no violet or purple in it
+// (#83), so a violet one, such as the lavender among the engine's colours for
+// places, is drawn as a grey as light as it.
+const colour = (value: unknown) =>
+  typeof value === "string" && /^#[0-9a-fA-F]{3,8}$/.test(value) ? unviolet(value.toLowerCase()) : undefined;
+
+// Each of a hex colour's red, green and blue, from 0 to 255; a colour of 4 or
+// 8 digits also has an alpha, which is kept as it is.
+function channels(hex: string): { rgb: number[]; alpha: string } {
+  const digits = hex.slice(1);
+  const short = digits.length <= 4;
+  const pairs = short ? [...digits].map((d) => d + d) : digits.match(/../g)!;
+  return { rgb: pairs.slice(0, 3).map((p) => parseInt(p, 16)), alpha: pairs[3] ?? "" };
+}
+
+// Whether a colour reads as violet or purple: a hue from indigo, past
+// violet, to purple, 228° to 320°, with enough colour in it to see.
+function isViolet(hex: string) {
+  const [r, g, b] = channels(hex).rgb.map((c) => c / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const chroma = max - min;
+  if (chroma < 0.04) return false;
+  const hue = max === r ? 60 * (((g - b) / chroma + 6) % 6) : max === g ? 60 * ((b - r) / chroma + 2) : 60 * ((r - g) / chroma + 4);
+  return hue >= 228 && hue <= 320;
+}
+
+// A colour that isn't violet as it is, and a violet one as the grey of its lightness.
+function unviolet(hex: string) {
+  if (!isViolet(hex)) return hex;
+  const { rgb, alpha } = channels(hex);
+  const grey = Math.round((Math.max(...rgb) + Math.min(...rgb)) / 2)
+    .toString(16)
+    .padStart(2, "0");
+  return `#${grey}${grey}${grey}${alpha}`;
+}
 
 // The workflow a map's box is, as owner/slug: the name a ref gives it, or the
 // path the registry gave it at, which ends owner/slug.yaml.
@@ -127,15 +175,16 @@ function workflowOf(group: EngineGraph["groups"][number]) {
 }
 
 // The registry's graph of the engine's: its parts with their kinds, a step's
-// kind of work and an outside action's tier; its scopes with their nesting,
-// a platform view's colours and a map's workflows; the lines drawn, each with
-// its style and which ends have arrows; and the comments as notes on what
-// they are tied to. A tie and a hidden line aren't drawn, and nor is a line
-// one of whose ends isn't.
+// kind of work and an outside action's tier, and whether untrusted text comes
+// from it, and reaches an outside action unstopped; its scopes with their
+// nesting, a platform view's colours and a map's workflows; the lines drawn,
+// each with its style, which ends have arrows and how it carries untrusted
+// text; and the comments as notes on what they are tied to. A tie and a
+// hidden line aren't drawn, and nor is a line one of whose ends isn't.
 export function readGraph(g: EngineGraph): Graph {
   const groups = new Set(g.groups.map((s) => s.id));
   const places = new Map(g.places.map((p) => [p.id, p]));
-  const dashed = g.view === "security" || g.view === "untrusted";
+  const dashed = g.view === "security";
   const scopes: Scope[] = g.groups.map((s) => {
     const place = places.get(s.id);
     const fill = colour(place?.fill);
@@ -163,7 +212,8 @@ export function readGraph(g: EngineGraph): Graph {
       if (colon >= 0) part.label = part.label.slice(0, colon).trim();
     }
     if (p.in && groups.has(p.in)) part.scope = p.in;
-    if (p.untrusted) part.untrusted = true;
+    if (p.untrusted === true) part.untrusted = true;
+    if (p.unstopped === true) part.unstopped = true;
     return part;
   });
   const ends = new Set([...kinds.keys(), ...groups]);
@@ -178,6 +228,7 @@ export function readGraph(g: EngineGraph): Graph {
         ? "dotted"
         : "solid";
     const refused = l.kind === "refused";
+    const untrusted = typeof l.untrusted === "string" && UNTRUSTED.has(l.untrusted) ? (l.untrusted as Untrusted) : undefined;
     lines.push({
       id: `line-${lines.length}`,
       from: l.from,
@@ -188,6 +239,7 @@ export function readGraph(g: EngineGraph): Graph {
       arrowEnd: !refused && (l.points === "to" || l.points === "both"),
       ...(l.breaks?.length ? { broken: true } : {}),
       ...(refused ? { refused: true } : {}),
+      ...(untrusted ? { untrusted } : {}),
     });
   }
   const notes: Note[] = [];

@@ -5,7 +5,7 @@ import { parse } from "yaml";
 import { flowOnly, graphOf, readGraph, type EngineGraph, type Graph } from "@/components/flow/graph";
 import { engine } from "@/engine";
 
-// The graph AWML 0.7.1's native `awml graph` prints, as the registry gets it from the engine
+// The graph AWML 0.8.0's native `awml graph` prints, as the registry gets it from the engine
 // (npm run engine:update writes them): the security view of the registry's own factory,
 // chrismdp/issue-to-pull-request, the map of the factory system it is in, the dinners example's
 // security view and its home implementation, and the bakery's map, where one workflow starts
@@ -30,7 +30,7 @@ const line = (g: Graph, from: string, to: string) => g.lines.find((l) => l.from 
 const squash = (s: string) => s.replace(/\s+/g, " ").trim();
 
 // The registry's name for each of AWML's kinds of part.
-const KIND: Record<string, string> = { connector: "connection", review: "person", approval: "person", fork: "part" };
+const KIND: Record<string, string> = { connector: "connection", review: "person", approval: "person" };
 
 describe("reading a drawing's graph from the engine", () => {
   it("reads every part but a comment, with its kind, its label and the scope it is in", () => {
@@ -117,7 +117,9 @@ describe("reading a drawing's graph from the engine", () => {
   });
 
   it("takes only a colour for a place, draws a line that breaks a rule red, a refused read with a cross, and no hidden line", () => {
-    // The registry draws only files that pass check, so no stored drawing has a red line yet.
+    // A line that breaks a rule is red, its label followed by the rule's words. From AWML 0.8 the
+    // registry draws one, for untrusted text that reaches an outside action that nothing stops
+    // (see "untrusted text" below).
     const g = readGraph({
       view: "platform",
       groups: [{ id: "p", label: "P" }],
@@ -277,5 +279,111 @@ describe("text as the file wrote it", () => {
     });
     expect(g.lines).toEqual([]);
     expect(g.notes).toEqual([{ id: "c", text: "On a ghost" }]);
+  });
+});
+
+// AWML 0.8 draws untrusted text in the main view (chrismdp/awml#151, registry issue #83): `graph`
+// marks a part marked untrusted, and unstopped when its text reaches an outside action that
+// nothing stops and nobody accepted; and says of each line whether it carries the text, is the
+// line out of what stopped it, or is on its way, unstopped, to an outside action. What each test
+// expects is read from the YAML the graph is of.
+describe("untrusted text (#83)", () => {
+  // A cake order: a cleaning step stops the form's text on one way, and Ana's yes on the other.
+  const stopped = graphOf(fixture("untrusted-text.graph.json"));
+  // Thank-yous to reviews, under Ana's standing approval, which accepts the risk.
+  const accepted = graphOf(fixture("untrusted-risk-accepted.graph.json"));
+  // Enquiries stored in 0.7: the form's text is labelled in the inbox with nothing to stop it,
+  // and a reply to it goes out only on Ana's yes. Its graph is of the file converted to 0.8.
+  const enquiries = graphOf(fixture("older/enquiries-07.graph.json"));
+  const looks = (g: Graph) => g.lines.map((l) => [l.from, l.to, l.untrusted ?? "", Boolean(l.broken)]);
+  const marked = (file: string) =>
+    (parse(fixture(file)) as { parts: { id: string; untrusted?: boolean }[] }).parts.filter((p) => p.untrusted).map((p) => p.id);
+
+  it("marks the part the text comes from, and only it", () => {
+    expect(marked("untrusted-text.yaml")).toEqual(["form"]);
+    expect(stopped.parts.filter((p) => p.untrusted || p.unstopped)).toEqual([
+      { id: "form", kind: "trigger", label: "An order on the website's form", scope: "bakery", untrusted: true },
+    ]);
+    expect(marked("untrusted-risk-accepted.yaml")).toEqual(["reviews"]);
+    expect(accepted.parts.filter((p) => p.untrusted || p.unstopped).map((p) => p.id)).toEqual(["reviews"]);
+  });
+
+  it("carries the text up to what stops it, then leaves the line out of the stop, then nothing", () => {
+    expect(looks(stopped)).toEqual([
+      ["form", "keep", "carries", false],
+      // The cleaning step keeps only the cake, the quantity and the date.
+      ["keep", "book", "stopped", false],
+      ["book", "rota", "", false],
+      ["form", "draft", "carries", false],
+      ["draft", "ask", "carries", false],
+      ["ask", "approve", "carries", false],
+      // Ana's yes to the exact reply.
+      ["approve", "send", "stopped", false],
+    ]);
+  });
+
+  it("keeps carrying the text through a standing approval that accepts the risk", () => {
+    expect(looks(accepted)).toEqual([
+      ["evening", "draft", "", false],
+      ["reviews", "draft", "carries", false],
+      ["draft", "post", "carries", false],
+      ["post", "approval", "carries", false],
+      ["approval", "reply", "carries", false],
+      ["approval", "list", "carries", false],
+    ]);
+  });
+
+  it("marks the source and the whole way to an outside action nothing stops, upstream of a branch too, and the rule it breaks", () => {
+    expect(marked("older/enquiries-07.yaml")).toEqual(["form"]);
+    expect(enquiries.parts.find((p) => p.id === "form")).toMatchObject({ untrusted: true, unstopped: true });
+    expect(enquiries.parts.filter((p) => p.unstopped).map((p) => p.id)).toEqual(["form"]);
+    expect(looks(enquiries)).toEqual([
+      // The form's text branches after sorting: red wins on the way to the branch.
+      ["form", "sort", "unstopped", false],
+      ["sort", "file", "unstopped", false],
+      ["file", "label", "unstopped", true],
+      ["sort", "draft", "carries", false],
+      ["draft", "ask", "carries", false],
+      ["ask", "approve", "carries", false],
+      ["approve", "send", "stopped", false],
+    ]);
+    expect(line(enquiries, "file", "label")?.label).toBe(
+      'untrusted text from part "form" reaches outside action "label" with nothing to stop it or accept the risk',
+    );
+  });
+
+  it("takes only the three ways the engine draws a line, and nothing for a part but true", () => {
+    const g = readGraph({
+      view: "security",
+      groups: [],
+      parts: [
+        { id: "a", kind: "trigger", label: "A", untrusted: "yes" as unknown as boolean, unstopped: 1 as unknown as boolean },
+        { id: "b", kind: "code", label: "B" },
+      ],
+      lines: [
+        { from: "a", to: "b", kind: "start", points: "to", untrusted: "tainted" },
+        { from: "b", to: "a", kind: "data", points: "to", untrusted: "constructor" },
+      ],
+      comments: [],
+      places: [],
+    });
+    expect(g.parts).toEqual([
+      { id: "a", kind: "trigger", label: "A" },
+      { id: "b", kind: "code", label: "B" },
+    ]);
+    expect(g.lines.map((l) => l.untrusted)).toEqual([undefined, undefined]);
+  });
+});
+
+// Registry issue #83: no violet or purple anywhere in a drawing. The engine gives a platform
+// view's places colours from a palette with a lavender in it, which the registry draws grey.
+describe("a place's colours", () => {
+  it("are never violet: a violet place is drawn in a grey as light as it", () => {
+    const home = graphOf(fixture("dinners-home.graph.json"));
+    const wall = JSON.parse(fixture("dinners-home.graph.json")).places.find((p: { id: string }) => p.id === "wall");
+    expect(wall).toEqual({ id: "wall", fill: "#efe6fa", stroke: "#d3c2ea" });
+    expect(home.scopes.find((s) => s.id === "wall")).toMatchObject({ fill: "#f0f0f0", stroke: "#d6d6d6" });
+    // The others keep the engine's colours.
+    expect(home.scopes.find((s) => s.id === "app")).toMatchObject({ fill: "#fbe9df", stroke: "#ecc7b2" });
   });
 });

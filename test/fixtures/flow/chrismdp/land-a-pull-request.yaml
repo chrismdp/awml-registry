@@ -4,7 +4,7 @@
 # send a change to review but never skip one. A straightforward change the app sets to merge by
 # itself. Otherwise the person who added the label is asked to review it, and merges it from their
 # own account, which is their yes. Main's own rule holds every merge until CI has passed.
-awml: "0.7"
+awml: "0.8"
 title: A pull request lands once CI has run
 scopes:
   - { id: public, label: "public: anyone who reads the repository", processing: any }

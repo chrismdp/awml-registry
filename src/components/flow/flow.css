@@ -1,7 +1,11 @@
 /* The registry's drawing (issue #62): the server's SVG and React Flow drawing
    the same pieces (flow/Graphic.tsx) in the site's own look. The kinds keep
    AWML's colours; the steps use the site's. Sizes and text positions are set
-   in flow/drawing.ts, which the server lays out by, not here. */
+   in flow/drawing.ts, which the server lays out by, not here. A drawing has no
+   violet or purple in it (#83), so its focus is the site's ink, not its link.
+   Untrusted text (#83) is drawn orange where it goes, green out of what
+   stopped it, and red the whole way to an outside action nothing stops: each
+   reads at 3:1 or more on white and on the site's ink. */
 .flow-frame, .flow-static {
   --trigger-fill: #fbe1ee; --trigger-line: #a33a74;
   --context-fill: #e2eef9; --context-line: #3d6fa3;
@@ -9,9 +13,11 @@
   --outside-fill: #fde4dc; --outside-line: #b5532f;
   --surface-fill: var(--paper); --surface-line: #2a2d35;
   --broken: #d0342c;
+  --untrusted: #d67200;
+  --stopped: #109a74;
 }
 .flow-frame { overflow: hidden; border-radius: inherit; }
-.flow-frame:focus-visible { outline: 3px solid var(--link); outline-offset: -3px; }
+.flow-frame:focus-visible { outline: 3px solid var(--ink); outline-offset: -3px; }
 /* The server's SVG fills the room the controls leave, as viewport.ts's fit does. */
 .flow-frame .flow-static { position: absolute; inset: 72px 20px 64px 20px; width: calc(100% - 40px); height: calc(100% - 136px); margin: auto; display: block; }
 .flow-static, .flow-node-svg { font-family: Inter, var(--sans); overflow: visible; }
@@ -52,6 +58,10 @@
 .flow-kind-outside .flow-caption { fill: var(--outside-line); }
 .flow-tier rect { fill: var(--paper); stroke: var(--outside-line); stroke-width: 1px; }
 .flow-tier text { fill: var(--outside-line); }
+/* A part untrusted text comes from (#83): a thick orange outline, or red when
+   its text reaches an outside action that nothing stops. */
+.flow-part.untrusted .flow-shape { stroke: var(--untrusted); stroke-width: 3px; }
+.flow-part.unstopped .flow-shape { stroke: var(--broken); stroke-width: 3px; }
 /* A part linked to other workflows (#55): a chain mark in its top-right corner,
    and an outline when focused or when the address's fragment names it. */
 .part-link-mark circle { fill: var(--ink); stroke: var(--paper); stroke-width: 2px; }
@@ -60,8 +70,8 @@
 .flow-static a:focus { outline: none; }
 .flow-static a:focus-visible .flow-shape, .flow-static a:focus-visible .flow-scope-card,
 .react-flow__node:focus-visible .flow-shape, .react-flow__node:focus-visible .flow-scope-card,
-.part-target .flow-shape { stroke: var(--link); stroke-width: 3px; }
-.part-target { filter: drop-shadow(0 0 3px var(--link)); }
+.part-target .flow-shape { stroke: var(--ink); stroke-width: 3px; }
+.part-target { filter: drop-shadow(0 0 3px rgba(22, 23, 27, 0.5)); }
 
 /* Scopes: soft cards holding their parts, their name and who they are for at the top. */
 .flow-scope-card { fill: var(--paper); stroke: var(--rule); stroke-width: 1.5px; }
@@ -77,16 +87,23 @@
 .flow-scope.linked:hover .flow-scope-card { stroke: var(--ink); stroke-width: 2px; }
 
 /* Lines: the workflow's own flow solid, data dotted and paler, a standing rule
-   thick, and a line that breaks a rule red. */
+   thick, and a line that breaks a rule red. Untrusted text (#83) makes a line
+   thick: orange where it carries the text, up to and into what stops it, green
+   out of what stopped it, and red the whole way to an outside action that
+   nothing stops; a dotted line keeps its dashes. */
 .flow-line { fill: none; }
 .flow-line.solid { stroke: #5d6472; stroke-width: 1.6px; }
 .flow-line.dotted { stroke: #9aa2af; stroke-width: 1.4px; stroke-dasharray: 4 4; }
 .flow-line.thick { stroke: #3e424b; stroke-width: 3px; stroke-dasharray: 6 4; }
-.flow-line.broken { stroke: var(--broken); stroke-width: 2.5px; }
+.flow-line.carries { stroke: var(--untrusted); stroke-width: 3px; }
+.flow-line.stopped { stroke: var(--stopped); stroke-width: 3px; }
+.flow-line.broken, .flow-line.unstopped { stroke: var(--broken); stroke-width: 3px; }
 .flow-arrow.solid path { fill: #5d6472; }
 .flow-arrow.dotted path { fill: #9aa2af; }
 .flow-arrow.thick path { fill: #3e424b; }
 .flow-arrow.broken path { fill: var(--broken); }
+.flow-arrow.carries path { fill: var(--untrusted); }
+.flow-arrow.stopped path { fill: var(--stopped); }
 .flow-arrow.cross path { fill: none; stroke: #5d6472; stroke-width: 1.6px; stroke-linecap: round; }
 /* Once React Flow draws them, each label sits in a layer above every line. */
 .flow-label-svg { position: absolute; left: 0; top: 0; }
@@ -107,7 +124,7 @@
 .flow-note-mark svg { overflow: visible; }
 .flow-note-mark:hover .flow-note-icon circle, .flow-note-mark:focus-visible .flow-note-icon circle { fill: var(--ink); stroke: var(--ink); }
 .flow-note-mark:hover .flow-note-icon path, .flow-note-mark:focus-visible .flow-note-icon path { stroke: var(--paper); }
-.flow-note-mark:focus-visible { outline: 3px solid var(--link); outline-offset: 1px; }
+.flow-note-mark:focus-visible { outline: 3px solid var(--ink); outline-offset: 1px; }
 .flow-note-tip { max-width: 300px; padding: 10px 14px; border-radius: 14px; background: var(--ink); color: var(--paper); font-family: var(--sans); font-size: 13px; line-height: 1.45; box-shadow: 0 6px 20px rgba(22, 23, 27, 0.2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .flow-note-tip p { margin: 0; }
 .flow-note-tip p + p { margin-top: 6px; }
@@ -139,7 +156,7 @@ html:has(.flow-note-dialog[open]) { overflow: hidden; }
 .flow-toggle[aria-pressed="true"]::before { background: var(--ink) radial-gradient(circle at 20px 8px, var(--paper) 5px, transparent 5.5px); }
 .flow-toggle[aria-pressed="true"] { color: var(--ink); }
 .flow-zoom button { min-width: 36px; padding: 6px 10px; }
-.flow-pills button:focus-visible, .flow-toggle:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+.flow-pills button:focus-visible, .flow-toggle:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
 @media (max-width: 600px) {
   .flow-controls { gap: 6px; }
   .flow-switches { top: 10px; right: 10px; }

@@ -73,6 +73,7 @@ export const wasmEngine: Engine = {
     }
   }),
   check: memoise(async (yaml: string) => (await awml()).check(yaml)),
+  unsound: memoise(async (yaml: string) => (await awml()).unsound(yaml)),
   warnings: memoise(async (yaml: string) => (await awml()).warnings(yaml)),
   checks: memoise(async (yaml: string) => listChecks([{ file: "workflow.yaml", source: yaml }])),
   checksWith: memoise(async (file: Named, others: Named[]) => listChecks([file, ...others])),

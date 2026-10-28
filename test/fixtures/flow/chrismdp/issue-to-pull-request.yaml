@@ -7,7 +7,7 @@
 # its risk. The app then pushes the branch and the pictures and opens the pull request, which
 # lands by land-a-pull-request once CI has run. A failed check, or an Important finding before the
 # third try, goes to retry-a-build.
-awml: "0.7"
+awml: "0.8"
 title: An issue becomes a pull request
 scopes:
   - { id: public, label: "public: anyone who reads the repository", processing: any }

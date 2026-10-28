@@ -1,6 +1,6 @@
 # An AWML 0.7 workflow with mistakes and no warnings: a line to a part that isn't there, and
 # a part its implementation doesn't place.
-awml: "0.7"
+awml: "0.8"
 title: Broken bread
 scopes:
   - { id: bakery, label: "Bakery", processing: any }

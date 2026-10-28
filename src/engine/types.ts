@@ -36,10 +36,19 @@ export type Summary = {
   // ref between them, with the titles of the workflows that hold it.
   shared?: { label: string; kind: string; workflows: string[] }[] | null;
   // Each part marked untrusted, by its label, with the steps and outside
-  // actions its text reaches and the parts that stop it. Given several
-  // workflows, the text follows an outside action into the workflow it
-  // starts (AWML 0.7). Summaries saved before AWML 0.7 have none.
-  untrusted?: { part: string; steps: string[] | null; outsideActions: string[] | null; stoppedBy: string[] | null }[] | null;
+  // actions its text reaches, the parts that stop it and, from AWML 0.8, each
+  // outside action whose risk a standing approval in front of it accepts.
+  // Given several workflows, the text follows an outside action into the
+  // workflow it starts (AWML 0.7). Summaries saved before AWML 0.7 have none.
+  untrusted?:
+    | {
+        part: string;
+        steps: string[] | null;
+        outsideActions: string[] | null;
+        stoppedBy: string[] | null;
+        risksAccepted?: { outsideAction: string; approval: string }[] | null;
+      }[]
+    | null;
 };
 
 // What `awml fit --json` gives: for each platform, whether the workflow fits
@@ -86,6 +95,11 @@ export interface Engine {
   convert(sources: string[]): Promise<Converted>;
   // The messages `awml check` gives for one file; empty when it has no mistakes.
   check(yaml: string): Promise<string[]>;
+  // The mistakes that stop one file being drawn, as `awml draw` refuses it:
+  // every one check gives but a line that breaks a rule, such as untrusted
+  // text reaching an outside action that nothing stops, which the drawing
+  // draws red with the words of the rule it breaks (AWML 0.8, #83).
+  unsound(yaml: string): Promise<string[]>;
   // The warnings `awml check` gives for one file, such as a do step AI
   // decides. A warning is not a mistake and fails nothing.
   warnings(yaml: string): Promise<string[]>;
@@ -99,10 +113,11 @@ export interface Engine {
   checksWith(file: Named, others: Named[]): Promise<ListedCheck[]>;
   // One workflow's summary from its files. The files must pass check.
   summarise(files: Files): Promise<Summary>;
-  // What one file that passes check draws, as AWML's graph JSON, which the
-  // registry lays its drawing out from (src/server/drawing.ts): its security
-  // view, or a workflow's platform view of one implementation. Its text is
-  // unescaped (src/components/flow/graph.ts).
+  // What one file draws, as AWML's graph JSON, which the registry lays its
+  // drawing out from (src/server/drawing.ts): its security view, or a
+  // workflow's platform view of one implementation. The file must have no
+  // mistake but those `unsound` leaves out. Its text is unescaped
+  // (src/components/flow/graph.ts).
   graph(yaml: string, implementation?: string): Promise<string>;
   // Where a workflow can run: its design judged against platform
   // descriptions, each named by its own id. With an implementation, its

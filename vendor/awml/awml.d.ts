@@ -29,17 +29,12 @@ export interface AWML {
   // Given several workflows, the map: one box per workflow, the parts they
   // share drawn once.
   draw(source: Sources, implementation?: string): string;
-  // Where untrusted text reaches, as awml draw --untrusted draws it.
-  drawUntrusted(source: string): string;
   // What draw draws, with nothing laid out, as awml graph does: one
   // workflow's view, or the map of several given together, as JSON. It takes
   // and throws what draw does. No text in it is escaped: every label is as
   // the file wrote it, line breaks included, so a page must escape it.
   graphJSON(source: Sources, implementation?: string): string;
   graph(source: Sources, implementation?: string): unknown;
-  // What drawUntrusted draws, as awml graph --untrusted does, unescaped too.
-  graphUntrustedJSON(source: string): string;
-  graphUntrusted(source: string): unknown;
   // One file of an older version upgraded, or a 0.3 or 0.2 security view and
   // its platform view joined, into one file of the current version, as awml
   // convert does; a current file comes back unchanged. Throws what stops it.

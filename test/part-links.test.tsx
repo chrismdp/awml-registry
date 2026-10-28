@@ -19,7 +19,7 @@ import { example, orgWith, person, request, statements, storeVersion, type Who }
 import { pageRequest } from "./pages";
 import { laidOut } from "./drawn";
 
-const shopping = `awml: "0.7"
+const shopping = `awml: "0.8"
 title: Shopping
 parts:
   - { id: list, kind: context, label: "Shopping list" }
@@ -34,7 +34,7 @@ implementations:
 `;
 
 // A workflow that keeps its own copy of a list another workflow has, and runs at home.
-const referring = (ref: string, title = "Dinners") => `awml: "0.7"
+const referring = (ref: string, title = "Dinners") => `awml: "0.8"
 title: ${title}
 parts:
   - { id: list, kind: context, label: "Shopping list", ref: ${ref} }
@@ -378,7 +378,7 @@ describe("whether a ref starts what it names, stored with the ref", () => {
   it("says an outside action whose ref names a part that isn't a trigger uses it, and starts nothing", async () => {
     const { ana } = await world();
     // Pushed before what it names, so the push can't see the part; it stores the outside action's half.
-    const starter = `awml: "0.7"
+    const starter = `awml: "0.8"
 title: Starter
 parts:
   - { id: tick, kind: trigger, label: "Every morning" }

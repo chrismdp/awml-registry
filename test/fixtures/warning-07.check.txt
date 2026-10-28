@@ -1,2 +1,0 @@
-warning-07.yaml: warning: step "fill" is a do step decided by AI: a do step should be code acting on what an earlier step decided
-warning-07.yaml: ok

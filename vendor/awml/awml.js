@@ -42,28 +42,17 @@ async function start(source) {
     },
     // checksJSON takes files as { file, source } and lists every check, as awml check --json does.
     checksJSON(files) {
-      const output = globalThis.__awmlChecks(JSON.stringify(Array.isArray(files) ? files : [files]));
-      const decoded = JSON.parse(output);
-      if (decoded.error) throw new Error(decoded.error);
-      return output;
+      return answer(globalThis.__awmlChecks(JSON.stringify(given(files))));
     },
     checks(files) {
       return JSON.parse(this.checksJSON(files));
     },
     // summary, fit and draw take one file or several, each its text or { file, source }. Given
     // together, workflows follow each ref between them, a path ref from the file's name, which is
-    // its path from one root. Each throws the mistakes following the refs finds, one to a line after
-    // the file's name, as awml prints them.
+    // its path from one root. Each throws every file's own mistakes and those following the refs finds,
+    // one to a line after the file's name, as awml prints them.
     summaryJSON(sourceTexts) {
-      const sources = given(sourceTexts);
-      for (const sourceText of sources) {
-        const errors = this.unsound(text(sourceText));
-        if (errors.length) throw new Error(errors.join("\n"));
-      }
-      const output = globalThis.__awmlSummary(JSON.stringify(sources));
-      const decoded = JSON.parse(output);
-      if (decoded.error) throw new Error(decoded.error);
-      return output;
+      return answer(globalThis.__awmlSummary(JSON.stringify(given(sourceTexts))));
     },
     summary(sourceTexts) {
       return JSON.parse(this.summaryJSON(sourceTexts));
@@ -72,21 +61,13 @@ async function start(source) {
     // what they hold. Given several workflows, it names each part after its file, as awml fit does,
     // and after where it comes among the workflows, as in 1#plan, for one given as text alone.
     fitJSON(sourceTexts, implementation = "") {
-      const sources = given(sourceTexts);
-      for (const sourceText of sources) {
-        const errors = this.check(text(sourceText));
-        if (errors.length) throw new Error(errors.join("\n"));
-      }
-      const output = globalThis.__awmlFit(JSON.stringify(sources), implementation);
-      const decoded = JSON.parse(output);
-      if (decoded.error) throw new Error(decoded.error);
-      return output;
+      return answer(globalThis.__awmlFit(JSON.stringify(given(sourceTexts)), implementation));
     },
     fit(sourceTexts, implementation = "") {
       return JSON.parse(this.fitJSON(sourceTexts, implementation));
     },
     // convert upgrades one file of an older version, or joins a legacy security view and its
-    // platform view given as [security, platform], into one 0.7 file, as awml convert does. When it
+    // platform view given as [security, platform], into one 0.8 file, as awml convert does. When it
     // notes something it couldn't carry over, or the current rules find mistakes in the file, it
     // throws them, one to a line, notes first. The error's notes and mistakes hold each, and its
     // converted holds the file, which awml convert still writes.
@@ -105,31 +86,7 @@ async function start(source) {
     },
     // draw draws one workflow's view, or the map of several workflows drawn together.
     draw(sourceText, implementation = "") {
-      const sources = given(sourceText);
-      if (sources.length > 1) {
-        if (implementation) throw new Error("an implementation is drawn for one workflow, not several");
-        for (const source of sources) {
-          const errors = this.unsound(text(source));
-          if (errors.length) throw new Error(errors.join("\n"));
-        }
-        const output = globalThis.__awmlDrawMap(JSON.stringify(sources));
-        if (output.startsWith("{")) throw new Error(JSON.parse(output).error);
-        return output;
-      }
-      sourceText = text(sources[0]);
-      const errors = this.unsound(sourceText);
-      if (errors.length) throw new Error(errors.join("\n"));
-      const output = typeof sources[0] === "string"
-        ? globalThis.__awmlDraw(sourceText, implementation)
-        : globalThis.__awmlDraw(sourceText, implementation, sources[0].file || "");
-      if (output.startsWith("{")) throw new Error(JSON.parse(output).error);
-      return output;
-    },
-    // drawUntrusted draws where untrusted text reaches, as awml draw --untrusted does.
-    drawUntrusted(sourceText) {
-      const errors = this.unsound(sourceText);
-      if (errors.length) throw new Error(errors.join("\n"));
-      const output = globalThis.__awmlDrawUntrusted(sourceText);
+      const output = globalThis.__awmlDraw(JSON.stringify(given(sourceText)), implementation);
       if (output.startsWith("{")) throw new Error(JSON.parse(output).error);
       return output;
     },
@@ -138,35 +95,16 @@ async function start(source) {
     // throws. Every label is given exactly as the file wrote it, and no text in it is escaped, so a
     // page that shows it must escape it itself, unlike draw, whose Mermaid escapes it.
     graphJSON(sourceText, implementation = "") {
-      const sources = given(sourceText);
-      if (sources.length > 1 && implementation) throw new Error("an implementation is given for one workflow, not several");
-      for (const source of sources) {
-        const errors = this.unsound(text(source));
-        if (errors.length) throw new Error(errors.join("\n"));
-      }
-      if (sources.length > 1) return graphOutput(globalThis.__awmlGraphMap(JSON.stringify(sources)));
-      return graphOutput(typeof sources[0] === "string"
-        ? globalThis.__awmlGraph(text(sources[0]), implementation)
-        : globalThis.__awmlGraph(text(sources[0]), implementation, sources[0].file || ""));
+      return answer(globalThis.__awmlGraph(JSON.stringify(given(sourceText)), implementation));
     },
     graph(sourceText, implementation = "") {
       return JSON.parse(this.graphJSON(sourceText, implementation));
     },
-    // graphUntrusted gives what drawUntrusted draws, as awml graph --untrusted does, with its text
-    // unescaped as graph gives it.
-    graphUntrustedJSON(sourceText) {
-      const errors = this.unsound(sourceText);
-      if (errors.length) throw new Error(errors.join("\n"));
-      return graphOutput(globalThis.__awmlGraphUntrusted(sourceText));
-    },
-    graphUntrusted(sourceText) {
-      return JSON.parse(this.graphUntrustedJSON(sourceText));
-    },
   };
 }
 
-// graphOutput gives a graph's JSON, or throws the error given in its place.
-function graphOutput(output) {
+// answer gives the JSON an entry point gave, or throws the error it gave in its place.
+function answer(output) {
   const decoded = JSON.parse(output);
   if (decoded.error) throw new Error(decoded.error);
   return output;
@@ -174,8 +112,4 @@ function graphOutput(output) {
 
 function given(sources) {
   return Array.isArray(sources) ? sources : [sources];
-}
-
-function text(source) {
-  return typeof source === "string" ? source : source.source;
 }

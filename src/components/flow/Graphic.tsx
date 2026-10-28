@@ -25,7 +25,8 @@ import { baseline, textWidth } from "./text";
 // by line as the server broke it, so no browser breaks it differently.
 
 // A part: its outline, its kind and verb small above its label, an outside
-// action's tier, and the mark of a part linked to other workflows (#55).
+// action's tier, and the mark of a part linked to other workflows (#55). A
+// part untrusted text comes from has a thick outline (#83), in its class.
 export function PartGraphic({ part, link }: { part: DrawnPart; link?: PartLink }) {
   const { d, extra } = outline(part.kind, part.width, part.height);
   const [top, , , left] = PADDING[part.kind];
@@ -40,7 +41,7 @@ export function PartGraphic({ part, link }: { part: DrawnPart; link?: PartLink }
   y += part.lines.length * LABEL.line;
   const tierTop = y + TIER.gap;
   return (
-    <g className={`flow-part flow-kind-${part.kind}`}>
+    <g className={`flow-part flow-kind-${part.kind}${part.outline ? ` ${part.outline}` : ""}`}>
       <path className="flow-shape" d={d} />
       {extra && <path className="flow-shape-line" d={extra} />}
       {caption}
@@ -141,9 +142,14 @@ export function roundedPath(points: Point[], radius = 10) {
 }
 
 // The arrowheads a drawing's lines use, by `id` so two drawings on a page keep their own, and
-// the cross a refused read ends in.
-const ARROWS = ["solid", "dotted", "thick", "broken"] as const;
-export const arrowOf = (id: string, line: Pick<DrawnLine, "style" | "broken">) => `${id}-arrow-${line.broken ? "broken" : line.style}`;
+// the cross a refused read ends in. A line's arrowhead is its colour: red for one that breaks a
+// rule or takes untrusted text to an outside action unstopped, orange for one that carries it,
+// green out of what stopped it (#83), and otherwise its style's.
+const ARROWS = ["solid", "dotted", "thick", "broken", "carries", "stopped"] as const;
+const THICK = new Set<string>(["thick", "broken", "carries", "stopped"]);
+const arrowKind = (line: Pick<DrawnLine, "style" | "broken" | "untrusted">) =>
+  line.broken || line.untrusted === "unstopped" ? "broken" : (line.untrusted ?? line.style);
+export const arrowOf = (id: string, line: Pick<DrawnLine, "style" | "broken" | "untrusted">) => `${id}-arrow-${arrowKind(line)}`;
 export function Arrowheads({ id }: { id: string }) {
   return (
     <defs>
@@ -158,8 +164,8 @@ export function Arrowheads({ id }: { id: string }) {
           viewBox="0 0 10 10"
           refX={9}
           refY={5}
-          markerWidth={kind === "thick" || kind === "broken" ? 9 : 11}
-          markerHeight={kind === "thick" || kind === "broken" ? 9 : 11}
+          markerWidth={THICK.has(kind) ? 9 : 11}
+          markerHeight={THICK.has(kind) ? 9 : 11}
           markerUnits="userSpaceOnUse"
           orient="auto-start-reverse"
         >
@@ -172,12 +178,14 @@ export function Arrowheads({ id }: { id: string }) {
 
 // A line: solid for the workflow's own flow, dotted for data, thick for a
 // standing rule, red for one that breaks a rule, and a cross at the end of a
-// read the design refuses.
+// read the design refuses. Untrusted text (#83) makes it thick orange where it
+// carries the text, thick green out of what stopped it, and thick red the
+// whole way to an outside action nothing stops.
 export function LineGraphic({ id, line, d }: { id: string; line: DrawnLine; d: string }) {
   const arrow = `url(#${arrowOf(id, line)})`;
   return (
     <path
-      className={`flow-line ${line.style}${line.broken ? " broken" : ""}`}
+      className={`flow-line ${line.style}${line.broken ? " broken" : ""}${line.untrusted ? ` ${line.untrusted}` : ""}`}
       d={d}
       markerEnd={line.refused ? `url(#${id}-cross)` : line.arrowEnd ? arrow : undefined}
       markerStart={line.arrowStart ? arrow : undefined}

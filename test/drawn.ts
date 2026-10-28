@@ -1,5 +1,5 @@
 // What a page draws, read from the SVG the server sends (src/components/flow/StaticDrawing.tsx),
-// and what an AWML 0.7 file says it should draw, read from the YAML itself, never from the
+// and what an AWML 0.8 file says it should draw, read from the YAML itself, never from the
 // engine's graph, so a mistake in reading that graph can't hide on both sides of a test:
 // each scope by id with the scope it is in, each part by id with its label, and how many lines.
 import { parse } from "yaml";
@@ -37,7 +37,7 @@ type Doc = {
   implementations?: Record<string, { blocks: { id: string; in?: string }[] }>;
 };
 
-// What a 0.7 file draws: its design's scopes, or the blocks of the implementation named; every
+// What a 0.8 file draws: its design's scopes, or the blocks of the implementation named; every
 // part but a comment, which is a note on what it is tied to; and every line but a tie or a hidden one.
 export function expected(file: string, implementation?: string) {
   const doc = parse(file) as Doc;
@@ -49,7 +49,7 @@ export function expected(file: string, implementation?: string) {
   };
 }
 
-// The same for an older file, or a pair of views, converted to 0.7 as the registry reads it.
+// The same for an older file, or a pair of views, converted to 0.8 as the registry reads it.
 export async function expectedOf(files: string[], implementation?: string) {
   const read = await engine.convert(files);
   if ("error" in read) throw new Error(read.error);

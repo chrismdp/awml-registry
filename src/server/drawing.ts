@@ -169,6 +169,7 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
       lines: t.lines,
       ...(p.tier ? { tier: p.tier } : {}),
       ...(p.scope ? { scope: p.scope } : {}),
+      ...(p.unstopped ? { outline: "unstopped" as const } : p.untrusted ? { outline: "untrusted" as const } : {}),
       ...at.get(p.id)!,
     };
   });

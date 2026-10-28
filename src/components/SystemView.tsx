@@ -250,6 +250,7 @@ function Waits({ summary }: { summary: Summary }) {
                     ? ` · reaches ${(u.outsideActions ?? []).join(", ")}`
                     : " · reaches no outside action"}
                   {(u.stoppedBy ?? []).length ? ` · stopped by ${(u.stoppedBy ?? []).join(", ")}` : ""}
+                  {(u.risksAccepted ?? []).map((r) => ` · risk accepted for ${r.outsideAction}, by ${r.approval}`).join("")}
                 </span>
               </li>
             ))}

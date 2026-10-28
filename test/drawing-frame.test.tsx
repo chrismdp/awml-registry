@@ -12,6 +12,7 @@ import { NoteButton, NoteTip, NODE_TYPES, nodesOf } from "@/components/flow/Flow
 import { atServer } from "@/components/flow/physics";
 import type { Drawing } from "@/components/flow/drawing";
 import { notesBy } from "@/components/flow/StaticDrawing";
+import { Arrowheads, LineGraphic } from "@/components/flow/Graphic";
 import { graphOf } from "@/components/flow/graph";
 import { engine } from "@/engine";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
@@ -276,3 +277,159 @@ describe("a gap in the design (#69)", () => {
     expect(flow).toContain('aria-label="Gap in the design on The whole drawing"');
   });
 });
+
+// AWML 0.8 draws untrusted text in the main view, and so does the registry (#83): the part it
+// comes from has a thick orange outline, or red when its text reaches an outside action unstopped;
+// a line carrying it is thick orange up to and into what stops it, the line out of that thick
+// green, and the lines after it as they were; and the whole way to an outside action nothing
+// stops is thick red, before a branch too. The server's SVG and React Flow draw the same pieces
+// (flow/Graphic.tsx), and the gallery's cards and an embed are the server's SVG
+// (test/older-awml.test.tsx draws a stored one on each).
+describe("untrusted text (#83)", () => {
+  // The class of each part's piece and of each line, by its ends, and each line's arrowhead.
+  const looks = (svg: string) => ({
+    parts: Object.fromEntries([...svg.matchAll(/data-part="([^"]+)"[^>]*>(?:<title>[^<]*<\/title>)?<g class="(flow-part[^"]*)">/g)].map((m) => [m[1], m[2]])),
+    lines: [...svg.matchAll(/<path class="flow-line ([^"]+)" d="[^"]*" marker-end="url\(#t-arrow-([^)]+)\)"/g)].map((m) => [m[1], m[2]]),
+  });
+
+  it("outlines the part the text comes from in orange, and draws it orange up to what stops it, green out of it, then as it was", async () => {
+    const { full } = laidOut(await layOut(example("untrusted-text.graph.json")));
+    const svg = renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />);
+    const { parts, lines } = looks(svg);
+    expect(parts.form).toBe("flow-part flow-kind-trigger untrusted");
+    // Every other part keeps its own border.
+    expect(Object.entries(parts).filter(([id]) => id !== "form").every(([, c]) => !/untrusted|unstopped/.test(c))).toBe(true);
+    expect(full.lines.map((l) => [l.from, l.to])).toEqual([
+      ["form", "keep"],
+      ["keep", "book"],
+      ["book", "rota"],
+      ["form", "draft"],
+      ["draft", "ask"],
+      ["ask", "approve"],
+      ["approve", "send"],
+    ]);
+    expect(lines).toEqual([
+      ["solid carries", "carries"],
+      ["solid stopped", "stopped"],
+      ["solid", "solid"],
+      ["solid carries", "carries"],
+      ["solid carries", "carries"],
+      ["solid carries", "carries"],
+      ["solid stopped", "stopped"],
+    ]);
+  });
+
+  it("draws the whole way to an outside action nothing stops red, from the part it comes from, red winning before the branch", async () => {
+    const { full } = laidOut(await layOut(example("older/enquiries-07.graph.json")));
+    const svg = renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />);
+    const { parts, lines } = looks(svg);
+    expect(parts.form).toBe("flow-part flow-kind-trigger unstopped");
+    expect(full.lines.map((l) => [l.from, l.to])).toEqual([
+      ["form", "sort"],
+      ["sort", "file"],
+      ["file", "label"],
+      ["sort", "draft"],
+      ["draft", "ask"],
+      ["ask", "approve"],
+      ["approve", "send"],
+    ]);
+    expect(lines).toEqual([
+      ["solid unstopped", "broken"],
+      ["solid unstopped", "broken"],
+      // The line into the outside action breaks the rule, and says so on its label.
+      ["solid broken unstopped", "broken"],
+      ["solid carries", "carries"],
+      ["solid carries", "carries"],
+      ["solid carries", "carries"],
+      ["solid stopped", "stopped"],
+    ]);
+    expect(svg.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ")).toContain("nothing to stop it or accept the risk");
+  });
+
+  it("is drawn by the same pieces once React Flow takes over: the part's outline, and each line and its arrowhead", async () => {
+    const { full } = laidOut(await layOut(example("older/enquiries-07.graph.json")));
+    const flow = renderToStaticMarkup(<ReactFlow nodes={serverNodes(full)} edges={[]} nodeTypes={NODE_TYPES} width={800} height={600} />);
+    expect(flow).toContain('<g class="flow-part flow-kind-trigger unstopped">');
+    expect(flow.match(/flow-part [^"]*\b(untrusted|unstopped)\b/g)).toHaveLength(1);
+    // React Flow's lines are LineGraphic, as the server's are, routed where the parts are.
+    const drawn = full.lines.map((l) => renderToStaticMarkup(<LineGraphic id="t" line={l} d="M 0 0" />));
+    expect(drawn.map((p) => /class="([^"]+)"/.exec(p)![1])).toEqual(looks(renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />)).lines.map((l) => l[0]).map((c) => `flow-line ${c}`));
+    // An arrowhead for each colour, in the defs both share.
+    const defs = renderToStaticMarkup(
+      <svg>
+        <Arrowheads id="t" />
+      </svg>,
+    );
+    for (const kind of ["solid", "dotted", "thick", "broken", "carries", "stopped"]) expect(defs).toContain(`id="t-arrow-${kind}"`);
+  });
+
+  it("styles each thick, in an orange, a green and a red that read on white and on the site's ink", () => {
+    const token = (name: string) => new RegExp(`--${name}: (#[0-9a-f]{6})`).exec(css)?.[1];
+    expect(token("untrusted")).toBeDefined();
+    expect(token("stopped")).toBeDefined();
+    expect(token("broken")).toBeDefined();
+    for (const name of ["untrusted", "stopped", "broken"]) {
+      expect(contrast(token(name)!, "#ffffff"), name).toBeGreaterThanOrEqual(3);
+      expect(contrast(token(name)!, "#16171b"), name).toBeGreaterThanOrEqual(3);
+    }
+    expect(hue(token("untrusted")!)).toBeGreaterThanOrEqual(20);
+    expect(hue(token("untrusted")!)).toBeLessThanOrEqual(40);
+    expect(hue(token("stopped")!)).toBeGreaterThanOrEqual(120);
+    expect(hue(token("stopped")!)).toBeLessThanOrEqual(170);
+    expect(hue(token("broken")!) < 10 || hue(token("broken")!) > 350).toBe(true);
+    expect(css).toContain(".flow-line.carries { stroke: var(--untrusted); stroke-width: 3px; }");
+    expect(css).toContain(".flow-line.stopped { stroke: var(--stopped); stroke-width: 3px; }");
+    expect(css).toContain(".flow-line.broken, .flow-line.unstopped { stroke: var(--broken); stroke-width: 3px; }");
+    expect(css).toContain(".flow-part.untrusted .flow-shape { stroke: var(--untrusted); stroke-width: 3px; }");
+    expect(css).toContain(".flow-part.unstopped .flow-shape { stroke: var(--broken); stroke-width: 3px; }");
+  });
+
+  it("has no violet or purple anywhere in a drawing, the AI step's colour included, and no ⚠️ or 🛡️", async () => {
+    // Every colour the drawing's CSS names, and every token it takes from the site's.
+    const site = fs.readFileSync(path.join(__dirname, "../src/app/site.css"), "utf8");
+    const tokens = new Map([...`${site}\n${css}`.matchAll(/--([\w-]+): (#[0-9a-fA-F]{3,6})\b/g)].map((m) => [m[1], m[2]]));
+    const used = [...css.matchAll(/var\(--([\w-]+)\)/g)].map((m) => m[1]);
+    const colours = [...css.matchAll(/#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b/g)].map((m) => m[0]).concat(used.flatMap((t) => (tokens.has(t) ? [tokens.get(t)!] : [])));
+    expect(used).toContain("ai-fill");
+    expect(used).toContain("ai-line");
+    expect(colours.filter(violet)).toEqual([]);
+    // Nor the site's link colour, which is an indigo.
+    expect(used).not.toContain("link");
+    // Nor in what the server draws: the dinners' wall, a lavender place, is grey.
+    const { full } = laidOut(await layOut(example("dinners-home.graph.json")));
+    const svg = renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />);
+    expect([...svg.matchAll(/#[0-9a-f]{6}/g)].map((m) => m[0]).filter(violet)).toEqual([]);
+    for (const graph of ["untrusted-text.graph.json", "older/enquiries-07.graph.json"]) {
+      const drawn = renderToStaticMarkup(<StaticDrawing drawing={laidOut(await layOut(example(graph))).full} id="t" />);
+      expect(drawn).not.toMatch(/⚠|🛡/);
+    }
+  });
+});
+
+// A colour's hue, in degrees, and whether it reads as violet or purple: from indigo to purple,
+// with enough colour in it to see.
+function rgb(hex: string) {
+  const h = hex.length === 4 ? [...hex.slice(1)].map((d) => d + d).join("") : hex.slice(1);
+  return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+}
+function hue(hex: string) {
+  const [r, g, b] = rgb(hex);
+  const max = Math.max(r, g, b);
+  const c = max - Math.min(r, g, b);
+  if (c === 0) return 0;
+  const h = max === r ? ((g - b) / c) % 6 : max === g ? (b - r) / c + 2 : (r - g) / c + 4;
+  return (h * 60 + 360) % 360;
+}
+const violet = (hex: string) => {
+  const [r, g, b] = rgb(hex);
+  return Math.max(r, g, b) - Math.min(r, g, b) >= 0.04 && hue(hex) >= 228 && hue(hex) <= 320;
+};
+// WCAG's contrast ratio between two colours.
+function contrast(a: string, b: string) {
+  const lum = (hex: string) => {
+    const [r, g, bl] = rgb(hex).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+}
