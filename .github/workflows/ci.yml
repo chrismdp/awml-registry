@@ -344,6 +344,11 @@ jobs:
       - name: Post the verdict on this job's check
         id: verdict
         run: |
+          # No output folder means the session never ran: land finds no verdict and asks.
+          if [ ! -e "$RUNNER_TEMP/sessions/classify/out" ] && [ ! -L "$RUNNER_TEMP/sessions/classify/out" ]; then
+            echo "::notice title=No verdict::Classify's session didn't run, so land asks for a review."
+            exit 0
+          fi
           file="$RUNNER_TEMP/sessions/classify/out/classification.json"
           verdict=ask
           reasons="Classify left no readable verdict."
@@ -448,6 +453,7 @@ jobs:
           private-key: ${{ secrets.FACTORY_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-issues: write
 
       # The app opens the issue, so GitHub starts the build from its build label.
       - name: Open an issue labelled build

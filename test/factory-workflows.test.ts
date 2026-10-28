@@ -824,6 +824,23 @@ describe("the factory's workflows", () => {
     }
   });
 
+  // Each app token holds only what its steps do with it: an issue opened, a branch pushed, a pull
+  // request opened, edited or merged.
+  it("give each app token only the permissions its steps need", () => {
+    const tokens: Record<string, Record<string, unknown>> = {};
+    for (const [file, id, job] of everyJob())
+      for (const each of steps(job))
+        if (each.uses?.startsWith("actions/create-github-app-token@"))
+          tokens[`${file} ${id}`] = Object.fromEntries(Object.entries(each.with ?? {}).filter(([key]) => key.startsWith("permission-")));
+    expect(tokens).toEqual({
+      "ci.yml report": { "permission-issues": "write" },
+      "build.yml open": { "permission-contents": "write", "permission-pull-requests": "write" },
+      "fix.yml write": { "permission-contents": "write" },
+      "resolve.yml push": { "permission-contents": "write" },
+      "land.yml land": { "permission-contents": "write", "permission-pull-requests": "write" },
+    });
+  });
+
   it("pin every action to a commit", () => {
     for (const [file, id, job] of everyJob()) {
       if (file === "notify-awml-io.yml") continue;
@@ -1596,6 +1613,15 @@ describe("ci.yml", () => {
       expect(run.failed, run.printed).toBe(false);
       expect(run.printed).toContain(want);
     }
+  });
+
+  // A session that never ran left no output folder, which says so plainly, not as a refused link.
+  it.runIf(canRehearse)("says no verdict when Classify's session never ran", () => {
+    const root = scratch();
+    put(join(root, "runner/main/scan-tokens.sh"), readFileSync(join(github, "scan-tokens.sh"), "utf8"));
+    const run = rehearse(stepWithId(jobs.classify, "verdict").run ?? "", { root, env: { GITHUB_STEP_SUMMARY: join(root, "summary.md") } });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.printed).toBe("::notice title=No verdict::Classify's session didn't run, so land asks for a review.\n");
   });
 
   it("keeps the failing-main report on main's pushes only", () => {
@@ -2376,7 +2402,8 @@ describe("land.yml", () => {
 
   it("is drawn as it runs: its concurrency, and the commit read at its merge-base with main", () => {
     const drawing = readFileSync(join(github, "drawings/land-a-pull-request.yaml"), "utf8");
-    expect(drawing).toContain("a newer CI result on the branch cancels an older reading, but never a land that has started");
+    expect(drawing).toContain("nothing is cancelled, neither a reading nor a land that has started");
+    expect(drawing).not.toContain("cancels an older reading");
     expect(drawing).toContain("at its merge-base with main");
     expect(drawing).not.toContain("keyed on the pull request and the run");
     expect(drawing).not.toContain("at its parent on main");
@@ -2386,14 +2413,14 @@ describe("land.yml", () => {
     expect(land.on).toEqual({ workflow_run: { workflows: ["CI"], types: ["completed"], branches: ["build/issue-*"] } });
   });
 
-  // A newer CI result replaces the reading of an older one, but nothing cancels a job that has
-  // started to merge.
-  it("never cancels a land that has started", () => {
+  // Nothing cancels a reading or a land that has started: a run started by someone else's pull
+  // request from a branch of the same name could otherwise cancel the real reading.
+  it("never cancels a reading or a land that has started", () => {
     expect(land.concurrency).toBeUndefined();
     // A fork's branch can carry the same name, so the group names the repository the run came from.
     expect(jobs.find.concurrency).toEqual({
       group: "land-find-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
-      "cancel-in-progress": true,
+      "cancel-in-progress": false,
     });
     expect(jobs.land.concurrency).toEqual({
       group: "land-merge-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
@@ -4164,8 +4191,8 @@ done
         if (/\$RUNNER_TEMP\/pr\//.test(line)) expect(line, each).toMatch(/\$RUNNER_TEMP\/pr\/\$number\/(out|work)"|\$RUNNER_TEMP\/pr\/\$number"/);
         expect(line, each).not.toMatch(/\$INPUT_DIR|\$root\/in\b/);
         // The session's output folder is read only once it's checked. A line that only names the
-        // folder reads nothing.
-        const names = /^\s*[a-z]+="[^"]*"$/.test(line);
+        // folder, or asks whether it's there at all, reads nothing.
+        const names = /^\s*[a-z]+="[^"]*"$/.test(line) || /^\s*if (\[ ! -[eL] "[^"]*" \]( && )?)+; then$/.test(line);
         if (/\$RUNNER_TEMP\/sessions\/[a-z]+\/out|"\$(out|file)(\/|")/.test(line) && !names && !line.includes("check-out.sh"))
           expect(checked >= 0 && checked < at, `${each}: ${line.trim()}`).toBe(true);
       }

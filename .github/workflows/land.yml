@@ -29,12 +29,13 @@ on:
     branches: ["build/issue-*"]
 
 jobs:
-  # A newer CI result on a branch replaces the reading of an older one, which no longer matches the
-  # branch's head.
+  # Readings of one branch run one at a time, and none cancels another: a run started by someone
+  # else's pull request from a branch of the same name could otherwise cancel the real reading. A
+  # reading that no longer matches the branch's head lands nothing, as the land job checks.
   find:
     concurrency:
       group: land-find-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
-      cancel-in-progress: true
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -155,7 +156,7 @@ jobs:
 
       # The rule, its settings and the scripts come from main as it is now. The head commit is
       # fetched into git's store, never checked out. Its tree is read into the index of a worktree
-      # of its own at the commit of main the branch starts from, so the files on disk stay main's,
+      # of its own at its merge-base with main, so the files on disk stay main's,
       # and the rule reads the whole change and the branch's commits since main. Classify's verdict,
       # and the Nits the reviews left, are read from the checks of CI's run. The rule's copy is an
       # .mts file so that Node reads it as a module without a package.json beside it.
@@ -260,6 +261,8 @@ jobs:
           private-key: ${{ secrets.FACTORY_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
 
       # Pinned to the commit judged, so GitHub refuses the merge if anyone pushed since, and main's
       # rule still holds it.

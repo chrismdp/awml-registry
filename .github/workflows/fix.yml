@@ -497,6 +497,7 @@ jobs:
           private-key: ${{ secrets.FACTORY_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
 
       # Only if the branch is still at the reviewed commit, so GitHub refuses the push if anyone
       # pushed since. CI then judges the fix.

@@ -708,6 +708,8 @@ jobs:
           private-key: ${{ secrets.FACTORY_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
 
       # The commit is the app's, as its push is, so land knows it as the factory's.
       - name: Commit the change as the app's bot

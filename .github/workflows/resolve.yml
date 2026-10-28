@@ -513,6 +513,7 @@ jobs:
           private-key: ${{ secrets.FACTORY_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
 
       # Only if nobody pushed since the find job saw the branch.
       - name: Push the rebased branch
