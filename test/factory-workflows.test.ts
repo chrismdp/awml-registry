@@ -3983,6 +3983,8 @@ ${permissionStub}
       put(join(root, "runner/conflicted-5.txt"), "a.txt\n");
       put(join(root, "runner/baseline/git-config-5"), readFileSync(join(clone, ".git/config"), "utf8"));
       put(join(root, "runner/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", clone, join(clone, ".git")], { encoding: "utf8" }));
+      // As prepare's npm ci leaves it.
+      mkdirSync(join(clone, "node_modules/.bin"), { recursive: true });
       put(join(root, "runner/main/placeholders.sh"), readFileSync(join(github, "placeholders.sh"), "utf8"));
       execFileSync("bash", [join(github, "placeholders.sh"), "record", clone, join(root, "runner/baseline/protected-5")]);
       // Prepare, or the last continue, keeps the clone's commits, refs, HEAD and index as git left them.
@@ -4031,8 +4033,10 @@ ${permissionStub}
       const { root, clone } = midRebase();
       put(join(clone, "a.txt"), "both\n");
       put(join(clone, ".npmrc"), "registry=https://example.com/\n");
-      expect(resume(root).failed).toBe(false);
+      const run = resume(root);
+      expect(run.failed).toBe(false);
       expect(gaveUp(root)).toBe(true);
+      expect(run.printed).toContain("left something other than a placeholder");
     });
 
     // The session may not write the rebase's state, but it could start the other kind, which git
@@ -4107,27 +4111,32 @@ ${permissionStub}
 
     it.runIf(canRehearse)("gives up on a clone whose conflicts still hold markers", () => {
       const { root } = midRebase();
-      expect(resume(root).failed).toBe(false);
+      const run = resume(root);
+      expect(run.failed).toBe(false);
       expect(gaveUp(root)).toBe(true);
+      expect(run.printed).toContain("left conflict markers");
     });
 
+    // Each stops at its own check, not one before it.
     it.runIf(canRehearse).each([
-      ["with a grafts file", (clone: string) => put(join(clone, ".git/info/grafts"), `${git(clone, "rev-parse", "HEAD")}\n`)],
+      ["with a grafts file", (clone: string) => put(join(clone, ".git/info/grafts"), `${git(clone, "rev-parse", "HEAD")}\n`), "left a grafts file"],
       ["whose git config the session changed", (clone: string) =>
-        writeFileSync(join(clone, ".git/config"), readFileSync(join(clone, ".git/config"), "utf8") + "[diff]\n\texternal = touch /tmp/owned\n")],
+        writeFileSync(join(clone, ".git/config"), readFileSync(join(clone, ".git/config"), "utf8") + "[diff]\n\texternal = touch /tmp/owned\n"),
+        "changed its clone's git config"],
       ["whose .git was replaced", (clone: string, root: string) => {
         execFileSync("mv", [join(clone, ".git"), join(root, "old-git")]);
         execFileSync("cp", ["-r", join(root, "old-git"), join(clone, ".git")]);
-      }],
-      ["with a repository nested below the top", (clone: string) => git(clone, "init", "-q", "src/inner")],
-      ["with a repository nested in node_modules", (clone: string) => git(clone, "init", "-q", "node_modules/left-pad")],
-    ])("runs no git in a clone %s", (_, spoil) => {
+      }, "isn't the one its session started in"],
+      ["with a repository nested below the top", (clone: string) => git(clone, "init", "-q", "src/inner"), "left a repository nested"],
+      ["with a repository nested in node_modules", (clone: string) => git(clone, "init", "-q", "node_modules/left-pad"), "left a repository nested"],
+    ] as [string, (clone: string, root: string) => void, string][])("runs no git in a clone %s", (_, spoil, reason) => {
       const { root, clone } = midRebase();
       put(join(clone, "a.txt"), "both\n");
       spoil(clone, root);
       const run = resume(root);
       expect(run.failed, run.printed).toBe(false);
       expect(gaveUp(root)).toBe(true);
+      expect(run.printed).toContain(reason);
       expect(existsSync(join(clone, ".git/rebase-merge")), "the rebase went on").toBe(true);
     });
   });
@@ -4442,12 +4451,14 @@ while [ $# -gt 0 ]; do
   fi
   shift
 done
+# SPARED names a folder a test leaves alone; POISON_TARGET, where the links lead.
+if [ -n "\${SPARED:-}" ]; then denied+=("$SPARED"); fi
 find "$RUNNER_TEMP" "$HOST_DIR" -type f -print0 | while IFS= read -r -d '' file; do
   for path in "\${denied[@]}"; do
     case "$path" in ./*) path="$PWD/\${path#./}" ;; esac
     case "$file/" in "$path"/*) continue 2 ;; esac
   done
-  ln -sfn /proc/self/environ "$file"
+  ln -sfn "\${POISON_TARGET:-/proc/self/environ}" "$file"
 done
 `;
 
@@ -4578,7 +4589,8 @@ done
     leakedNothing(root, ran, ["input"]);
   });
 
-  it.runIf(canRehearse)("continues no rebase through a link a round's session left", () => {
+  // A clone stopped at its conflict, with what prepare keeps beside it.
+  const conflicted = () => {
     const root = scratch();
     const clone = join(root, "runner/pr/5/work");
     mkdirSync(clone, { recursive: true });
@@ -4600,18 +4612,42 @@ done
     put(join(root, "runner/pr/5/out/message.md"), "Kept both sides.\n");
     put(join(root, "host/baseline/git-config-5"), readFileSync(join(clone, ".git/config"), "utf8"));
     put(join(root, "host/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", clone, join(clone, ".git")], { encoding: "utf8" }));
-    main(root, "resolve-prompt.md", "resolve-session.sh", "resolve-continue.sh", "rebase-state.sh", "placeholders.sh");
+    main(root, "resolve-prompt.md", "resolve-session.sh", "resolve-continue.sh", "rebase-state.sh", "placeholders.sh", "git-state.sh");
     execFileSync("bash", [join(github, "placeholders.sh"), "record", clone, join(root, "host/baseline/protected-5")]);
-    const ran = poisoned(root, resolve.draft, ["session1", "continue1"], {
-      env: { GITHUB_WORKSPACE: join(root, "ws"), GIT_COMMITTER_NAME: "A", GIT_COMMITTER_EMAIL: "a@example.com" },
-    });
+    // The clone's git state as prepare keeps it, so the continue gets past that check.
+    put(join(root, "host/baseline/git-state-5"), execFileSync("bash", [join(github, "git-state.sh"), clone], { encoding: "utf8" }));
+    return { root, clone };
+  };
+  const resolveEnv = (root: string) => ({ GITHUB_WORKSPACE: join(root, "ws"), GIT_COMMITTER_NAME: "A", GIT_COMMITTER_EMAIL: "a@example.com" });
+
+  it.runIf(canRehearse)("continues no rebase through a link a round's session left in the clone's .git", () => {
+    const { root, clone } = conflicted();
+    const ran = poisoned(root, resolve.draft, ["session1", "continue1"], { env: resolveEnv(root) });
     expect(linked(join(root, "runner/pr/5/out/message.md"))).toBe(true);
+    expect(linked(join(clone, ".git/config"))).toBe(true);
+    expect(ran.map((run) => run.failed)).toEqual([false, false]);
+    // It stops at the links the session left in the clone's .git, before git reads any of it.
+    expect(ran[1].printed).toContain("The session left a link at .git/");
+    expect(existsSync(join(root, "host/baseline/gave-up-5"))).toBe(true);
+    leakedNothing(root, ran, ["pr/5/in"]);
+  });
+
+  // With .git left alone, the clone passes every check before the add and the continue, and a
+  // conflicted file the session turned into a link is staged as a link, never read through: it
+  // leads to conflict markers, which the marker scan would find if it followed it.
+  it.runIf(canRehearse)("continues a rebase past a link in the tree without reading through it", () => {
+    const { root, clone } = conflicted();
+    const outside = join(root, "outside.txt");
+    put(outside, "<<<<<<< HEAD\nbranch\n=======\nmain\n>>>>>>> main\n");
+    const ran = poisoned(root, resolve.draft, ["session1", "continue1"], {
+      env: { ...resolveEnv(root), SPARED: join(clone, ".git"), POISON_TARGET: outside },
+    });
     expect(linked(join(clone, "a.txt"))).toBe(true);
     expect(ran.map((run) => run.failed)).toEqual([false, false]);
-    // The clone passed every check before the add and the continue, so it's those that left the
-    // links alone.
     expect(existsSync(join(root, "host/baseline/gave-up-5")), ran.map((run) => run.printed).join("\n")).toBe(false);
-    leakedNothing(root, ran, ["pr/5/in"]);
+    expect(ran[1].printed).toContain("#5's rebase went on");
+    expect(git(clone, "ls-tree", "HEAD", "a.txt")).toMatch(/^120000 /);
+    expect(readFileSync(outside, "utf8")).toContain("<<<<<<< HEAD");
   });
 
   // Every session's sandbox denies the host-only folder, which must be there before it starts.
