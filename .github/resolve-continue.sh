@@ -52,6 +52,12 @@ while IFS=$'\t' read -r number _; do
     give_up "The session on #$number left a repository nested in its clone, so no git runs there."
     continue
   fi
+  # A session only edits files: the commits, refs, HEAD and index must be as git left them, so the
+  # commits the app pushes are git's own.
+  if ! bash "$HOST_DIR/main/git-state.sh" "$work" | cmp -s - "$baseline/git-state-$number"; then
+    give_up "The session on #$number changed its clone's commits, refs, HEAD or index, so no git runs there."
+    continue
+  fi
   marked=false
   while IFS= read -r path; do
     # A link is left alone: the host reads nothing through one, and the check step refuses it.
@@ -65,6 +71,7 @@ while IFS=$'\t' read -r number _; do
   if GIT_EDITOR=true safe_git -C "$work" -c core.editor=true rebase --continue > /dev/null 2>&1; then
     echo "#$number's rebase went on to its end, or to its next conflict."
   fi
+  bash "$HOST_DIR/main/git-state.sh" "$work" > "$baseline/git-state-$number"
   if [ -d "$work/.git/rebase-merge" ] || [ -d "$work/.git/rebase-apply" ]; then
     safe_git -C "$work" diff --name-only --no-ext-diff --no-textconv --diff-filter=U > "$HOST_DIR/conflicted-$number.txt"
     if [ ! -s "$HOST_DIR/conflicted-$number.txt" ]; then

@@ -3880,6 +3880,17 @@ ${permissionStub}
     expect(checked).toBeLessThan(resume.indexOf("safe_git -C"));
   });
 
+  it("keeps each clone's commits, refs, HEAD and index once git has written them, and checks them before git runs again", () => {
+    const prepare = stepWithId(jobs.draft, "prepare").run ?? "";
+    const kept = 'bash "$HOST_DIR/main/git-state.sh" "$root/work" > "$HOST_DIR/baseline/git-state-$number"';
+    expect(prepare.indexOf(kept)).toBeGreaterThan(prepare.indexOf('rebase -q "$MAIN_SHA"'));
+    const resume = readFileSync(join(github, "resolve-continue.sh"), "utf8");
+    const check = resume.indexOf('git-state.sh" "$work" | cmp -s - "$baseline/git-state-$number"');
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(resume.indexOf("safe_git -C"));
+    expect(resume.lastIndexOf('git-state.sh" "$work" > "$baseline/git-state-$number"')).toBeGreaterThan(resume.indexOf("rebase --continue"));
+  });
+
   it("runs no git in a session's step, and lets the session run none that writes", () => {
     const session = readFileSync(join(github, "resolve-session.sh"), "utf8");
     const commands = session.replace(/"Bash\([^"]*\)"/g, "").split("\n").filter((line) => !/^\s*(#|echo )/.test(line));
@@ -3974,6 +3985,9 @@ ${permissionStub}
       put(join(root, "runner/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", clone, join(clone, ".git")], { encoding: "utf8" }));
       put(join(root, "runner/main/placeholders.sh"), readFileSync(join(github, "placeholders.sh"), "utf8"));
       execFileSync("bash", [join(github, "placeholders.sh"), "record", clone, join(root, "runner/baseline/protected-5")]);
+      // Prepare, or the last continue, keeps the clone's commits, refs, HEAD and index as git left them.
+      put(join(root, "runner/main/git-state.sh"), readFileSync(join(github, "git-state.sh"), "utf8"));
+      put(join(root, "runner/baseline/git-state-5"), execFileSync("bash", [join(github, "git-state.sh"), clone], { encoding: "utf8" }));
       // The round's session step keeps the rebase's state as it was before the session.
       put(join(root, "runner/main/rebase-state.sh"), readFileSync(join(github, "rebase-state.sh"), "utf8"));
       execFileSync("bash", [join(github, "rebase-state.sh"), "snapshot", clone, join(root, "runner/rebase-state-5")]);
@@ -4041,6 +4055,46 @@ ${permissionStub}
       expect(run.printed).toContain("changed its clone's rebase state");
       expect(existsSync(join(clone, "..", "owned"))).toBe(false);
       expect(git(clone, "status", "--porcelain")).toContain("a.txt");
+    });
+
+    // A session only edits files: host git adds them and continues. So the commits the app pushes
+    // are git's own, a session that made commits, moved a ref or HEAD, or changed what the index
+    // holds has its rebase given up.
+    it.runIf(canRehearse).each([
+      ["commits", (clone: string) => {
+        put(join(clone, "c.txt"), "the session's\n");
+        git(clone, "add", "-A");
+        git(clone, "commit", "-qm", "the session's commit");
+      }],
+      ["moves a ref", (clone: string) => git(clone, "update-ref", "refs/heads/main", git(clone, "rev-parse", "HEAD~1"))],
+      ["moves HEAD", (clone: string) => git(clone, "update-ref", "--no-deref", "HEAD", git(clone, "rev-parse", "HEAD~1"))],
+      ["adds a ref", (clone: string) => git(clone, "update-ref", "refs/heads/extra", git(clone, "rev-parse", "HEAD"))],
+      ["sets ORIG_HEAD", (clone: string) => git(clone, "update-ref", "ORIG_HEAD", git(clone, "rev-parse", "HEAD~1"))],
+      ["stages a file", (clone: string) => {
+        put(join(clone, "c.txt"), "the session's\n");
+        git(clone, "add", "c.txt");
+      }],
+    ])("gives up, and runs no git, when a session %s", (_, spoil) => {
+      const { root, clone } = midRebase();
+      put(join(clone, "a.txt"), "both\n");
+      spoil(clone);
+      const run = resume(root);
+      expect(run.failed, run.printed).toBe(false);
+      expect(gaveUp(root), run.printed).toBe(true);
+      expect(run.printed).toContain("changed its clone's commits, refs, HEAD or index");
+    });
+
+    // git status, which a session may run, refreshes the index's record of the files, but not what
+    // it holds.
+    it.runIf(canRehearse)("continues after a session that only edits files and asks git for its status", () => {
+      const { root, clone } = midRebase();
+      put(join(clone, "a.txt"), "both\n");
+      git(clone, "status", "--porcelain");
+      const run = resume(root);
+      expect(run.failed, run.printed).toBe(false);
+      expect(gaveUp(root), run.printed).toBe(false);
+      // The next round's session starts from what git left.
+      expect(left(root, "baseline/git-state-5")).toBe(execFileSync("bash", [join(github, "git-state.sh"), clone], { encoding: "utf8" }));
     });
 
     it.runIf(canRehearse)("gives up on a clone whose conflicts still hold markers", () => {

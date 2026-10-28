@@ -233,7 +233,7 @@ jobs:
           echo "::stop-commands::$stop"
           trap 'echo "::$stop::"' EXIT
           mkdir -p "$HOST_DIR/main" "$HOST_DIR/baseline" "$HOST_DIR/check" "$HOST_DIR/resolved"
-          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh .github/rebase-state.sh .github/engine-for.sh AGENTS.md "$HOST_DIR/main/"
+          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh .github/rebase-state.sh .github/engine-for.sh .github/git-state.sh AGENTS.md "$HOST_DIR/main/"
           # Main's engine build script, which builds each clone's engine from the clone's own pin.
           mkdir -p "$HOST_DIR/engine/scripts"
           cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"
@@ -265,6 +265,9 @@ jobs:
               echo "#$number rebased cleanly here after all."
             fi
             safe_git -C "$root/work" diff --name-only --no-ext-diff --no-textconv --diff-filter=U > "$HOST_DIR/conflicted-$number.txt"
+            # The clone's commits, refs, HEAD and index as git left them, which the continue checks
+            # after each session.
+            bash "$HOST_DIR/main/git-state.sh" "$root/work" > "$HOST_DIR/baseline/git-state-$number"
             # The rebase stopped at its conflict on top of main, and find held back any branch that
             # changes its dependencies, so this installs main's lockfile.
             bash "$HOST_DIR/main/check-lockfile.sh" "$root/work"
