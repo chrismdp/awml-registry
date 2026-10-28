@@ -513,7 +513,7 @@ jobs:
             echo "result=stale" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)'
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$'
           if git diff --cached --name-only --no-renames -z | grep -zqE "$guarded"; then
             # The names are the draft's, so they're printed as JSON, where none can start a workflow
             # command.

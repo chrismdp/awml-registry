@@ -105,10 +105,17 @@ jobs:
           # dependency's prepare script even with scripts off, so a branch that changes any of them,
           # or its package.json or lockfile, is never installed beside the Claude token: the fixer
           # only ever installs main's dependencies.
-          held='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)package(-lock)?\.json$'
+          # A session would load Claude Code's own files from the tree, so a branch that changes them is
+          # held back too, for its own reason. .github/ is read by nothing the fixer runs, and a fix
+          # to it is offered rather than pushed, so it isn't held back.
+          deps='(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
+          claudes='(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$'
+          safe_git diff --name-only --no-renames --no-ext-diff --no-textconv -z "$base" "$HEAD_SHA" > "$RUNNER_TEMP/changed"
           if [ "$important" -eq 0 ]; then
             outcome=noimportant
-          elif safe_git diff --name-only --no-renames --no-ext-diff --no-textconv -z "$base" "$HEAD_SHA" | grep -zqE "$held"; then
+          elif grep -zqE "$claudes" "$RUNNER_TEMP/changed"; then
+            outcome=claudefiles
+          elif grep -zqE "$deps" "$RUNNER_TEMP/changed"; then
             outcome=npmfiles
           elif [ "$fixes" -ge 2 ]; then outcome=giveup; else outcome=fix; fi
           {
@@ -296,7 +303,7 @@ jobs:
   # on what it posts, so a moved head or a closed pull request posts nothing.
   write:
     needs: [decide, fix]
-    if: ${{ !cancelled() && (needs.decide.outputs.outcome == 'fix' || needs.decide.outputs.outcome == 'giveup' || needs.decide.outputs.outcome == 'npmfiles' || needs.decide.outputs.outcome == 'noimportant') }}
+    if: ${{ !cancelled() && (needs.decide.outputs.outcome == 'fix' || needs.decide.outputs.outcome == 'giveup' || needs.decide.outputs.outcome == 'npmfiles' || needs.decide.outputs.outcome == 'claudefiles' || needs.decide.outputs.outcome == 'noimportant') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -363,14 +370,15 @@ jobs:
           [ "$OUTCOME" != giveup ] || give_up "This branch already carries two fix commits, so the fixer has stopped."
           case "$FAILED_REVIEWS" in "Bug review"|"Security review"|"Bug review and Security review") ;; *) FAILED_REVIEWS="A review" ;; esac
           [ "$OUTCOME" != noimportant ] || give_up "$FAILED_REVIEWS failed with no Important finding: it may have refused the patch or run out of time, so there's nothing for the fixer to fix."
-          [ "$OUTCOME" != npmfiles ] || give_up "This branch changes its dependencies (\`package.json\` or \`package-lock.json\`), an \`.npmrc\`, a \`.yarnrc\` or \`node_modules/\`, so the fixer won't install it beside its login token."
+          [ "$OUTCOME" != claudefiles ] || give_up "This branch changes Claude Code's own files (\`.claude/\`, \`.mcp.json\` or a \`CLAUDE.md\`), which a session would load, so the fixer won't start one on it."
+          [ "$OUTCOME" != npmfiles ] || give_up "This branch changes its dependencies (\`package.json\`, \`package-lock.json\`, \`npm-shrinkwrap.json\` or \`yarn.lock\`), an \`.npmrc\`, a \`.yarnrc\` or \`node_modules/\`, so the fixer won't install it beside its login token."
           # The fix job can fail after its session too, on a changed config, a nested repository or a
           # token, so a failed job isn't put down to the session.
           [ "$FIXED" = success ] || give_up "The fix job failed before the fix was kept. The run says why."
           [ "$CHANGED" = true ] || give_up "The fixer's session made no fix."
           git -c core.hooksPath=/dev/null apply --index "$RUNNER_TEMP/fix/fix.patch" ||
             give_up "The fixer's fix doesn't apply to the reviewed commit."
-          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)package(-lock)?\.json$'
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
           if git diff --cached --name-only --no-renames -z | grep -zqE "$guarded"; then
             # The names are the fix's, so they're printed as JSON, where none can start a workflow
             # command.

@@ -402,6 +402,8 @@ const neverPushed = [
   "src/.npmrc",
   ".yarnrc.yml",
   "node_modules/left-pad/index.js",
+  "npm-shrinkwrap.json",
+  "yarn.lock",
 ];
 
 function holdsClaude(job: Job): boolean {
@@ -765,27 +767,36 @@ describe("the factory's workflows", () => {
 
 // The paths the app never pushes, and the ones whose change also keeps npm from a branch, each
 // written the same way everywhere, so the lists can't drift apart.
-const neverPushPattern =
-  "^\\.github/|(^|/)\\.claude(/|$)|(^|/)\\.mcp\\.json$|(^|/)CLAUDE(\\.local)?\\.md$|(^|/)\\.npmrc$|(^|/)\\.yarnrc[^/]*$|(^|/)node_modules(/|$)";
-const heldBackPattern = `${neverPushPattern}|(^|/)package(-lock)?\\.json$`;
+// npm reads npm-shrinkwrap.json before package-lock.json when both are at a tree's root, and yarn.lock
+// as well, so each is held back like the dependencies themselves.
+const claudesPattern = "(^|/)\\.claude(/|$)|(^|/)\\.mcp\\.json$|(^|/)CLAUDE(\\.local)?\\.md$";
+const npmPattern =
+  "(^|/)\\.npmrc$|(^|/)\\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\\.json$|(^|/)yarn\\.lock$";
+const dependencies = "(^|/)package(-lock)?\\.json$";
+const neverPushPattern = `^\\.github/|${claudesPattern}|${npmPattern}`;
+const heldBackPattern = `${neverPushPattern}|${dependencies}`;
 
 describe("the factory's path patterns", () => {
   it("are one never-push pattern in the build, and one held-back pattern in the fixer and in resolve", () => {
     const found: string[] = [];
     for (const file of ["build.yml", "fix.yml", "resolve.yml"]) {
       const text = readFileSync(join(github, "workflows", file), "utf8");
-      for (const [, name, pattern] of text.matchAll(/\b(guarded|held)='([^']*)'/g)) {
+      for (const [, name, pattern] of text.matchAll(/\b(guarded|deps|claudes)='([^']*)'/g)) {
         found.push(`${file} ${name}`);
         // The fixer offers a fix to the dependencies rather than push it, since the next fix would
-        // install them; the build pushes them, having installed main's.
-        const want = file === "build.yml" ? neverPushPattern : heldBackPattern;
+        // install them; the build pushes them, having installed main's. The fixer's decide holds
+        // back the dependencies and Claude Code's own files, each with its own reason, but not
+        // .github/, which no session or install reads from the tree.
+        const want =
+          name === "deps" ? `${npmPattern}|${dependencies}` : name === "claudes" ? claudesPattern : file === "build.yml" ? neverPushPattern : heldBackPattern;
         expect(pattern, `${file} ${name}`).toBe(want);
       }
     }
     expect(found.sort()).toEqual([
       "build.yml guarded",
+      "fix.yml claudes",
+      "fix.yml deps",
       "fix.yml guarded",
-      "fix.yml held",
       "resolve.yml guarded",
       "resolve.yml guarded",
       "resolve.yml guarded",
@@ -933,8 +944,22 @@ describe("check-lockfile.sh", () => {
   });
 
   it.runIf(canRehearse)("passes the repository's own lockfile", () => {
-    expect(rehearse(script("check-lockfile.sh", [join(__dirname, "..")]), { root: scratch() }).failed).toBe(false);
+    const root = scratch();
+    put(join(root, "tree/package-lock.json"), readFileSync(join(__dirname, "../package-lock.json"), "utf8"));
+    expect(rehearse(script("check-lockfile.sh", [join(root, "tree")]), { root }).failed).toBe(false);
   });
+
+  // npm reads npm-shrinkwrap.json before package-lock.json, yarn.lock beside them, and a hidden
+  // lockfile in node_modules, none of which this checks, so a tree holding any is refused.
+  it.runIf(canRehearse).each(["npm-shrinkwrap.json", "web/npm-shrinkwrap.json", "yarn.lock", "node_modules/.package-lock.json"])(
+    "refuses a tree that holds %s",
+    (path) => {
+      const root = scratch();
+      put(join(root, "tree/package-lock.json"), JSON.stringify(good));
+      put(join(root, "tree", path), "{}");
+      expect(rehearse(script("check-lockfile.sh", [join(root, "tree")]), { root }).failed).toBe(true);
+    },
+  );
 
   it.runIf(canRehearse).each([
     ["a git dependency", { ...good, packages: { ...good.packages, "node_modules/c": { resolved: "git+ssh://git@github.com/x/c.git#abc", integrity: "sha512-x" } } }],
@@ -2074,7 +2099,7 @@ describe("land.yml", () => {
     mkdirSync(origin);
     git(origin, "init", "-q");
     put(join(origin, "README.md"), "A registry\n");
-    put(join(origin, ".github/build-rules.yml"), "review_paths: [docs/SPEC.md]\nmax_changed_lines: 400\n");
+    put(join(origin, ".github/build-rules.yml"), "review_paths: [docs/SPEC.md, .github/]\nmax_changed_lines: 400\n");
     put(join(origin, ".github/review-findings.sh"), readFileSync(join(github, "review-findings.sh"), "utf8"));
     put(join(origin, "scripts/build-rule.ts"), readFileSync(join(__dirname, "../scripts/build-rule.ts"), "utf8"));
     put(join(origin, ".github/workflows/ci.yml"), "name: CI\n");
@@ -2129,12 +2154,12 @@ describe("land.yml", () => {
   });
 
   // GitHub ran ci.yml from the pull request's merge with main, so only a branch that changed it ran
-  // reviews and a Classify of its own.
+  // reviews and a Classify of its own, and .github/ is a review path, so the rule asks.
   it.runIf(canRehearse)("asks when the branch changed ci.yml", () => {
     const { run } = judge("success", { branchChangesCi: true });
     expect(run.failed, run.printed).toBe(false);
     expect(run.outputs.verdict).toBe("ask");
-    expect(run.printed).toContain("The branch changes .github/workflows/ci.yml, which runs its own reviews and Classify.");
+    expect(run.printed).toContain("`.github/workflows/ci.yml` is a path that always needs review.");
   });
 
   it.runIf(canRehearse)("doesn't ask only because main changed ci.yml since the branch began", () => {
@@ -2142,6 +2167,7 @@ describe("land.yml", () => {
     expect(run.failed, run.printed).toBe(false);
     expect(run.outputs.verdict).toBe("show");
     expect(run.printed).not.toContain("ci.yml");
+    expect(stepWithId(jobs.find, "judge").run).not.toContain("ci.yml");
   });
 
   it.runIf(canRehearse)("asks when Classify's job didn't succeed, whatever verdict it left", () => {
@@ -2243,7 +2269,7 @@ describe("fix.yml", () => {
     expect(writes(jobs.fix)).toEqual([]);
     expect(jobs.write.permissions).toEqual({ contents: "read", "pull-requests": "write" });
     expect(holdsClaude(jobs.write)).toBe(false);
-    expect(runs(jobs.write)).not.toMatch(/\b(npm|npx|node)\b/);
+    expect(runs(jobs.write)).not.toMatch(/(^|[\s;&|(])(npm|npx|node)\s/m);
   });
 
   // The branch's files and its fix commits are read with git, from a clone of main with the branch's
@@ -2324,7 +2350,17 @@ describe("fix.yml", () => {
     expect(stepWithId(jobs.decide, "ready").run).not.toContain("/compare/");
   });
 
-  it.runIf(canRehearse)("holds back a branch whose changes run past 300 files", () => {
+  // A session would load Claude Code's own files from the tree, so a branch that changes them is
+  // held back, for its own reason. .github/ is read by nothing the fixer runs, so it isn't.
+  it.runIf(canRehearse).each([".claude/settings.json", ".mcp.json", "src/CLAUDE.md"])("holds back a branch that changes %s, for its own reason", (path) => {
+    expect(decide({ files: [path] }).outputs.outcome).toBe("claudefiles");
+  });
+
+  it.runIf(canRehearse)("fixes a branch that changes .github/", () => {
+    expect(decide({ files: [".github/workflows/ci.yml"] }).outputs.outcome).toBe("fix");
+  });
+
+  it.runIf(canRehearse)("reads every changed file with git, so a package.json past the 300th is still held back", () => {
     const files = Array.from({ length: 301 }, (_, n) => `src/file-${n}.ts`);
     expect(decide({ files: [...files, "package.json"] }).outputs.outcome).toBe("npmfiles");
   });
@@ -2362,7 +2398,16 @@ describe("fix.yml", () => {
 
   // npm would read the branch's .npmrc or a committed node_modules/ beside the Claude token, so a
   // branch that changes them is never installed: a person must fix it.
-  it.runIf(canRehearse).each([".npmrc", "web/.npmrc", ".yarnrc", "node_modules/left-pad/index.js", "package.json", "package-lock.json"])(
+  it.runIf(canRehearse).each([
+    ".npmrc",
+    "web/.npmrc",
+    ".yarnrc",
+    "node_modules/left-pad/index.js",
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+  ])(
     "refuses a branch that changes %s",
     (path) => {
       expect(decide({ files: [path] }).outputs.outcome).toBe("npmfiles");
@@ -2473,6 +2518,13 @@ describe("fix.yml", () => {
       expect(run.outputs.result).toBe("done");
       expect(run.calls).toMatch(/> .*two fix commits/);
       expect(run.calls).toContain("https://github.com/owner/repo/actions/runs/77");
+    });
+
+    it.runIf(canRehearse)("says in a new comment that Claude Code's own files keep the fixer from the branch", () => {
+      const run = guard({ OUTCOME: "claudefiles" });
+      expect(run.outputs.result).toBe("done");
+      expect(run.calls).toMatch(/> .*Claude Code's own files/);
+      expect(run.calls).not.toMatch(/> .*dependencies/);
     });
 
     it.runIf(canRehearse)("says in a new comment that npm's files keep the fixer from the branch", () => {
@@ -2712,7 +2764,7 @@ describe("resolve.yml", () => {
   it("finds and rebases, resolves a real conflict, and pushes, with no check job", () => {
     expect(Object.keys(jobs).sort()).toEqual(["draft", "find", "push"]);
     expect(jobs.draft.if).toBe("needs.find.outputs.conflicted == 'true'");
-    for (const id of ["find", "push"]) expect(runs(jobs[id]), id).not.toMatch(/\b(npm|npx|node)\b/);
+    for (const id of ["find", "push"]) expect(runs(jobs[id]), id).not.toMatch(/(^|[\s;&|(])(npm|npx|node)\s/m);
     expect(writes(jobs.find)).toEqual([]);
     expect(writes(jobs.draft)).toEqual([]);
     expect(jobs.push.permissions).toEqual({ contents: "read", "pull-requests": "write" });

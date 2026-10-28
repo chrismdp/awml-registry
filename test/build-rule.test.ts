@@ -91,7 +91,7 @@ describe("the build rules file", () => {
   // always needs review.
   it("asks about a change to npm's settings or a committed node_modules/", () => {
     const rules = loadConfig(join(__dirname, "../.github/build-rules.yml"));
-    for (const path of [".npmrc", ".yarnrc", ".yarnrc.yml", "node_modules/", "package.json", "package-lock.json"])
+    for (const path of [".npmrc", ".yarnrc", ".yarnrc.yml", "node_modules/", "package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock"])
       expect(rules.reviewPaths).toContain(path);
     expect(rules.reviewNonTests).toEqual(["test/"]);
   });

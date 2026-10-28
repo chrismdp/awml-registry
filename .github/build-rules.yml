@@ -17,6 +17,8 @@ review_paths:
   # Dependencies, the engine and how the registry is deployed.
   - package.json
   - package-lock.json
+  - npm-shrinkwrap.json
+  - yarn.lock
   - .npmrc
   - .yarnrc
   - .yarnrc.yml

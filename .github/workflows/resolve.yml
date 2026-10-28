@@ -101,7 +101,7 @@ jobs:
             [[ "$branch" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || continue
 
             git "${safe[@]}" -c http.https://github.com/.extraheader="$auth" fetch -q --no-tags origin "$head_sha"
-            guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)package(-lock)?\.json$'
+            guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
             if git "${safe[@]}" diff --name-only --no-renames -z "$(git merge-base "$MAIN_SHA" "$head_sha")" "$head_sha" |
               grep -zqE "$guarded"; then
               pulls="$(jq -c --argjson number "$number" --arg branch "$branch" --arg head_sha "$head_sha" \
@@ -318,7 +318,7 @@ jobs:
             echo "The workspace or its .git isn't the one the sessions started beside, so nothing is read from it."
             exit 1
           fi
-          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)package(-lock)?\.json$'
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
           resolved="$RUNNER_TEMP/resolved"
           mkdir -p "$resolved" "$RUNNER_TEMP/check"
           while IFS=$'\t' read -r number head_sha; do
@@ -473,7 +473,7 @@ jobs:
           if git "${safe[@]}" grep -qE '^(<<<<<<<|>>>>>>>)( |$)' refs/rebased --; then
             refuse "The rebased branch still holds conflict markers."
           fi
-          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)package(-lock)?\.json$'
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
           if git "${safe[@]}" diff --name-only --no-renames -z "$MAIN_SHA" refs/rebased | grep -zqE "$guarded"; then
             refuse "The rebased branch changes .github/, Claude Code's own files, its dependencies, an .npmrc, a .yarnrc or node_modules/, which the factory doesn't push."
           fi
