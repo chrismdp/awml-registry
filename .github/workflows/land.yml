@@ -53,8 +53,9 @@ jobs:
     steps:
       # Only a pull_request run, which runs once a commit, from a branch of this repository, since a
       # fork's branch can carry a build's name. The pull request must be open from the branch with
-      # CI's commit as its head, and every check on that commit must have finished and passed, with
-      # test, Bug review and Security review among them from CI's own run. Whoever last added the
+      # CI's commit as its head, every check on that commit must have finished, and test, Bug review
+      # and Security review must have passed in CI's own run. A Classify that ended without success,
+      # timed out or lost its runner, goes on to the rule as no verdict, which means ask. Whoever last added the
       # issue's build label is asked; if the app added it, the owner is.
       - name: Check the pull request is open at CI's commit, with every check passed
         id: ready
@@ -83,8 +84,8 @@ jobs:
 
           gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/check-runs?per_page=100" |
             jq -s '[.[].check_runs[]]' > "$RUNNER_TEMP/checks.json"
-          jq -e 'all(.[]; .status == "completed" and (.conclusion | IN("success", "neutral", "skipped")))' \
-            "$RUNNER_TEMP/checks.json" > /dev/null || leave "A check on $HEAD_SHA hasn't finished, or didn't pass."
+          jq -e 'all(.[]; .status == "completed")' "$RUNNER_TEMP/checks.json" > /dev/null ||
+            leave "A check on $HEAD_SHA hasn't finished."
           jq -e --argjson suite "$CHECK_SUITE" '
               ["test", "Bug review", "Security review"] as $required
               | [.[] | select(.check_suite.id == $suite and .conclusion == "success") | .name] as $passed
@@ -134,8 +135,12 @@ jobs:
           cp .github/review-findings.sh .github/build-rules.yml "$RUNNER_TEMP/"
           nits="$(bash "$RUNNER_TEMP/review-findings.sh" nits "$CI_RUN")"
           classified="$(bash "$RUNNER_TEMP/review-findings.sh" verdict "$CI_RUN")"
-          classify_url="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/jobs" --paginate \
-            --jq '.jobs[] | select(.name == "Classify") | .html_url' | tail -n 1)"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/jobs" --paginate --jq '.jobs[]' | jq -s . > "$RUNNER_TEMP/jobs.json"
+          classify_url="$(jq -r '[.[] | select(.name == "Classify")] | last | .html_url // ""' "$RUNNER_TEMP/jobs.json")"
+          # A Classify job that didn't succeed may have left a verdict it never finished weighing.
+          if ! jq -e '[.[] | select(.name == "Classify")] | last | .conclusion == "success"' "$RUNNER_TEMP/jobs.json" > /dev/null; then
+            classified=missing
+          fi
           git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
             -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
             fetch --no-tags origin "$HEAD_SHA"

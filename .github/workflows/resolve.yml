@@ -211,6 +211,7 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '"# " + .title + "\n\n" + (.body // "")' > "$root/in/pull-request.md"
             chmod -R a-w "$root/in"
             (cd "$root/work" && npm ci --ignore-scripts --no-audit --no-fund)
+            stat -c %d:%i "$root/work" "$root/work/.git" > "$RUNNER_TEMP/baseline/clone-$number"
             printf '%s\t%s\n' "$number" "$head_sha" >> "$RUNNER_TEMP/pulls.tsv"
           done < <(jq -r '.[] | select(.clean == false and .guarded == false) | [.number, .head_sha] | @tsv' <<< "$PULLS")
           stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$RUNNER_TEMP/baseline/workspace"
@@ -274,8 +275,8 @@ jobs:
 
       # Each session's bundle is read as data into a fresh repository, whose config no session ever
       # touched, with no global or system config, hooks, fsmonitor or external diff, beside no login
-      # token, and only if the workspace is the one the sessions started beside and the out folder
-      # is reached through no symbolic link. It must sit on main, carry no conflict marker, and
+      # token, and only if the workspace and the clone are the ones the session started beside and
+      # in, and the out folder is reached through no symbolic link. It must sit on main, carry no conflict marker, and
       # change nothing the app never pushes. The lines its resolution adds, beyond those the branch
       # already added, and Claude's note, must carry nothing like a token. The digest of what's kept
       # is the job's output, which the push job checks it against.
@@ -310,6 +311,11 @@ jobs:
             done
             if [ "$linked" = true ]; then
               echo "The out folder of #$number is reached through a symbolic link, so nothing is read from it."
+              continue
+            fi
+            work="$RUNNER_TEMP/pr/$number/work"
+            if ! stat -c %d:%i "$work" "$work/.git" | cmp -s - "$RUNNER_TEMP/baseline/clone-$number"; then
+              echo "The clone of #$number or its .git isn't the one its session started in, so nothing is read from it."
               continue
             fi
             fresh="$RUNNER_TEMP/check/$number"

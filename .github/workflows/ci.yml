@@ -11,6 +11,11 @@
 # stranger opened, gets the tests only: its author could steer the sessions, which hold the
 # maintainer's login token.
 #
+# On pull_request, GitHub runs the pull request's own copy of this file, not main's. So a person with
+# write access could change, in their own pull request, how it is reviewed and classified. That is
+# accepted: only the repository's own people and the factory's app get the reviews at all, they are
+# trusted, and the app can't push .github/, so nothing the factory pushes can change this file.
+#
 # The review jobs and Classify check out main, never the branch, copy main's prompts, AGENTS.md,
 # REVIEW.md and scripts out, and bring in the pull request's patch as data, applied to the commit of
 # main it started from. Each starts one fresh Claude session in a home of its own, which reads the

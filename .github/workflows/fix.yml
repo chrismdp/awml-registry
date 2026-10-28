@@ -124,7 +124,7 @@ jobs:
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
         run: |
           mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
-          cp .github/fix-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/review-findings.sh "$RUNNER_TEMP/main/"
+          cp .github/fix-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/review-findings.sh .github/unclose.sh "$RUNNER_TEMP/main/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
           bash "$RUNNER_TEMP/main/review-findings.sh" findings "$CI_RUN" > "$RUNNER_TEMP/input/findings.json"
           gh api "repos/$GITHUB_REPOSITORY/compare/main...$HEAD_SHA" -H "Accept: application/vnd.github.diff" \
@@ -230,7 +230,8 @@ jobs:
           git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= add -A
           git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= diff --cached --binary --no-ext-diff --no-textconv > "$fixed/fix.patch"
           out="$RUNNER_TEMP/sessions/fix/out/message.md"
-          if [ -f "$out" ] && [ ! -L "$out" ]; then cp "$out" "$fixed/message.md"; fi
+          # The message goes into the fix commit, so it closes no issue.
+          if [ -f "$out" ] && [ ! -L "$out" ]; then bash "$RUNNER_TEMP/main/unclose.sh" < "$out" > "$fixed/message.md"; fi
           if [ -s "$fixed/fix.patch" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else

@@ -874,6 +874,15 @@ describe("ci.yml", () => {
 
   // The required checks keep their names: the tests' check is test, and the reviews' are Bug review
   // and Security review.
+  // On pull_request GitHub runs the pull request's own ci.yml, so someone with write access could
+  // change how their own pull request is reviewed. The header says so, and why it's accepted.
+  it("says plainly that a pull request's own ci.yml runs", () => {
+    const text = readFileSync(join(github, "workflows/ci.yml"), "utf8");
+    const header = squash(text.slice(0, text.indexOf("\nname:")));
+    expect(header).toContain("On pull_request, GitHub runs the pull request's own copy of this file");
+    expect(header).toContain("the app can't push .github/");
+  });
+
   it("runs the tests, both reviews and Classify as jobs of one run, under their check names", () => {
     expect(Object.keys(jobs).sort()).toEqual(["classify", "report", "review", "test"]);
     expect(jobs.test.name).toBeUndefined();
@@ -1713,6 +1722,14 @@ describe("land.yml", () => {
     expect(run.outputs).toMatchObject({ go: "true", pr: "12", issue: "7", head_sha: head, labeller: "maintainer" });
   });
 
+  // A Classify that timed out, or whose runner was lost, leaves no verdict, which means ask: land
+  // goes on rather than leaving the pull request unjudged.
+  it.runIf(canRehearse).each(["failure", "cancelled", "timed_out"])("goes on when Classify ended as %s", (conclusion) => {
+    const run = ready({ checks: checkRuns({ Classify: { conclusion } }) });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.go).toBe("true");
+  });
+
   it.runIf(canRehearse)("asks the owner when the app added the label", () => {
     expect(ready({ labeller: { login: "awml-factory[bot]", type: "Bot" } }).outputs.labeller).toBe("owner");
   });
@@ -1738,7 +1755,7 @@ describe("land.yml", () => {
   // The rule judges the head commit itself, read with git into a worktree at the commit of main
   // the branch starts from, never a patch from an artifact, with Classify's verdict and the Nits
   // read from the checks of CI's run.
-  it.runIf(canRehearse)("judges the head commit with the rule from main", () => {
+  const judge = (classifyConclusion: string) => {
     const root = scratch();
     const origin = join(root, "origin");
     mkdirSync(origin);
@@ -1761,7 +1778,12 @@ describe("land.yml", () => {
       jobs: [
         { name: "Bug review", check_run_url: "https://api.github.com/repos/owner/repo/check-runs/11", html_url: "https://github.com/x/11" },
         { name: "Security review", check_run_url: "https://api.github.com/repos/owner/repo/check-runs/12", html_url: "https://github.com/x/12" },
-        { name: "Classify", check_run_url: "https://api.github.com/repos/owner/repo/check-runs/13", html_url: "https://github.com/owner/repo/actions/runs/77/job/13" },
+        {
+          name: "Classify",
+          conclusion: classifyConclusion,
+          check_run_url: "https://api.github.com/repos/owner/repo/check-runs/13",
+          html_url: "https://github.com/owner/repo/actions/runs/77/job/13",
+        },
       ],
     });
     const run = rehearse(stepWithId(jobs.find, "judge").run ?? "", {
@@ -1774,12 +1796,24 @@ describe("land.yml", () => {
   *"check-runs/12/annotations"*) answer <<< '[]' ;;
   *"check-runs/13/annotations"*) answer <<< '${JSON.stringify([{ annotation_level: "notice", title: "Verdict: ship", message: "Small.", path: ".github", start_line: 1 }])}' ;;`,
     });
+    return { run, work };
+  };
+
+  it.runIf(canRehearse)("judges the head commit with the rule from main", () => {
+    const { run, work } = judge("success");
     expect(run.failed, run.printed).toBe(false);
     expect(run.outputs.verdict).toBe("show");
     expect(run.outputs.classify_url).toBe("https://github.com/owner/repo/actions/runs/77/job/13");
     expect(run.printed).toContain("The reviews left 1 Nit unfixed.");
     expect(readFileSync(join(work, "README.md"), "utf8")).toBe("A registry\n");
     expect(existsSync(join(work, "src/page.tsx")), "the branch's files reached main's working tree").toBe(false);
+  });
+
+  it.runIf(canRehearse)("asks when Classify's job didn't succeed, whatever verdict it left", () => {
+    const { run } = judge("timed_out");
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.verdict).toBe("ask");
+    expect(run.printed).toContain("Classify gave no verdict.");
   });
 
   it("passes on only the sha, the outcome, the labeller and the rule's reasons", () => {
@@ -1974,6 +2008,12 @@ describe("fix.yml", () => {
     const copied = all.findIndex((each) => (each.run ?? "").includes("fix-prompt.md"));
     expect(copied).toBeGreaterThan(-1);
     expect(copied).toBeLessThan(all.indexOf(clones[1]));
+  });
+
+  // Claude's message goes into the fix commit, so it closes no issue.
+  it("neutralises closing keywords in the session's message before it's kept", () => {
+    expect(stepWithId(jobs.fix, "patch").run).toContain('bash "$RUNNER_TEMP/main/unclose.sh" < "$out" > "$fixed/message.md"');
+    expect(runs(jobs.fix)).toMatch(/cp [^\n]*\.github\/unclose\.sh/);
   });
 
   it("keeps the fix for 30 days, so an offered fix can be downloaded", () => {
@@ -2320,6 +2360,7 @@ describe("resolve.yml", () => {
       'safe_git -C "$root/work" config user.name "awml-factory[bot]"',
       '(cd "$root/work" && npm ci --ignore-scripts --no-audit --no-fund)',
       'stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$RUNNER_TEMP/baseline/workspace"',
+      'stat -c %d:%i "$root/work" "$root/work/.git" > "$RUNNER_TEMP/baseline/clone-$number"',
     ])
       expect(text).toContain(want);
     expect(prepare.env).toMatchObject(hostNpm);
@@ -2396,6 +2437,7 @@ describe("resolve.yml", () => {
       put(join(root, "runner/pr/5/out/message.md"), "Kept both sides.\n");
       put(join(root, "runner/pulls.tsv"), `5\t${head}\n`);
       put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", ws, join(ws, ".git")], { encoding: "utf8" }));
+      put(join(root, "runner/baseline/clone-5"), execFileSync("stat", ["-c", "%d:%i", work, join(work, ".git")], { encoding: "utf8" }));
       put(join(root, "runner/main/scan-tokens.sh"), readFileSync(join(github, "scan-tokens.sh"), "utf8"));
       spoil(root, ws);
       const run = rehearse(stepWithId(jobs.draft, "check").run ?? "", { root, env: { MAIN_SHA: main, GITHUB_WORKSPACE: ws } });
@@ -2434,6 +2476,19 @@ describe("resolve.yml", () => {
       expect(run.failed, run.printed).toBe(false);
       expect(existsSync(join(root, "runner/resolved/5.bundle"))).toBe(false);
       expect(existsSync(join(root, "runner/resolved/5.md"))).toBe(false);
+    });
+
+    it.runIf(canRehearse)("keeps nothing from a clone whose .git was replaced", () => {
+      const { root, run } = rebased(
+        () => {},
+        (root) => {
+          const work = join(root, "runner/pr/5/work");
+          execFileSync("mv", [join(work, ".git"), join(root, "old-clone-git")]);
+          execFileSync("cp", ["-r", join(root, "old-clone-git"), join(work, ".git")]);
+        },
+      );
+      expect(run.failed, run.printed).toBe(false);
+      expect(existsSync(join(root, "runner/resolved/5.bundle"))).toBe(false);
     });
 
     it.runIf(canRehearse)("stops when the workspace or its .git was replaced", () => {
