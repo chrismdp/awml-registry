@@ -1762,6 +1762,19 @@ ${permissionStub}
     expect(run.calls).not.toContain("issue comment");
   });
 
+  // The drawing shows the check of whoever added the label, and its refusal, and says no more about
+  // who may add a label than GitHub holds.
+  it("is drawn with its check of the labeller and its refusal", () => {
+    const drawing = readFileSync(join(github, "drawings/issue-to-pull-request.yaml"), "utf8");
+    expect(drawing).toMatch(/- \{ id: refused, kind: code, op: do, cleans: true, label: "[^"]*fixed text[^"]*"/);
+    expect(drawing).toMatch(/\{ from: writer, to: refused, kind: start, label: "\[added without write access\]" \}/);
+    expect(drawing).toContain("{ from: refused, to: startnote, kind: data }");
+    expect(drawing).toContain("{ from: writer, to: started, kind: start");
+    expect(drawing).not.toContain("{ from: approve, to: started");
+    expect(drawing).not.toContain("{ from: still, to: started");
+    expect(drawing).not.toMatch(/Only people with write access(,| and)/);
+  });
+
   it("starts from a job that checks out nothing and runs only gh", () => {
     expect(jobs.start.permissions).toEqual({ issues: "write" });
     expect(steps(jobs.start).every((each) => each.uses === undefined)).toBe(true);
