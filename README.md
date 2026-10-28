@@ -38,6 +38,14 @@ The registry takes only AWML 0.6 files, marked `awml: "0.6"`. It refuses an olde
 
 The workflow's page is then at `/<you>/<workflow>`. Each view has its own address: `/<you>/<workflow>/security`, which draws the design; `/platform`, which draws the first implementation, with each at `/platform/<implementation>`; `/yaml`, which shows the file as text to copy or download; and `/checks`, which says what checking the file found. Older versions are at `/<you>/<workflow>/v/<n>`, with their views at `/v/<n>/security` and so on. Versions pushed before the registry took only 0.4 files keep their security and platform files, and their pages still show them, converted: a platform file is drawn only when AWML can join it with its security file.
 
+To show a public workflow's drawing on another site, put its `/embed` address in an iframe: `/<you>/<workflow>/embed` for the latest version, or `/<you>/<workflow>/v/<n>/embed` for one that won't change. A system's map is at `/<you>/systems/<system>/embed`. Add `?view=platform` (and `&implementation=<id>`) to draw where it runs, or `?flow=1` to open it in Flow only. The embed shows only the drawing, with a link back to its page in the corner; every link opens a new tab.
+
+```html
+<iframe src="https://<registry>/<you>/<workflow>/v/<n>/embed" width="100%" height="480" style="border:0" loading="lazy" title="<the workflow's title>"></iframe>
+```
+
+Only public workflows and systems can be embedded: a private one is a 404, even to its owner. The embed addresses are the only pages another site may frame. Every other page, sign-in and settings included, refuses to be shown in another site's frame.
+
 Run the tests with `npm test` and the type check with `npm run typecheck`.
 
 ## Platforms and where a workflow can run

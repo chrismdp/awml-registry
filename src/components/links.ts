@@ -23,6 +23,10 @@ export function partInHash(hash: string): string | null {
   return PART.test(part) ? part : null;
 }
 
+// A link's attributes that open it in a new tab, as every link in a drawing
+// embedded on another site does (#75).
+export const NEW_TAB = { target: "_blank", rel: "noopener" } as const;
+
 // Whether a click or a key asks for a new tab, as on a link: the middle
 // button, or Ctrl or ⌘ held.
 export const newTab = (e: { button?: number; ctrlKey: boolean; metaKey: boolean }) => e.button === 1 || e.ctrlKey || e.metaKey;
@@ -33,13 +37,19 @@ export const followsOnKey = (key: string, role: string | null) => key === "Enter
 
 // What following a part does, as a link would: open where it leads, here or
 // in a new tab, open the menu of several, close the menu already open, or
-// nothing for a part that leads nowhere.
+// nothing for a part that leads nowhere. A drawing embedded on another site
+// (#75) opens `always` in a new tab, never in its frame.
 export type Follow = { to: string; newTab: boolean } | "menu" | "close" | null;
 
-export function followOf(to: string | "menu" | null, e: { button?: number; ctrlKey: boolean; metaKey: boolean }, menuOpen: boolean): Follow {
+export function followOf(
+  to: string | "menu" | null,
+  e: { button?: number; ctrlKey: boolean; metaKey: boolean },
+  menuOpen: boolean,
+  always = false,
+): Follow {
   if (menuOpen) return "close";
   if (to === null || to === "menu") return to;
-  return { to, newTab: newTab(e) };
+  return { to, newTab: always || newTab(e) };
 }
 
 // A press on a part or a box: one that dragged it moves it and follows

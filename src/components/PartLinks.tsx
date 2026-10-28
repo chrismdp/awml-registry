@@ -2,13 +2,16 @@
 
 import { useLayoutEffect, useRef, type KeyboardEvent } from "react";
 import type { PartLink } from "@/server/part-links";
+import { NEW_TAB } from "./links";
 import { placeMenu, type Box } from "./viewport";
 
 // The workflows a part leads to, when there are several (#55), beside its
 // box in the drawing's frame, `node`. It is placed once it is drawn and its
 // size is known: under the part, above it when only above has room, and
-// inside the frame. Esc closes it; the arrow keys move between its links.
-export function PartMenu({ link, node, onClose }: { link: PartLink; node: Box; onClose: () => void }) {
+// inside the frame. Esc closes it; the arrow keys move between its links,
+// which open in a new tab when `newTab`, as in a drawing embedded on another
+// site (#75).
+export function PartMenu({ link, node, onClose, newTab = false }: { link: PartLink; node: Box; onClose: () => void; newTab?: boolean }) {
   const menu = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = menu.current;
@@ -47,7 +50,7 @@ export function PartMenu({ link, node, onClose }: { link: PartLink; node: Box; o
       ))}
       <div role="menu" aria-label={link.title}>
         {link.to.map((t) => (
-          <a key={t.href} role="menuitem" href={t.href}>
+          <a key={t.href} role="menuitem" href={t.href} {...(newTab ? NEW_TAB : {})}>
             {t.label}
           </a>
         ))}
