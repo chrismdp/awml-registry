@@ -1,30 +1,48 @@
-// The build rule: whether a change the build workflow drafted is straightforward enough to merge by
-// itself, or needs the maintainer's review. It reads the change staged in a repository, the
-// settings in .github/build-rules.yml, the build's reviews' findings and the classifier's verdict,
-// and prints "review" or "straightforward", then one reason a line. land.yml runs main's copy of
-// it, with main's settings, once CI has passed, so a change can't alter how it's judged.
+// The build rule: how far a factory pull request, whose CI has passed, may land by itself. Classify's
+// verdict, ship, show or ask, starts it off, and the rule can only move that towards ask: its own
+// tests of the change (paths, test helpers, size, binaries, symbolic links, gitlinks, removed tests), a commit since main
+// that isn't the factory's, or Classify saying ask or nothing mean ask; a fix commit on the branch,
+// or Nits the reviews left unfixed, mean at least show. It prints the verdict, then one reason a
+// line. land.yml runs main's copy of it, with main's settings, on the head commit CI judged, staged
+// at the commit of main the branch starts from, so a change can't alter how it's judged.
 //
 // It needs nothing but Node and git, so the job that runs it installs nothing:
 //   node --experimental-strip-types scripts/build-rule.ts --repo . --rules .github/build-rules.yml \
-//     --findings findings.json --classification classification.json
+//     --classified ship --nits 0 --base <sha> --head <sha>
 // This is the registry's copy of AWML's internal/buildrule, with the registry's own test files.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
-export type Config = { reviewPaths: string[]; maxChangedLines: number };
-export type Verdict = { review: boolean; reasons: string[] };
-// The reviews' record and the classifier's verdict, as files the build's review job wrote. Either
-// may be left out: the classifier doesn't run when the reviews leave an Important finding open.
-export type Records = { findings?: string; classification?: string };
+// reviewPaths are paths, or folders ending in /, that always need review; reviewNonTests are folders
+// whose files other than tests always need review, such as a test's helpers and fixtures; and
+// reviewAnywhere are names, a file's or a folder's ending in /, that need review wherever they sit
+// in the tree, such as the files npm reads beside any package.
+export type Config = { reviewPaths: string[]; reviewNonTests: string[]; reviewAnywhere: string[]; maxChangedLines: number };
+export type Verdict = { verdict: "ship" | "show" | "ask"; reasons: string[] };
+// What land read from GitHub and git: Classify's verdict, or "missing" when its check has none; how
+// many Nits the reviews' checks carry; and the branch's commits since main, from base to head.
+export type Judged = {
+  classified?: string;
+  nits?: number;
+  base?: string;
+  head?: string;
+};
+
+const verdicts = ["ship", "show", "ask"] as const;
+// The factory's app's bot, which makes the build's and the fixer's commits.
+const factory = "awml-factory[bot]";
+// The line each fix commit's message carries, which survives a rebase. fix.yml writes it, and counts
+// the fix commits on a branch by the same pattern, in jq, as the rule does.
+export const fixLine = /(^|\n)Factory-Fix: /;
 
 const testFile = /\.test\.(ts|tsx|mjs)$/;
 // A removed line that declared a test or a group of them, including one that was only changed to
 // skip it.
 const removedTest = /^-\s*(it|test|describe)\b[\w.]*\s*\(/m;
 const gitAttributes = /(^|\/)\.gitattributes$/;
-// The binary files the rule lets through unread, as review.yml does, each only if it starts as its
+// The binary files the rule lets through unread, as CI's reviews do, each only if it starts as its
 // kind does. The PNG and GIF signatures are the ones the build's open job checks its pictures by.
 const ascii = (text: string) => Buffer.from(text, "latin1");
 const startsWith = (head: Buffer, ...signatures: Buffer[]) =>
@@ -40,8 +58,11 @@ const imagesAndFonts: [RegExp, (head: Buffer) => boolean][] = [
   [/\.woff$/i, (head) => startsWith(head, ascii("wOFF"))],
   [/\.woff2$/i, (head) => startsWith(head, ascii("wOF2"))],
 ];
-// A symbolic link's mode in git.
+// A symbolic link's mode in git, and a gitlink's, which points at another repository's commit.
 const symbolicLink = "120000";
+const gitlink = "160000";
+// The largest image or font the rule lets through unread.
+const largestBinary = 1024 * 1024;
 
 export function loadConfig(path: string): Config {
   return readConfig(readFileSync(path, "utf8"));
@@ -51,7 +72,7 @@ export function loadConfig(path: string): Config {
 // either inline in brackets or one "- item" a line, and comments on lines of their own. Anything
 // else is refused, so a setting can never be quietly misread.
 export function readConfig(text: string): Config {
-  const config: Config = { reviewPaths: [], maxChangedLines: 0 };
+  const config: Config = { reviewPaths: [], reviewNonTests: [], reviewAnywhere: [], maxChangedLines: 0 };
   let list: string[] | undefined;
   for (const [index, raw] of text.split("\n").entries()) {
     const line = raw.trimEnd();
@@ -60,7 +81,7 @@ export function readConfig(text: string): Config {
 
     const item = line.match(/^\s+-(.*)$/);
     if (item) {
-      if (!list) throw new Error(`${where}: a list item belongs under review_paths`);
+      if (!list) throw new Error(`${where}: a list item belongs under review_paths, review_non_tests or review_anywhere`);
       list.push(item[1].trim());
       continue;
     }
@@ -70,14 +91,15 @@ export function readConfig(text: string): Config {
     if (!setting) throw new Error(`${where}: can't read "${line}"`);
     const [, key, rest] = setting;
     const value = rest.trim();
-    if (key === "review_paths") {
+    if (key === "review_paths" || key === "review_non_tests" || key === "review_anywhere") {
+      const field = key === "review_paths" ? "reviewPaths" : key === "review_non_tests" ? "reviewNonTests" : "reviewAnywhere";
       if (value === "") {
-        list = config.reviewPaths = [];
+        list = config[field] = [];
       } else if (value.startsWith("[") && value.endsWith("]")) {
         const inside = value.slice(1, -1).trim();
-        config.reviewPaths = inside === "" ? [] : inside.split(",").map((path) => path.trim());
+        config[field] = inside === "" ? [] : inside.split(",").map((path) => path.trim());
       } else {
-        throw new Error(`${where}: review_paths must be a list`);
+        throw new Error(`${where}: ${key} must be a list`);
       }
     } else if (key === "max_changed_lines") {
       if (!/^-?\d+$/.test(value)) throw new Error(`${where}: max_changed_lines must be a whole number`);
@@ -88,24 +110,54 @@ export function readConfig(text: string): Config {
   }
 
   if (config.maxChangedLines < 0) throw new Error("max_changed_lines must not be negative");
-  for (const path of config.reviewPaths) {
-    if (path === "") throw new Error("review_paths must not contain an empty path");
-    if (/^["'#]|\s#/.test(path)) throw new Error(`review_paths can't read ${path}; write each path bare`);
+  for (const [key, paths] of [
+    ["review_paths", config.reviewPaths],
+    ["review_non_tests", config.reviewNonTests],
+    ["review_anywhere", config.reviewAnywhere],
+  ] as const) {
+    for (const path of paths) {
+      if (path === "") throw new Error(`${key} must not contain an empty path`);
+      if (/^["'#]|\s#/.test(path)) throw new Error(`${key} can't read ${path}; write each path bare`);
+    }
+  }
+  for (const folder of config.reviewNonTests) {
+    if (!folder.endsWith("/")) throw new Error(`review_non_tests must name a folder, ending in /: ${folder}`);
+  }
+  for (const name of config.reviewAnywhere) {
+    if (name.replace(/\/$/, "").includes("/")) throw new Error(`review_anywhere must name a file or a folder, not a path: ${name}`);
   }
   return config;
 }
 
-export function evaluate(repo: string, config: Config, records: Records = {}): Verdict {
+export function evaluate(repo: string, config: Config, judged: Judged = {}): Verdict {
+  // The reasons that mean ask, and those that mean at least show.
   const reasons: string[] = [];
+  const shows: string[] = [];
 
-  if (records.findings !== undefined) {
-    const open = openFindings(records.findings);
-    if (open === 1) reasons.push("The reviews left 1 finding open.");
-    else if (open > 1) reasons.push(`The reviews left ${open} findings open.`);
+  if (judged.classified !== undefined) {
+    if (judged.classified === "missing") {
+      reasons.push("Classify gave no verdict.");
+    } else if (judged.classified === "ask") {
+      reasons.push("Classify said ask.");
+    } else if (judged.classified === "show") {
+      shows.push("Classify said show.");
+    } else if (!(verdicts as readonly string[]).includes(judged.classified)) {
+      throw new Error(`Classify gave an unknown verdict ${JSON.stringify(judged.classified)}`);
+    }
   }
 
-  if (records.classification !== undefined && classifierAsked(records.classification)) {
-    reasons.push("The classifier asked for a review.");
+  const nits = judged.nits ?? 0;
+  if (!Number.isInteger(nits) || nits < 0) throw new Error(`the count of Nits must be a whole number: ${nits}`);
+  if (nits === 1) shows.push("The reviews left 1 Nit unfixed.");
+  else if (nits > 1) shows.push(`The reviews left ${nits} Nits unfixed.`);
+
+  if (judged.base !== undefined || judged.head !== undefined) {
+    const { foreign, merges, fixes } = readCommits(repo, judged);
+    if (merges > 0) reasons.push("The branch since main holds a merge, which the factory never makes.");
+    if (foreign === 1) reasons.push("1 commit since main isn't the factory's.");
+    else if (foreign > 1) reasons.push(`${foreign} commits since main aren't the factory's.`);
+    if (fixes === 1) shows.push("The branch carries 1 fix commit.");
+    else if (fixes > 1) shows.push(`The branch carries ${fixes} fix commits.`);
   }
 
   const paths = nulFields(git(repo, "diff", "--cached", "--name-only", "--no-renames", "-z", "--"));
@@ -113,7 +165,15 @@ export function evaluate(repo: string, config: Config, records: Records = {}): V
     const protectedPath = config.reviewPaths.some(
       (rule) => path === rule || (rule.endsWith("/") && path.startsWith(rule)),
     );
+    const parts = path.split("/");
+    const anywhere = config.reviewAnywhere.some((name) =>
+      name.endsWith("/") ? parts.slice(0, -1).includes(name.slice(0, -1)) : parts[parts.length - 1] === name,
+    );
     if (protectedPath) reasons.push(`${shown(path)} is a path that always needs review.`);
+    else if (anywhere) reasons.push(`${shown(path)} is a name npm reads wherever it sits, so it always needs review.`);
+    else if (config.reviewNonTests.some((folder) => path.startsWith(folder)) && !testFile.test(path)) {
+      reasons.push(`${shown(path)} is a test's helper or fixture, so it always needs review.`);
+    }
   }
 
   // The rule reads no attributes from the change, but a .gitattributes would change how git reads
@@ -140,6 +200,7 @@ export function evaluate(repo: string, config: Config, records: Records = {}): V
   const modes = newModes(repo);
   for (const [path, mode] of modes) {
     if (mode === symbolicLink) reasons.push(`${shown(path)} is a symbolic link, so it always needs review.`);
+    if (mode === gitlink) reasons.push(`${shown(path)} is another repository's commit, so it always needs review.`);
   }
 
   // A file git finds binary by its content can't be counted or read, so it needs review, unless it's
@@ -151,44 +212,41 @@ export function evaluate(repo: string, config: Config, records: Records = {}): V
       reasons.push(`${shown(path)} is binary, so the rule can't count or read it.`);
     } else if (modes.get(path) !== "000000" && !kind[1](head(repo, path))) {
       reasons.push(`${shown(path)} is binary, and doesn't start as its name says, so the rule can't read it.`);
+    } else if (modes.get(path) !== "000000" && size(repo, path) > largestBinary) {
+      reasons.push(`${shown(path)} is over 1 MiB, so it always needs review.`);
     }
   }
   if (changedLines > config.maxChangedLines) {
     reasons.push(`The patch changes ${changedLines} lines, more than the limit of ${config.maxChangedLines}.`);
   }
 
-  if (reasons.length === 0) return { review: false, reasons: ["No review rule matched this change."] };
-  return { review: true, reasons };
+  if (reasons.length > 0) return { verdict: "ask", reasons };
+  if (shows.length > 0) return { verdict: "show", reasons: shows };
+  return { verdict: "ship", reasons: ["No review rule matched this change."] };
 }
 
-// Counts the findings about the change itself. A pre-existing one is about code the change didn't
-// write, so it's shown but leaves the change straightforward.
-function openFindings(path: string): number {
-  const findings = readRecord(path, "the reviews' findings");
-  if (!Array.isArray(findings)) throw new Error("the reviews' findings aren't a list");
-  let open = 0;
-  for (const finding of findings) {
-    const severity = (finding as { severity?: unknown } | null)?.severity;
-    if (severity === "Important" || severity === "Nit") open++;
-    else if (severity !== "Pre-existing") throw new Error(`a finding has an unknown severity ${JSON.stringify(severity)}`);
+// The branch's commits from base to head. The base must be under the head. A commit is the
+// factory's when both its author and its committer are the app's bot, as the build and the fixer
+// commit. Only people with write access can push to a branch here, and they are trusted, so the
+// rule takes the emails as given, though such a person could forge them. The factory never merges, so a commit with two parents is counted apart.
+function readCommits(repo: string, judged: Judged) {
+  const { base, head } = judged;
+  if (!base || !head || !/^[0-9a-f]{40}$/.test(base) || !/^[0-9a-f]{40}$/.test(head)) {
+    throw new Error("the branch's base and head must both be commit ids");
   }
-  return open;
-}
-
-// Whether the classifier asked for a review. It can only add a review, so its answer of no changes
-// nothing.
-function classifierAsked(path: string): boolean {
-  const verdict = readRecord(path, "the classifier's verdict") as { needs_review?: unknown } | null;
-  if (typeof verdict?.needs_review !== "boolean") throw new Error("the classifier's verdict has no needs_review");
-  return verdict.needs_review;
-}
-
-function readRecord(path: string, what: string): unknown {
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    throw new Error(`read ${what}: ${(error as Error).message}`);
+  run(repo, ["merge-base", "--is-ancestor", base, head]);
+  const email = new RegExp(`^[0-9]+\\+${factory.replace(/[[\]]/g, "\\$&")}@users\\.noreply\\.github\\.com$`);
+  let foreign = 0;
+  let merges = 0;
+  let fixes = 0;
+  const records = nulFields(run(repo, ["log", "-z", "--format=%P%x1f%ae%x1f%ce%x1f%B", `${base}..${head}`]));
+  for (const record of records) {
+    const [parents, author, committer, message] = record.split("\x1f");
+    if (parents.trim().split(" ").length > 1) merges++;
+    else if (!email.test(author) || !email.test(committer)) foreign++;
+    if (fixLine.test(message ?? "")) fixes++;
   }
+  return { foreign, merges, fixes };
 }
 
 // numstat counts a binary file's lines as "-", so those files are named instead.
@@ -236,6 +294,11 @@ function head(repo: string, path: string): Buffer {
   }
 }
 
+// The size in bytes of a path as the change stages it.
+function size(repo: string, path: string): number {
+  return Number(run(repo, ["cat-file", "-s", `:0:${path}`]).trim());
+}
+
 // A path as a reason shows it: in a code span, with anything that could end the span or the line
 // escaped, since the reasons reach the pull request's description.
 function shown(path: string): string {
@@ -273,15 +336,20 @@ function main() {
     options: {
       repo: { type: "string", default: "." },
       rules: { type: "string", default: ".github/build-rules.yml" },
-      findings: { type: "string" },
-      classification: { type: "string" },
+      classified: { type: "string", default: "missing" },
+      nits: { type: "string", default: "0" },
+      base: { type: "string" },
+      head: { type: "string" },
     },
   });
+  if (!/^[0-9]+$/.test(values.nits)) throw new Error(`the count of Nits must be a whole number: ${values.nits}`);
   const verdict = evaluate(values.repo, loadConfig(values.rules), {
-    findings: values.findings,
-    classification: values.classification,
+    classified: values.classified,
+    nits: Number(values.nits),
+    base: values.base,
+    head: values.head,
   });
-  console.log(verdict.review ? "review" : "straightforward");
+  console.log(verdict.verdict);
   for (const reason of verdict.reasons) console.log(reason);
 }
 

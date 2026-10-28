@@ -1,4 +1,4 @@
-# A build needs the maintainer's review if any of these hold. Otherwise it merges by itself.
+# A factory pull request is asked about, rather than shipped or shown, if any of these hold.
 # scripts/build-rule.ts reads this file, and reads only this simple form of YAML: settings, lists
 # of paths one to a line, and comments on lines of their own. A path ending in / covers everything
 # under it.
@@ -15,8 +15,6 @@ review_paths:
   - vitest.config.mts
   - test/setup.ts
   # Dependencies, the engine and how the registry is deployed.
-  - package.json
-  - package-lock.json
   - vendor/
   - Dockerfile
   - wrangler.jsonc
@@ -44,4 +42,19 @@ review_paths:
   - src/server/client-metadata.ts
   - src/server/metadata-transport.ts
   - src/server/metadata-transport.cloudflare.ts
+# Names npm reads beside any package, so a change to one needs review wherever it sits: a file's
+# name, or a folder's, ending in /.
+review_anywhere:
+  - package.json
+  - package-lock.json
+  - npm-shrinkwrap.json
+  - yarn.lock
+  - .npmrc
+  - .yarnrc
+  - .yarnrc.yml
+  - node_modules/
+# Folders whose files other than tests, *.test.ts and the like, always need review: a test's helpers
+# and fixtures, which every test that uses them leans on.
+review_non_tests:
+  - test/
 max_changed_lines: 400
