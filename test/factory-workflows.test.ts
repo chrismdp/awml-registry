@@ -4748,10 +4748,39 @@ done
 // work with main's copy. Each of ci.yml's steps that calls a main-copied script is rehearsed here
 // with origin/main's copy of every one, which CI's test job fetches. Elsewhere, such as a resolve
 // session's clone, which has no origin/main, the rehearsals are skipped.
+// The scripts ci.yml copies out of main.
+const mainCopied = ["claude-settings.sh", "bring-patch.sh", "scan-tokens.sh", "post-findings.sh", "review-findings.sh", "check-out.sh"];
+
+// Whether the repository at dir holds origin/main with every main-copied script in it. A copy of the
+// registry's tree inside another repository, such as awml-cloud's build, finds that one's
+// origin/main, which holds none of them.
+function mainHasCopies(dir: string): boolean {
+  if (spawnSync("git", ["rev-parse", "--verify", "-q", "origin/main"], { cwd: dir }).status !== 0) return false;
+  return mainCopied.every((name) => spawnSync("git", ["cat-file", "-e", `origin/main:.github/${name}`], { cwd: dir }).status === 0);
+}
+
 describe("ci.yml with main's copies of its scripts", () => {
   const jobs = readJobs("ci.yml");
-  const hasMain = canRehearse && spawnSync("git", ["rev-parse", "--verify", "-q", "origin/main"], { cwd: join(__dirname, "..") }).status === 0;
-  const mainCopied = ["claude-settings.sh", "bring-patch.sh", "scan-tokens.sh", "post-findings.sh", "review-findings.sh", "check-out.sh"];
+  const hasMain = canRehearse && mainHasCopies(join(__dirname, ".."));
+
+  it.runIf(canRehearse)("runs only in a repository whose origin/main holds every main-copied script", () => {
+    const root = scratch();
+    const other = join(root, "other");
+    mkdirSync(other);
+    git(other, "init", "-q");
+    put(join(other, "README.md"), "Another project\n");
+    git(other, "add", "-A");
+    git(other, "commit", "-qm", "main");
+    git(other, "update-ref", "refs/remotes/origin/main", "HEAD");
+    expect(mainHasCopies(other), "an origin/main without the scripts").toBe(false);
+    for (const name of mainCopied) put(join(other, ".github", name), "#!/bin/bash\n");
+    git(other, "add", "-A");
+    git(other, "commit", "-qm", "scripts");
+    git(other, "update-ref", "refs/remotes/origin/main", "HEAD");
+    expect(mainHasCopies(other)).toBe(true);
+    rmSync(join(other, ".git/refs/remotes/origin/main"));
+    expect(mainHasCopies(other), "no origin/main").toBe(false);
+  });
   const fromMain = (root: string) => {
     for (const name of mainCopied)
       put(join(root, "runner/main", name), execFileSync("git", ["show", `origin/main:.github/${name}`], { cwd: join(__dirname, ".."), encoding: "utf8" }));
