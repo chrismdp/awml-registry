@@ -33,6 +33,27 @@ case "$mode" in
     done > "$list"
     ;;
   clear)
+    # First, before anything is taken away: a session could turn a folder above a placeholder into a
+    # link to one outside the tree, and taking the placeholder away would then act out there. So
+    # nothing is taken away unless no protected path, nor any folder above one, is a link, and each
+    # lies inside the tree.
+    real_tree="$(realpath -e -- "$tree")"
+    for path in "${protected[@]}"; do
+      at="$tree"
+      IFS=/ read -r -a parts <<< "$path"
+      for part in "${parts[@]}"; do
+        at="$at/$part"
+        there "$at" || break
+        if [ -L "$at" ]; then
+          echo "The session left a link at ${at#"$tree"/}, where Claude Code would leave only a placeholder." >&2
+          exit 1
+        fi
+      done
+      case "$(realpath -m -- "$tree/$path")/" in
+        "$real_tree"/*) ;;
+        *) echo "$path isn't inside the tree." >&2; exit 1 ;;
+      esac
+    done
     for path in "${protected[@]}"; do
       at="$tree/$path"
       there "$at" || continue

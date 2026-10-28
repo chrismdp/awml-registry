@@ -4665,6 +4665,24 @@ describe("placeholders.sh", () => {
     expect(existsSync(join(repo, ".claude/commands/x.md"))).toBe(true);
   });
 
+  // A session could turn a folder above a placeholder into a link to one outside the tree, so the
+  // clear would take away what's there instead: nothing is taken away from a tree where any
+  // protected path, or a folder above one, is a link, or lies outside the tree.
+  it.runIf(canRehearse).each([".claude", "node_modules", ".git/modules"])("refuses, and touches nothing, when %s is a link out of the tree", (parent) => {
+    const { root, repo } = tree();
+    record(root, repo);
+    leaveStubs(repo);
+    const outside = join(root, "outside");
+    for (const child of ["agents", "commands", ".bin"]) mkdirSync(join(outside, child), { recursive: true });
+    rmSync(join(repo, parent), { recursive: true, force: true });
+    symlinkSync(outside, join(repo, parent));
+    const run = clear(root, repo);
+    expect(run.failed).toBe(true);
+    for (const child of ["agents", "commands", ".bin"]) expect(existsSync(join(outside, child)), child).toBe(true);
+    // Nothing else was taken away either.
+    expect(existsSync(join(repo, ".npmrc"))).toBe(true);
+  });
+
   it.runIf(canRehearse).each([
     ["a file with something in it", (repo: string) => writeFileSync(join(repo, ".npmrc"), "registry=https://example.com/\n")],
     ["a link", (repo: string) => {
