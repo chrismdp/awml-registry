@@ -119,7 +119,7 @@
    red (#83). A scope stays as it is. */
 .flow-canvas :is(.flow-part, .flow-scope, .flow-note-mark, .flow-edge, .flow-label-svg) { transition: opacity 0.15s ease-out; }
 .react-flow.flow-lit .react-flow__node:not(.lit) :is(.flow-part, .flow-scope:not(.hull)),
-.react-flow.flow-lit .react-flow__node:not(.lit, .lit-note) .flow-note-mark,
+.react-flow.flow-lit .react-flow__node:not(.lit-note) .flow-note-mark,
 .react-flow.flow-lit :is(.flow-edge, .flow-label-svg):not(.lit) { opacity: 0.25; }
 @media (prefers-reduced-motion: reduce) { .flow-canvas :is(.flow-part, .flow-scope, .flow-note-mark, .flow-edge, .flow-label-svg) { transition: none; } }
 

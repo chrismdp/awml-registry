@@ -144,7 +144,11 @@ describe("a part the pointer is over, once React Flow draws it", () => {
     // A note tied to it is lit on every part it is on, though the part it is also on isn't.
     expect(nodeClasses(html, "tidy")).toContain("lit-note");
     expect(nodeClasses(html, "start")).not.toContain("lit-note");
-    // The whole drawing's notes are tied to no part.
+    // Its own note is lit with it; the plan's, tied only to the plan, is knocked back, though the plan is lit.
+    expect(nodeClasses(html, "check")).toContain("lit-note");
+    expect(nodeClasses(html, "plan")).not.toContain("lit-note");
+    // The whole drawing's notes are drawn, and tied to no part.
+    expect(html).toContain('data-id="notes-of-the-drawing"');
     expect(nodeClasses(html, "notes-of-the-drawing")).not.toContain("lit");
     expect(nodeClasses(html, "notes-of-the-drawing")).not.toContain("lit-note");
     // Its line and that line's label are lit; the others, and their labels, are not.
@@ -157,6 +161,9 @@ describe("a part the pointer is over, once React Flow draws it", () => {
     const html = await drawn(dinners, "plan");
     for (const id of ["line-0", "line-1", "line-2"]) expect(line(html, id).path, id).toEqual(["flow-edge", "lit"]);
     for (const id of ["plan", "start", "list", "check"]) expect(nodeClasses(html, id), id).toContain("lit");
+    // Its note is lit; the check's, tied to the check and the lone step, is not, though the check is lit.
+    expect(nodeClasses(html, "plan")).toContain("lit-note");
+    expect(nodeClasses(html, "check")).not.toContain("lit-note");
     expect(nodeClasses(html, "tidy")).not.toContain("lit");
     expect(nodeClasses(html, "tidy")).not.toContain("lit-note");
   });
@@ -173,7 +180,7 @@ describe("a part the pointer is over, once React Flow draws it", () => {
     expect(knocked.map((r) => r.selectors)).toEqual([
       [
         ".react-flow.flow-lit .react-flow__node:not(.lit) :is(.flow-part, .flow-scope:not(.hull))",
-        ".react-flow.flow-lit .react-flow__node:not(.lit, .lit-note) .flow-note-mark",
+        ".react-flow.flow-lit .react-flow__node:not(.lit-note) .flow-note-mark",
         ".react-flow.flow-lit :is(.flow-edge, .flow-label-svg):not(.lit)",
       ],
     ]);

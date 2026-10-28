@@ -467,16 +467,16 @@ export function nodesOf(d: Drawing, bodies: Body[], boxes: Map<string, Rect>, sh
 }
 
 // The nodes while a part is lit, `near` being what is connected to it: each
-// part connected to it marked `lit`, and a part whose note icon shows a note
-// tied to it, though the part isn't, `lit-note`. Every other node is left as
-// it is, so React Flow redraws only those marked, and flow.css knocks back the
-// rest. A scope is never knocked back.
+// part connected to it marked `lit`, and each part whose note icon shows a
+// note tied to it, whether or not the part is lit, `lit-note`. Every other
+// node is left as it is, so React Flow redraws only those marked, and flow.css
+// knocks back the rest. A scope is never knocked back.
 export function litNodes(nodes: FlowNode[], near?: Connected): FlowNode[] {
   if (!near) return nodes;
   return nodes.map((n) => {
     const notes = n.type === "notes" ? undefined : n.data.notes.get(n.id);
-    const className = near.parts.has(n.id) ? "lit" : notes?.some((note) => near.notes.has(note.id)) ? "lit-note" : undefined;
-    return className ? { ...n, className } : n;
+    const marks = [near.parts.has(n.id) && "lit", notes?.some((note) => near.notes.has(note.id)) && "lit-note"].filter(Boolean);
+    return marks.length ? { ...n, className: marks.join(" ") } : n;
   });
 }
 
