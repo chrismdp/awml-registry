@@ -1172,10 +1172,11 @@ describe("ci.yml", () => {
 
   // Classify isn't a required check, so it keeps its own conditions and is simply skipped. Only the
   // app's pull requests on a factory branch are landed, so only those are classified.
-  it("classifies only the app's pull request on a factory branch, once both reviews have ended", () => {
+  // land reads Classify only once both reviews have passed, so it runs only then.
+  it("classifies only the app's pull request on a factory branch, once both reviews have passed", () => {
     expect(needs(jobs.classify)).toEqual(["review"]);
     expect(squash(jobs.classify.if)).toBe(
-      squash(`\${{ !cancelled() && needs.review.result != 'skipped' && startsWith(github.head_ref, 'build/issue-') &&
+      squash(`\${{ needs.review.result == 'success' && startsWith(github.head_ref, 'build/issue-') &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         github.event.pull_request.user.login == 'awml-factory[bot]' && github.event.pull_request.user.type == 'Bot' }}`),
     );
@@ -2183,7 +2184,7 @@ describe("land.yml", () => {
 
   // A Classify that timed out, or whose runner was lost, leaves no verdict, which means ask: land
   // goes on rather than leaving the pull request unjudged.
-  it.runIf(canRehearse).each(["failure", "cancelled", "timed_out"])("goes on when Classify ended as %s", (conclusion) => {
+  it.runIf(canRehearse).each(["failure", "cancelled", "timed_out", "skipped"])("goes on when Classify ended as %s", (conclusion) => {
     const run = ready({ checks: checkRuns({ Classify: { conclusion } }) });
     expect(run.failed, run.printed).toBe(false);
     expect(run.outputs.go).toBe("true");
@@ -2296,6 +2297,13 @@ describe("land.yml", () => {
     expect(run.outputs.verdict).toBe("show");
     expect(run.printed).not.toContain("ci.yml");
     expect(stepWithId(jobs.find, "judge").run).not.toContain("ci.yml");
+  });
+
+  it.runIf(canRehearse)("asks when Classify was skipped", () => {
+    const { run } = judge("skipped");
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.verdict).toBe("ask");
+    expect(run.printed).toContain("Classify gave no verdict.");
   });
 
   it.runIf(canRehearse)("asks when Classify's job didn't succeed, whatever verdict it left", () => {
@@ -2415,8 +2423,10 @@ describe("fix.yml", () => {
     important = true,
     twoLines = false,
     runPulls = [12],
+    actor = { login: "awml-factory[bot]", type: "Bot" },
   }: Partial<{
     runPulls: number[];
+    actor: { login: string; type: string };
     event: string;
     repository: string;
     pullHead: string;
@@ -2466,7 +2476,7 @@ describe("fix.yml", () => {
   })}' ;;
   *"check-runs/11/annotations"*) answer <<< '${JSON.stringify(important && bug === "failure" ? [{ annotation_level: "failure", title: "Important: Wrong", message: "m", path: "src/a.ts", start_line: 1 }] : [])}' ;;
   *"check-runs/12/annotations"*) answer <<< '${JSON.stringify(important && security === "failure" ? [{ annotation_level: "failure", title: "Important: Hole", message: "m", path: "src/a.ts", start_line: 1 }] : [])}' ;;
-  *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })) })}' ;;
+  *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })), triggering_actor: actor })}' ;;
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([
     strangerPull(pullHead ?? sha),
     { ...appPull(pullHead ?? sha, pullRepository), number: 13, user: { login: "triager", type: "User" }, author_association: "MEMBER" },
@@ -2527,6 +2537,17 @@ ${permissionStub}`,
 
   // A stranger's pull request from the same branch, at the same head, gets a CI run of its own, so
   // the run must be the pull request's own, by GitHub's record of the run.
+  // A stranger's pull request from the branch starts a run whose pull_requests still lists the
+  // app's, so whoever started the run must be the app or someone who may write.
+  it.runIf(canRehearse).each([
+    ["the app", { login: "awml-factory[bot]", type: "Bot" }, "fix"],
+    ["a writer", { login: "maintainer", type: "User" }, "fix"],
+    ["a stranger", { login: "stranger", type: "User" }, "none"],
+    ["a user named like the app", { login: "awml-factory[bot]", type: "User" }, "none"],
+  ])("acts on a run %s started only if they may write", (_, actor, outcome) => {
+    expect(decide({ actor }).outputs.outcome).toBe(outcome);
+  });
+
   it.runIf(canRehearse)("exits quietly on a CI run that isn't the pull request's own", () => {
     const run = decide({ runPulls: [99] });
     expect(run.failed, run.printed).toBe(false);
@@ -2757,10 +2778,15 @@ describe("retry.yml", () => {
     expect(retry["run-name"]).toBeUndefined();
   });
 
-  it("checks out nothing and runs only gh", () => {
+  // It reads the branch's commits with git, from a clone of main that keeps no credentials, and runs
+  // nothing from the branch.
+  it("reads the branch with git from a clone of main, and runs only gh and git", () => {
     expect(Object.keys(jobs)).toEqual(["retry"]);
-    expect(steps(jobs.retry).every((each) => each.uses === undefined)).toBe(true);
-    expect(jobs.retry.permissions).toEqual({ actions: "write", issues: "write", "pull-requests": "read" });
+    const uses = steps(jobs.retry).filter((each) => each.uses);
+    expect(uses).toHaveLength(1);
+    expect(uses[0].uses?.startsWith(cloneAction)).toBe(true);
+    expect(uses[0].with).toEqual({ ref: "main", "fetch-depth": 0, "persist-credentials": false });
+    expect(jobs.retry.permissions).toEqual({ actions: "write", contents: "read", issues: "write", "pull-requests": "read" });
   });
 
   const tries = ({
@@ -2776,8 +2802,30 @@ describe("retry.yml", () => {
     pullRepository = "owner/repo",
     earlierFailure = false as boolean | "review",
     runPulls = [12],
+    actor = { login: "awml-factory[bot]", type: "Bot" },
+    personCommits = false,
   } = {}) => {
     const root = scratch();
+    // The branch's commits, the factory's, then a person's if asked.
+    const origin = join(root, "origin");
+    mkdirSync(origin);
+    git(origin, "init", "-q");
+    put(join(origin, "README.md"), "A registry\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "main");
+    git(origin, "switch", "-q", "-c", "build/issue-7");
+    put(join(origin, "src/page.tsx"), "page\n");
+    git(origin, "add", "-A");
+    git(origin, "-c", "user.name=awml-factory[bot]", "-c", "user.email=1+awml-factory[bot]@users.noreply.github.com", "commit", "-qm", "Build #7");
+    if (personCommits) {
+      put(join(origin, "src/page.tsx"), "a person's page\n");
+      git(origin, "commit", "-qam", "A person takes it on", "--date=2026-10-03T00:00:00Z");
+    }
+    const sha = git(origin, "rev-parse", "HEAD");
+    git(origin, "switch", "-q", "main");
+    const work = join(root, "work");
+    git(root, "clone", "-q", origin, work);
+    const at = pullHead === head ? sha : pullHead;
     const runs_ = Array.from({ length: builds }, (_, at) => ({
       display_title: "Build of issue 7",
       event: at === 0 ? "issues" : "workflow_dispatch",
@@ -2795,11 +2843,13 @@ describe("retry.yml", () => {
     runs_.push({ display_title: "A label added to issue 7", event: "issues", head_branch: "main", created_at: "2026-10-02T00:00:00Z" });
     return rehearse(stepWithId(jobs.retry, "tries").run ?? "", {
       root,
-      env: { BRANCH: "build/issue-7", HEAD_SHA: head, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77" },
+      cwd: work,
+      env: { BRANCH: "build/issue-7", HEAD_SHA: sha, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77" },
       answers: `
+${permissionStub}
   *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: test }, { name: "Bug review", conclusion: bug }] })}' ;;
-  *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })) })}' ;;
-  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(head), appPull(pullHead, pullRepository)])}' ;;
+  *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })), triggering_actor: actor })}' ;;
+  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(sha), appPull(at, pullRepository)])}' ;;
   *"actions/workflows/ci.yml/runs"*) answer <<< '${JSON.stringify(ciRuns)}' ;;
   *"actions/runs/70/jobs"*) answer <<< '${JSON.stringify({
     jobs: [
@@ -2852,6 +2902,28 @@ describe("retry.yml", () => {
     expect(run.calls).toContain("issue comment 7 --repo owner/repo --body-file");
     expect(run.calls).toMatch(/> .*three times/);
     expect(run.calls).toContain("https://github.com/owner/repo/actions/runs/77");
+  });
+
+  // A stranger's pull request from the branch starts a run whose pull_requests still lists the
+  // app's, so whoever started the run must be the app or someone who may write.
+  it.runIf(canRehearse)("exits quietly on a CI run a stranger started", () => {
+    const run = tries({ actor: { login: "stranger", type: "User" } });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.calls).not.toMatch(/workflow run|issue comment/);
+    expect(tries({ actor: { login: "maintainer", type: "User" } }).calls).toContain("workflow run build.yml");
+  });
+
+  // A person's commit on the branch means they've taken it on: the build doesn't redraft over it,
+  // and says so once, by the first run whose tests failed since that commit.
+  it.runIf(canRehearse)("leaves a branch a person has committed to, and says so once", () => {
+    const run = tries({ personCommits: true });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.calls).not.toContain("workflow run");
+    expect(run.calls.match(/issue comment 7 /g)).toHaveLength(1);
+    expect(run.calls).toMatch(/> .*a person has taken it over/);
+    expect(run.calls).toContain("created=>=2026-10-03T00:00:00");
+    const again = tries({ personCommits: true, earlierFailure: true });
+    expect(again.calls).not.toMatch(/workflow run|issue comment/);
   });
 
   it.runIf(canRehearse)("exits quietly on a CI run that isn't the app's pull request's own", () => {

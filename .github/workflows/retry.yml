@@ -9,7 +9,8 @@
 # says a person must act.
 name: Retry a build
 
-# GitHub runs this from main's copy. It checks out nothing and runs only gh. The Actions token
+# GitHub runs this from main's copy. It checks out main to read the branch's commits with git, and
+# runs nothing from the branch. The Actions token
 # starts the build, which GitHub allows for workflow_dispatch, and comments. It needs what build.yml
 # lists.
 on:
@@ -28,9 +29,17 @@ jobs:
     timeout-minutes: 10
     permissions:
       actions: write
+      contents: read
       issues: write
       pull-requests: read
     steps:
+      # main, to read the branch's commits against with git. Nothing from it runs.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
       # Only a pull_request run, which runs once a commit, from a branch of this repository, since a
       # fork's branch can carry a build's name, at the head of the branch's open pull request. A try
       # is a build.yml run for the issue, by its name, since the build label was last added; the
@@ -46,6 +55,22 @@ jobs:
           CI_RUN: ${{ github.event.workflow_run.id }}
         run: |
           leave() { echo "$1"; exit 0; }
+          # Whether an earlier CI pull_request run on the branch, from this repository, created since
+          # the given time, had failed tests, and so said what this run would say.
+          told_since() {
+            gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=$BRANCH&event=pull_request&created=>=$1&per_page=100" |
+              jq -rs --arg repository "$GITHUB_REPOSITORY" --argjson run "$CI_RUN" \
+                '[.[].workflow_runs[] | select(.event == "pull_request" and .head_repository.full_name == $repository
+                  and .conclusion == "failure" and .id < $run) | .id] | .[]' > "$RUNNER_TEMP/earlier.txt"
+            while read -r earlier; do
+              case "$earlier" in ''|*[!0-9]*) continue ;; esac
+              if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$earlier/jobs" --paginate --jq '.jobs[]' |
+                jq -se 'any(.[]; .name == "test" and .conclusion == "failure")' > /dev/null; then
+                return 0
+              fi
+            done < "$RUNNER_TEMP/earlier.txt"
+            return 1
+          }
           [ "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ] && [ "$CI_EVENT" = pull_request ] ||
             leave "CI didn't run on a pull request from a branch of this repository."
           case "$BRANCH" in build/issue-*) issue="${BRANCH#build/issue-}" ;; *) leave "This isn't a build's branch." ;; esac
@@ -61,11 +86,33 @@ jobs:
                 and .user.login == "awml-factory[bot]" and .user.type == "Bot")]
                 | first | .number // empty')"
           [ -n "$pr" ] || leave "No open pull request on $BRANCH is at CI's commit, so a newer CI result decides."
-          # A stranger's pull request from the branch, at the same head, gets a CI run of its own, so
-          # the run must be this pull request's own, by GitHub's record of the run.
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN" |
-            jq -e --argjson pr "$pr" 'any(.pull_requests[]?; .number == $pr)' > /dev/null ||
+          # A stranger's pull request from the branch, at the same head, gets a CI run of its own,
+          # whose pull_requests still lists this one. So the run must list this pull request, by
+          # GitHub's record of the run, and must have been started by the factory's app, by its exact
+          # login and type, or by someone GitHub says may write to the repository.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN" > "$RUNNER_TEMP/run.json"
+          jq -e --argjson pr "$pr" 'any(.pull_requests[]?; .number == $pr)' "$RUNNER_TEMP/run.json" > /dev/null ||
             leave "CI's run isn't #$pr's own."
+          actor="$(jq -r '.triggering_actor.login // ""' "$RUNNER_TEMP/run.json")"
+          actor_type="$(jq -r '.triggering_actor.type // ""' "$RUNNER_TEMP/run.json")"
+          if ! { [ "$actor" = "awml-factory[bot]" ] && [ "$actor_type" = Bot ]; }; then
+            [[ "$actor" =~ ^[A-Za-z0-9-]{1,39}$ ]] || leave "CI's run was started by no one who may write here."
+            role="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$actor/permission" --jq .role_name || true)"
+            case "$role" in admin|maintain|write) ;; *) leave "CI's run was started by someone who may not write here." ;; esac
+          fi
+
+          # A commit since main that isn't the factory's, by the build rule's test of its author's
+          # and committer's emails, or a merge, means a person has taken the branch on: the build
+          # doesn't redraft over their work. Read with git, from main's clone with the head fetched in.
+          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            safe_git fetch -q --no-tags origin "$HEAD_SHA"
+          base="$(safe_git merge-base HEAD "$HEAD_SHA")"
+          factory='^[0-9]+\+awml-factory\[bot\]@users\.noreply\.github\.com$'
+          # The author date of the oldest such commit, which a rebase keeps, in UTC.
+          taken="$(TZ=UTC safe_git log --date=format-local:%Y-%m-%dT%H:%M:%SZ --format='%P%x09%ae%x09%ce%x09%ad' "$base..$HEAD_SHA" |
+            FACTORY="$factory" awk -F '\t' 'split($1, parents, " ") > 1 || $2 !~ ENVIRON["FACTORY"] || $3 !~ ENVIRON["FACTORY"] { taken = $4 } END { print taken }')"
 
           # shellcheck disable=SC2016 # The query's variables are GraphQL's.
           gh api graphql -F owner="$GITHUB_REPOSITORY_OWNER" -f name="${GITHUB_REPOSITORY#*/}" -F number="$issue" -f query='
@@ -88,6 +135,17 @@ jobs:
           edited="$(jq -r '.data.repository.issue | [.lastEditedAt // empty, (.timelineItems.nodes[] | select(.__typename == "RenamedTitleEvent") | .createdAt)] | max // empty' "$RUNNER_TEMP/issue.json")"
 
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$CI_RUN"
+          if [ -n "$taken" ]; then
+            [[ "$taken" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || leave "The person's commit has no date."
+            ! told_since "$taken" || leave "An earlier CI run's tests failed since a person took the branch on, and that run said so."
+            {
+              echo "**CI's tests failed on #$pr, and a commit on its branch isn't the factory's, so a person has taken it over.** The build won't redraft over their work."
+              echo
+              echo "Whoever is working on the branch fixes it from here. [CI's run]($run_url)"
+            } > "$RUNNER_TEMP/comment.md"
+            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/comment.md"
+            exit 0
+          fi
           if [ -n "$edited" ] && [[ "$edited" > "$labelled" ]]; then
             {
               echo "**CI's tests failed on #$pr, and this issue was edited since the build label was last added, so the build won't try again from it.**"
@@ -113,17 +171,7 @@ jobs:
           # repository, whose tests failed after the third build started, found from GitHub's runs.
           third="$(jq -r '.[2].created_at' "$RUNNER_TEMP/builds.json")"
           [[ "$third" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || leave "Found no time the third build started."
-          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=$BRANCH&event=pull_request&created=>=$third&per_page=100" |
-            jq -rs --arg repository "$GITHUB_REPOSITORY" --argjson run "$CI_RUN" \
-              '[.[].workflow_runs[] | select(.event == "pull_request" and .head_repository.full_name == $repository
-                and .conclusion == "failure" and .id < $run) | .id] | .[]' > "$RUNNER_TEMP/earlier.txt"
-          while read -r earlier; do
-            case "$earlier" in ''|*[!0-9]*) continue ;; esac
-            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$earlier/jobs" --paginate --jq '.jobs[]' |
-              jq -se 'any(.[]; .name == "test" and .conclusion == "failure")' > /dev/null; then
-              leave "An earlier CI run's tests failed after the third build, and that run said a person must act."
-            fi
-          done < "$RUNNER_TEMP/earlier.txt"
+          ! told_since "$third" || leave "An earlier CI run's tests failed after the third build, and that run said a person must act."
           {
             echo "**CI's tests failed on #$pr, and the build has tried three times since the build label was added, so it has stopped.**"
             echo

@@ -94,11 +94,20 @@ jobs:
                 | [.number, .user.login, .user.type] | @tsv')
           case "$pr" in *[!0-9]*) leave "The pull request's number isn't a number." ;; esac
           [ -n "$pr" ] || leave "No open pull request on $BRANCH is at the reviewed commit, so there's nothing to fix."
-          # A stranger's pull request from the branch, at the same head, gets a CI run of its own, so
-          # the run must be this pull request's own, by GitHub's record of the run.
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN" |
-            jq -e --argjson pr "$pr" 'any(.pull_requests[]?; .number == $pr)' > /dev/null ||
+          # A stranger's pull request from the branch, at the same head, gets a CI run of its own,
+          # whose pull_requests still lists this one. So the run must list this pull request, by
+          # GitHub's record of the run, and must have been started by the factory's app, by its exact
+          # login and type, or by someone GitHub says may write to the repository.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN" > "$RUNNER_TEMP/run.json"
+          jq -e --argjson pr "$pr" 'any(.pull_requests[]?; .number == $pr)' "$RUNNER_TEMP/run.json" > /dev/null ||
             leave "CI's run isn't #$pr's own."
+          actor="$(jq -r '.triggering_actor.login // ""' "$RUNNER_TEMP/run.json")"
+          actor_type="$(jq -r '.triggering_actor.type // ""' "$RUNNER_TEMP/run.json")"
+          if ! { [ "$actor" = "awml-factory[bot]" ] && [ "$actor_type" = Bot ]; }; then
+            [[ "$actor" =~ ^[A-Za-z0-9-]{1,39}$ ]] || leave "CI's run was started by no one who may write here."
+            role="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$actor/permission" --jq .role_name || true)"
+            case "$role" in admin|maintain|write) ;; *) leave "CI's run was started by someone who may not write here." ;; esac
+          fi
           # A review that failed without an Important finding refused the patch or ran out of time,
           # so there's nothing for a session to fix: a person must look at its check. The names are
           # the reviews', from a fixed list.

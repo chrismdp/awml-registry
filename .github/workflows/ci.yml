@@ -207,9 +207,10 @@ jobs:
   classify:
     name: Classify
     needs: review
-    # Only the app's pull requests on a factory branch are landed, so only those are classified.
+    # Only the app's pull requests on a factory branch are landed, and only once both reviews have
+    # passed, so only those are classified, and only then.
     if: >-
-      ${{ !cancelled() && needs.review.result != 'skipped' && startsWith(github.head_ref, 'build/issue-') &&
+      ${{ needs.review.result == 'success' && startsWith(github.head_ref, 'build/issue-') &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == 'awml-factory[bot]' && github.event.pull_request.user.type == 'Bot' }}
     runs-on: ubuntu-latest
