@@ -200,7 +200,10 @@ jobs:
       - name: Copy main's prompt, scripts, AGENTS.md and REVIEW.md out
         run: |
           mkdir -p "$HOST_DIR/main" "$RUNNER_TEMP/input"
-          cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh "$HOST_DIR/main/"
+          cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh .github/engine-for.sh "$HOST_DIR/main/"
+          # Main's engine build script, which builds each tree's engine from the tree's own pin below.
+          mkdir -p "$HOST_DIR/engine/scripts"
+          cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
 
       # The label approves the issue as it reads then, and a try drafts from it only if it hasn't
@@ -322,7 +325,28 @@ jobs:
           echo "::$stop::"
           mkdir -p "$HOST_DIR/baseline"
           cp .git/config "$HOST_DIR/baseline/git-config"
+          # actions/checkout leaves .git/config.worktree, which git reads once worktreeConfig is on,
+          # so it's kept too, if it's there, and only as a plain file.
+          if [ -e .git/config.worktree ] || [ -L .git/config.worktree ]; then
+            if [ ! -f .git/config.worktree ] || [ -L .git/config.worktree ]; then
+              echo "The checkout's .git/config.worktree isn't a plain file."
+              exit 1
+            fi
+            cp .git/config.worktree "$HOST_DIR/baseline/git-config-worktree"
+          fi
           stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$HOST_DIR/baseline/workspace"
+          # Which of the paths Claude Code protects the tree holds, so the placeholders it leaves at
+          # the rest can be taken away after the session.
+          bash "$HOST_DIR/main/placeholders.sh" record . "$HOST_DIR/baseline/protected"
+
+      # A session that checks or draws a workflow needs the AWML engine, which npm ci --ignore-scripts
+      # doesn't build. Main's copy of the build script builds it from the tree's own pin, outside the
+      # sandbox and before any session, never the tree's own script: it fetches AWML's source from
+      # AWML's own repository and the pinned Go, and keeps the build only if each file has the
+      # SHA-256 the pin names. A go build of the pinned commit runs no code here, and the
+      # WebAssembly runs only inside the sandbox.
+      - name: Build the AWML engine from the tree's pin
+        run: bash "$HOST_DIR/main/engine-for.sh" . "$HOST_DIR/engine-tree"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
@@ -345,7 +369,9 @@ jobs:
 
       # Claude Code holds the maintainer's login token for its own calls and strips it, with any
       # other credential, from the commands it runs, which run in its sandbox: they see none of
-      # Claude Code's own process, reach no network, and can't write git's files. Under the scrub,
+      # Claude Code's own process and reach no network. They can write .git, apart from what the
+      # scrub guards, its config and hooks among them, so git after the session checks the rest and
+      # takes away the scrub's placeholders before it reads the tree. Under the scrub,
       # Claude Code forces --permission-mode default, so every tool it may use is named. It loads
       # only the settings claude-settings.sh writes in a home of its own, and no MCP servers, since
       # Claude Code picks up a settings file or a .mcp.json that appears in its tree while it runs.
@@ -368,12 +394,12 @@ jobs:
           # The log goes to the host-only folder, which the session can't write, so it can't turn
           # it into a link for the host's cat to follow. The inputs are denied too.
           log="$HOST_DIR/logs/build.log"
-          bash "$HOST_DIR/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR" --deny-write ./.git
+          bash "$HOST_DIR/main/claude-settings.sh" "$session/home" --deny-write "$0" --deny-write "$INPUT_DIR"
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$HOST_DIR/main/build-prompt.md")"
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
             --setting-sources user --strict-mcp-config --add-dir "$INPUT_DIR" --add-dir "$session/out" \
-            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" "Write(./.git/**)" \
+            --disallowedTools "Read(//proc/**)" "Edit(./.git/**)" \
             --allowedTools "Read(./**)" "Read(/$INPUT_DIR/**)" "Edit(./**)" "Write(./**)" \
               "Edit(/$session/out/**)" "Write(/$session/out/**)" \
               "Bash(npm run:*)" "Bash(npm test:*)" \
@@ -389,23 +415,41 @@ jobs:
 
       # The pages are pictured unless Claude named none: no pictures.json, or an empty list. A
       # pictures.json that isn't a list still starts the pictures job, which says what is wrong.
-      # Git reads the tree the session wrote, so it runs nothing the session's commands could have
-      # set: the workspace and its .git must be the ones the session started in, git's config byte
-      # for byte as it was, kept where the session couldn't write, and no repository nested below
-      # the top; no global or system config is read, and no hook, fsmonitor, external diff or text
+      # Git reads the tree the session wrote, .git included, so it runs nothing the session's
+      # commands could have set: the workspace and its .git must be the ones the session started in,
+      # the scrub's placeholders taken away, git's config byte for byte as it was, kept where the
+      # session couldn't write, no grafts file and no repository nested below the top; no global or
+      # system config or replace ref is read, and no hook, fsmonitor, external diff or text
       # conversion runs.
       - name: Make the patch
         id: patch
         env:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$HOST_DIR/baseline/workspace"; then
             echo "The workspace or its .git isn't the one the session started in, so no git runs on it."
             exit 1
           fi
+          # Claude Code leaves an empty placeholder at each path it protects that wasn't there; each
+          # goes, and anything else at one is refused.
+          bash "$HOST_DIR/main/placeholders.sh" clear . "$HOST_DIR/baseline/protected"
           if ! cmp -s .git/config "$HOST_DIR/baseline/git-config"; then
             echo "Git's config changed during the session, so no git runs on the tree."
+            exit 1
+          fi
+          # The checkout's config.worktree, if there was one, as it was; one that wasn't there and
+          # isn't an empty placeholder the clear above took away is refused there.
+          if [ -e "$HOST_DIR/baseline/git-config-worktree" ] &&
+            { [ -L .git/config.worktree ] || ! cmp -s .git/config.worktree "$HOST_DIR/baseline/git-config-worktree"; }; then
+            echo "Git's config.worktree changed during the session, so no git runs on the tree."
+            exit 1
+          fi
+          # A session can write .git: replace refs are ignored, by GIT_NO_REPLACE_OBJECTS, and a
+          # grafts file, which would change the commits git reads, is refused.
+          if [ -e .git/info/grafts ] || [ -L .git/info/grafts ]; then
+            echo "The session left a grafts file in .git, so no git runs on the tree."
             exit 1
           fi
           # node_modules counts too: a session may write there, apart from its .bin.
@@ -604,10 +648,13 @@ jobs:
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$'
           # A symbolic link is read wherever it's followed, so the app never pushes one either.
           links="$(git diff --cached --raw --no-renames | awk '$2 == "120000" { found = 1 } END { if (found) print "link" }')"
-          if [ -n "$links" ] || git diff --cached --name-only --no-renames -z | grep -zE "$guarded" > /dev/null; then
+          # The names go to a file that grep reads whole: a grep at the end of a pipe may stop at its
+          # first match, and under pipefail the producer's SIGPIPE would read as no match.
+          git diff --cached --name-only --no-renames -z > "$RUNNER_TEMP/names"
+          if [ -n "$links" ] || grep -qzE "$guarded" "$RUNNER_TEMP/names"; then
             # The names are the draft's, so they're printed as JSON, where none can start a workflow
             # command.
-            git diff --cached --name-only --no-renames -z | { grep -zE "$guarded" || true; } | jq -Rs 'split("\u0000") | map(select(. != ""))'
+            { grep -zE "$guarded" "$RUNNER_TEMP/names" || true; } | jq -Rs 'split("\u0000") | map(select(. != ""))'
             {
               echo "**The build's draft changes files the app never pushes, so it didn't push it.** The app holds back:"
               echo

@@ -122,9 +122,11 @@ jobs:
             git "${safe[@]}" -c http.https://github.com/.extraheader="$auth" fetch -q --no-tags origin "$head_sha"
             guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
             # Every commit's files, not the net change: each commit is installed as the rebase replays
-            # it, so one that adds a dependency and a later one that takes it out still count.
-            if git "${safe[@]}" log --no-renames --name-only -z --format= "$(git merge-base "$MAIN_SHA" "$head_sha")..$head_sha" |
-              grep -zE "$guarded" > /dev/null; then
+            # it, so one that adds a dependency and a later one that takes it out still count. The names
+            # go to a file that grep reads whole, with no pipe for it to cut short.
+            git "${safe[@]}" log --no-renames --name-only -z --format= "$(git merge-base "$MAIN_SHA" "$head_sha")..$head_sha" \
+              > "$RUNNER_TEMP/names-$number"
+            if grep -qzE "$guarded" "$RUNNER_TEMP/names-$number"; then
               pulls="$(jq -c --argjson number "$number" --arg branch "$branch" --arg head_sha "$head_sha" \
                 '. + [{number: $number, branch: $branch, head_sha: $head_sha, clean: false, guarded: true}]' <<< "$pulls")"
               continue
@@ -160,7 +162,9 @@ jobs:
   # under $RUNNER_TEMP/pr, made before any session starts: a clone of the branch outside the
   # workspace, its rebase started there, its inputs, made read-only, and its sessions' output;
   # what the host reads after a session is kept in the host-only folder instead. A
-  # session only edits the conflicted files and writes its note; Claude Code's scrub denies its
+  # session only edits the conflicted files and writes its note; its commands can write the clone's
+  # .git, apart from its rebase state and what the scrub guards, so the continue checks the clone
+  # before git reads it. Claude Code's scrub denies its
   # commands writes to scripts/, package.json and the lockfile, so git, which writes them when it
   # replays a commit, never runs in a session. Between sessions a step that holds no Claude token
   # adds what was resolved and continues each rebase with git, and a commit that conflicts in turn
@@ -229,11 +233,14 @@ jobs:
           echo "::stop-commands::$stop"
           trap 'echo "::$stop::"' EXIT
           mkdir -p "$HOST_DIR/main" "$HOST_DIR/baseline" "$HOST_DIR/check" "$HOST_DIR/resolved"
-          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh .github/check-out.sh AGENTS.md "$HOST_DIR/main/"
+          cp .github/resolve-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/resolve-session.sh .github/resolve-continue.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh .github/rebase-state.sh .github/engine-for.sh .github/git-state.sh AGENTS.md "$HOST_DIR/main/"
+          # Main's engine build script, which builds each clone's engine from the clone's own pin.
+          mkdir -p "$HOST_DIR/engine/scripts"
+          cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"
           id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
           case "$id" in ''|*[!0-9]*) echo "The app's bot has no id: $id"; exit 1 ;; esac
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
           : > "$HOST_DIR/pulls.tsv"
           while IFS=$'\t' read -r number head_sha; do
             case "$number" in ''|*[!0-9]*) continue ;; esac
@@ -258,16 +265,40 @@ jobs:
               echo "#$number rebased cleanly here after all."
             fi
             safe_git -C "$root/work" diff --name-only --no-ext-diff --no-textconv --diff-filter=U > "$HOST_DIR/conflicted-$number.txt"
+            # The clone's commits, refs, HEAD and index as git left them, which the continue checks
+            # after each session.
+            bash "$HOST_DIR/main/git-state.sh" "$root/work" > "$HOST_DIR/baseline/git-state-$number"
             # The rebase stopped at its conflict on top of main, and find held back any branch that
             # changes its dependencies, so this installs main's lockfile.
             bash "$HOST_DIR/main/check-lockfile.sh" "$root/work"
             (cd "$root/work" && npm ci --ignore-scripts --no-audit --no-fund)
+            # The session's engine, from the clone's own pin, by main's copy of the build script,
+            # outside the sandbox and before any session. A clone whose pin can't be built, a
+            # conflicted one say, gets no session.
+            if ! bash "$HOST_DIR/main/engine-for.sh" "$root/work" "$HOST_DIR/engine-$number"; then
+              echo "The engine for #$number couldn't be built from its pin, so it gets no session."
+              continue
+            fi
             chmod -R a-w "$root/in"
             cp "$root/work/.git/config" "$HOST_DIR/baseline/git-config-$number"
             stat -c %d:%i "$root/work" "$root/work/.git" > "$HOST_DIR/baseline/clone-$number"
+            bash "$HOST_DIR/main/placeholders.sh" record "$root/work" "$HOST_DIR/baseline/protected-$number"
             printf '%s\t%s\n' "$number" "$head_sha" >> "$HOST_DIR/pulls.tsv"
           done < <(jq -r '.[] | select(.clean == false and .guarded == false) | [.number, .head_sha] | @tsv' <<< "$PULLS")
           stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" > "$HOST_DIR/baseline/workspace"
+          # Which of the paths Claude Code protects each clone and the workspace hold, so the
+          # placeholders it leaves at the rest can be taken away after the sessions.
+          bash "$HOST_DIR/main/placeholders.sh" record "$GITHUB_WORKSPACE" "$HOST_DIR/baseline/protected-workspace"
+          cp "$GITHUB_WORKSPACE/.git/config" "$HOST_DIR/baseline/workspace-git-config"
+          # actions/checkout leaves .git/config.worktree, which git reads once worktreeConfig is on,
+          # so it's kept too, if it's there, and only as a plain file.
+          if [ -e "$GITHUB_WORKSPACE/.git/config.worktree" ] || [ -L "$GITHUB_WORKSPACE/.git/config.worktree" ]; then
+            if [ ! -f "$GITHUB_WORKSPACE/.git/config.worktree" ] || [ -L "$GITHUB_WORKSPACE/.git/config.worktree" ]; then
+              echo "The checkout's .git/config.worktree isn't a plain file."
+              exit 1
+            fi
+            cp "$GITHUB_WORKSPACE/.git/config.worktree" "$HOST_DIR/baseline/workspace-git-config-worktree"
+          fi
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
@@ -304,6 +335,7 @@ jobs:
         env:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           bash "$HOST_DIR/main/resolve-continue.sh"
 
@@ -320,6 +352,7 @@ jobs:
         env:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           bash "$HOST_DIR/main/resolve-continue.sh"
 
@@ -336,6 +369,7 @@ jobs:
         env:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           bash "$HOST_DIR/main/resolve-continue.sh"
 
@@ -345,8 +379,10 @@ jobs:
       # the ones the sessions started beside and in, the clone's git config is as it was, no
       # repository is nested in it, its rebase finished and wasn't given up on, and the out folder
       # is reached through no symbolic link. Every commit since main is tested against the held-back
-      # pattern, not only the net change, so a change added and then reverted still counts. It must sit on main, carry no conflict marker, and
-      # change nothing the app never pushes. The lines its resolution adds, beyond those the branch
+      # pattern, not only the net change, so a change added and then reverted still counts. It must
+      # sit on main as one straight line of commits, each with one parent, the one before it, so no
+      # commit carries a parent a session chose; carry no conflict marker; and change nothing the
+      # app never pushes. The lines its resolution adds, beyond those the branch
       # already added, and Claude's note, must carry nothing like a token. The digest of what's kept
       # is the job's output, which the push job checks it against.
       - name: Check each rebase, read into a fresh repository
@@ -356,13 +392,35 @@ jobs:
           MAIN_SHA: ${{ github.sha }}
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
+          GIT_NO_REPLACE_OBJECTS: "1"
         run: |
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
           trap 'echo "::$stop::"' EXIT
-          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
           if ! stat -c %d:%i "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" | cmp -s - "$HOST_DIR/baseline/workspace"; then
             echo "The workspace or its .git isn't the one the sessions started beside, so nothing is read from it."
+            exit 1
+          fi
+          # Every session leaves Claude Code's placeholders in the workspace too.
+          bash "$HOST_DIR/main/placeholders.sh" clear "$GITHUB_WORKSPACE" "$HOST_DIR/baseline/protected-workspace"
+          # No session is denied the workspace, whose .git holds the scrub's own mount points, so its
+          # config, which git's fetch from it reads, must be as it was, and only commits are taken
+          # from it, by their ids, never a branch a session could have moved.
+          if ! cmp -s "$GITHUB_WORKSPACE/.git/config" "$HOST_DIR/baseline/workspace-git-config"; then
+            echo "The workspace's git config changed during the sessions, so nothing is read from it."
+            exit 1
+          fi
+          if [ -e "$HOST_DIR/baseline/workspace-git-config-worktree" ] &&
+            { [ -L "$GITHUB_WORKSPACE/.git/config.worktree" ] ||
+              ! cmp -s "$GITHUB_WORKSPACE/.git/config.worktree" "$HOST_DIR/baseline/workspace-git-config-worktree"; }; then
+            echo "The workspace's git config.worktree changed during the sessions, so nothing is read from it."
+            exit 1
+          fi
+          # Replace refs are ignored, by GIT_NO_REPLACE_OBJECTS, and a grafts file, which would
+          # change the commits git reads, is refused, in the workspace and in each clone.
+          if [ -e "$GITHUB_WORKSPACE/.git/info/grafts" ] || [ -L "$GITHUB_WORKSPACE/.git/info/grafts" ]; then
+            echo "A session left a grafts file in the workspace's .git, so nothing is read from it."
             exit 1
           fi
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
@@ -389,19 +447,25 @@ jobs:
               echo "The rebase of #$number still conflicted after three rounds."
             elif ! cmp -s "$work/.git/config" "$HOST_DIR/baseline/git-config-$number"; then
               echo "The clone of #$number has a changed git config, so no git runs there."
+            elif [ -e "$work/.git/info/grafts" ] || [ -L "$work/.git/info/grafts" ]; then
+              echo "The clone of #$number holds a grafts file, so no git runs there."
             elif [ -n "$(find "$work" -mindepth 2 -name .git -print -quit)" ]; then
               echo "The clone of #$number holds a nested repository, so no git runs there."
             else
               safe_git -C "$work" bundle create -q "$bundle" "$MAIN_SHA..HEAD" || true
             fi
             safe_git init -q "$fresh"
-            safe_git -C "$fresh" fetch -q --no-tags "$GITHUB_WORKSPACE" "$MAIN_SHA" "refs/heads/factory-rebase-$number"
+            safe_git -C "$fresh" fetch -q --no-tags "$GITHUB_WORKSPACE" "$MAIN_SHA" "$head_sha"
             if [ -f "$bundle" ] && [ ! -L "$bundle" ] &&
               safe_git -C "$fresh" bundle verify -q "$bundle" > /dev/null 2>&1 &&
               safe_git -C "$fresh" fetch -q "$bundle" "HEAD:refs/rebased" &&
               safe_git -C "$fresh" merge-base --is-ancestor "$MAIN_SHA" refs/rebased &&
+              safe_git -C "$fresh" rev-list --reverse --parents "$MAIN_SHA..refs/rebased" > "$HOST_DIR/check/$number.parents" &&
+              awk -v main="$MAIN_SHA" 'BEGIN { prev = main } NF != 2 || $2 != prev { bad = 1 } { prev = $1 } END { exit bad }' \
+                "$HOST_DIR/check/$number.parents" &&
               ! safe_git -C "$fresh" grep -qE '^(<<<<<<<|>>>>>>>)( |$)' refs/rebased -- &&
-              ! safe_git -C "$fresh" log --format= --name-only --no-renames -z "$MAIN_SHA..refs/rebased" | grep -zE "$guarded" > /dev/null; then
+              safe_git -C "$fresh" log --format= --name-only --no-renames -z "$MAIN_SHA..refs/rebased" > "$HOST_DIR/check/$number.names" &&
+              ! grep -qzE "$guarded" "$HOST_DIR/check/$number.names"; then
               base="$(safe_git -C "$fresh" merge-base "$head_sha" "$MAIN_SHA")"
               comm -23 <(safe_git -C "$fresh" diff --no-ext-diff --no-textconv "$MAIN_SHA" refs/rebased | LC_ALL=C grep -a '^+' | LC_ALL=C sort -u) \
                 <(safe_git -C "$fresh" diff --no-ext-diff --no-textconv "$base" "$head_sha" | LC_ALL=C grep -a '^+' | LC_ALL=C sort -u) \
@@ -412,7 +476,7 @@ jobs:
                 echo "The resolution of #$number adds what looks like a token, so it isn't kept."
               fi
             else
-              echo "The session on #$number left no rebase that sits on main without conflict markers or files the app never pushes."
+              echo "The session on #$number left no rebase that sits on main in one line of single-parent commits, without conflict markers or files the app never pushes."
             fi
             if [ -f "$out/message.md" ] && [ ! -L "$out/message.md" ]; then
               head -c 20000 "$out/message.md" > "$HOST_DIR/check/$number.md"
@@ -515,7 +579,9 @@ jobs:
             refuse "The rebased branch still holds conflict markers."
           fi
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
-          if git "${safe[@]}" diff --name-only --no-renames -z "$MAIN_SHA" refs/rebased | grep -zE "$guarded" > /dev/null; then
+          # The names go to a file that grep reads whole, with no pipe for it to cut short.
+          git "${safe[@]}" diff --name-only --no-renames -z "$MAIN_SHA" refs/rebased > "$RUNNER_TEMP/names"
+          if grep -qzE "$guarded" "$RUNNER_TEMP/names"; then
             refuse "The rebased branch changes .github/, Claude Code's own files, its dependencies, an .npmrc, a .yarnrc or node_modules/, which the factory doesn't push."
           fi
           { echo "result=push"; echo "new_sha=$(git rev-parse refs/rebased)"; } >> "$GITHUB_OUTPUT"

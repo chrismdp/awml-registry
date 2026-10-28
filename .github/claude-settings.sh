@@ -82,8 +82,11 @@ if [ -n "${RUNNER_TOOL_CACHE:-}" ] && [ -d "$RUNNER_TOOL_CACHE" ]; then
 fi
 mkdir -p "$home/.claude"
 list() { if [ $# -gt 0 ]; then printf '%s\n' "$@"; fi | jq -Rsc 'split("\n") | map(select(. != "")) | reduce .[] as $p ([]; if index([$p]) then . else . + [$p] end)'; }
+# bwrap can't make a mount point inside a folder it has already made read-only, so a denied path
+# inside another, which the outer one covers anyway, is left out.
+outermost() { jq -c '. as $all | map(select(. as $p | all($all[]; . as $q | $q == $p or ($p | startswith(($q | rtrimstr("/")) + "/") | not))))'; }
 jq -n \
-  --argjson deny "$(list "${denied[@]}")" \
+  --argjson deny "$(list "${denied[@]}" | outermost)" \
   '{
     sandbox: {
       enabled: true,

@@ -147,7 +147,7 @@ jobs:
           # A commit since main that isn't the factory's, by the build rule's test of its author's
           # and committer's emails, or a merge, means a person has taken the branch on: the build
           # doesn't redraft over their work. Read with git, from main's clone with the head fetched in.
-          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+          safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
           GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
             safe_git fetch -q --no-tags origin "$HEAD_SHA"

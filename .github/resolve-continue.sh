@@ -12,7 +12,7 @@
 #   resolve-continue.sh
 set -euo pipefail
 
-safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
+safe_git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= "$@"; }
 baseline="$HOST_DIR/baseline"
 while IFS=$'\t' read -r number _; do
   case "$number" in ''|*[!0-9]*) continue ;; esac
@@ -25,13 +25,37 @@ while IFS=$'\t' read -r number _; do
     give_up "The clone of #$number or its .git isn't the one its session started in, so no git runs there."
     continue
   fi
+  # Claude Code leaves an empty placeholder at each path it protects that wasn't there; each goes,
+  # and anything else at one is refused.
+  if ! bash "$HOST_DIR/main/placeholders.sh" clear "$work" "$baseline/protected-$number"; then
+    give_up "The session on #$number left something other than a placeholder at a path Claude Code protects, so no git runs there."
+    continue
+  fi
   if ! cmp -s "$work/.git/config" "$baseline/git-config-$number"; then
     give_up "The session on #$number changed its clone's git config, so no git runs there."
+    continue
+  fi
+  # The rebase's state must be as it was before the session, and no other started: git's continue
+  # follows it outside the sandbox, exec lines and all.
+  if ! bash "$HOST_DIR/main/rebase-state.sh" check "$work" "$HOST_DIR/rebase-state-$number"; then
+    give_up "The session on #$number changed its clone's rebase state, so no git runs there."
+    continue
+  fi
+  # Replace refs are ignored, by GIT_NO_REPLACE_OBJECTS in safe_git, and a grafts file, which would
+  # change the commits git reads, is refused.
+  if [ -e "$work/.git/info/grafts" ] || [ -L "$work/.git/info/grafts" ]; then
+    give_up "The session on #$number left a grafts file in its clone's .git, so no git runs there."
     continue
   fi
   # node_modules counts too: a session may write there, apart from its .bin.
   if [ -n "$(find "$work" -mindepth 2 -name .git -print -quit)" ]; then
     give_up "The session on #$number left a repository nested in its clone, so no git runs there."
+    continue
+  fi
+  # A session only edits files: the commits, refs, HEAD and index must be as git left them, so the
+  # commits the app pushes are git's own.
+  if ! bash "$HOST_DIR/main/git-state.sh" "$work" | cmp -s - "$baseline/git-state-$number"; then
+    give_up "The session on #$number changed its clone's commits, refs, HEAD or index, so no git runs there."
     continue
   fi
   marked=false
@@ -47,6 +71,11 @@ while IFS=$'\t' read -r number _; do
   if GIT_EDITOR=true safe_git -C "$work" -c core.editor=true rebase --continue > /dev/null 2>&1; then
     echo "#$number's rebase went on to its end, or to its next conflict."
   fi
+  # What git has now written, for the next round's checks: its commits, refs, HEAD and index, and
+  # which protected paths the replayed commits put in the tree, which are the branch's, not
+  # placeholders.
+  bash "$HOST_DIR/main/git-state.sh" "$work" > "$baseline/git-state-$number"
+  bash "$HOST_DIR/main/placeholders.sh" record "$work" "$baseline/protected-$number"
   if [ -d "$work/.git/rebase-merge" ] || [ -d "$work/.git/rebase-apply" ]; then
     safe_git -C "$work" diff --name-only --no-ext-diff --no-textconv --diff-filter=U > "$HOST_DIR/conflicted-$number.txt"
     if [ ! -s "$HOST_DIR/conflicted-$number.txt" ]; then
