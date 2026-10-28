@@ -29,7 +29,8 @@ while IFS=$'\t' read -r number _; do
     give_up "The session on #$number changed its clone's git config, so no git runs there."
     continue
   fi
-  if [ -n "$(find "$work" -mindepth 2 -path "$work/node_modules" -prune -o -name .git -print -quit)" ]; then
+  # node_modules counts too: a session may write there, apart from its .bin.
+  if [ -n "$(find "$work" -mindepth 2 -name .git -print -quit)" ]; then
     give_up "The session on #$number left a repository nested in its clone, so no git runs there."
     continue
   fi

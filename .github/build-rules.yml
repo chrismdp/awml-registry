@@ -48,4 +48,8 @@ review_paths:
   - src/server/client-metadata.ts
   - src/server/metadata-transport.ts
   - src/server/metadata-transport.cloudflare.ts
+# Folders whose files other than tests, *.test.ts and the like, always need review: a test's helpers
+# and fixtures, which every test that uses them leans on.
+review_non_tests:
+  - test/
 max_changed_lines: 400

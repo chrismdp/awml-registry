@@ -78,9 +78,11 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/compare/main...$HEAD_SHA" > "$RUNNER_TEMP/compare.json"
           fixes="$(jq '[.commits[] | select(.commit.message | test("(^|\n)Factory-Fix: "))] | length' "$RUNNER_TEMP/compare.json")"
           case "$fixes" in ''|*[!0-9]*) echo "The fix commits couldn't be counted: $fixes"; exit 1 ;; esac
-          # npm reads a tree's .npmrc, and a committed node_modules/ shadows packages, so a branch that
-          # changes either is never installed beside the Claude token.
-          if jq -e '[.files[].filename] | any(test("(^|/)\\.npmrc$|(^|/)\\.yarnrc[^/]*$|(^|/)node_modules(/|$)"))' \
+          # npm reads a tree's .npmrc, a committed node_modules/ shadows packages, and npm runs a git
+          # dependency's prepare script even with scripts off, so a branch that changes any of them,
+          # or its package.json or lockfile, is never installed beside the Claude token: the fixer
+          # only ever installs main's dependencies.
+          if jq -e '[.files[].filename] | any(test("(^|/)\\.npmrc$|(^|/)\\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)package(-lock)?\\.json$"))' \
             "$RUNNER_TEMP/compare.json" > /dev/null; then
             outcome=npmfiles
           elif [ "$fixes" -ge 2 ]; then outcome=giveup; else outcome=fix; fi
@@ -124,7 +126,7 @@ jobs:
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
         run: |
           mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
-          cp .github/fix-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/review-findings.sh .github/unclose.sh "$RUNNER_TEMP/main/"
+          cp .github/fix-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/review-findings.sh .github/unclose.sh .github/check-lockfile.sh "$RUNNER_TEMP/main/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
           bash "$RUNNER_TEMP/main/review-findings.sh" findings "$CI_RUN" > "$RUNNER_TEMP/input/findings.json"
           gh api "repos/$GITHUB_REPOSITORY/compare/main...$HEAD_SHA" -H "Accept: application/vnd.github.diff" \
@@ -150,6 +152,7 @@ jobs:
         run: |
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
+          bash "$RUNNER_TEMP/main/check-lockfile.sh" .
           npm ci --ignore-scripts --no-audit --no-fund
           echo "::$stop::"
           mkdir -p "$RUNNER_TEMP/baseline"
@@ -222,7 +225,8 @@ jobs:
             echo "Git's config changed during the session, so no git runs on the tree."
             exit 1
           fi
-          if [ -n "$(find . -mindepth 2 -path ./node_modules -prune -o -name .git -print -quit)" ]; then
+          # node_modules counts too: a session may write there, apart from its .bin.
+          if [ -n "$(find . -mindepth 2 -name .git -print -quit)" ]; then
             echo "The session left a repository nested in the tree, whose config git would read, so no git runs on it."
             exit 1
           fi
@@ -330,7 +334,7 @@ jobs:
             exit 0
           }
           [ "$OUTCOME" != giveup ] || give_up "This branch already carries two fix commits, so the fixer has stopped."
-          [ "$OUTCOME" != npmfiles ] || give_up "This branch changes an \`.npmrc\`, a \`.yarnrc\` or \`node_modules/\`, so the fixer won't install it beside its login token."
+          [ "$OUTCOME" != npmfiles ] || give_up "This branch changes its dependencies (\`package.json\` or \`package-lock.json\`), an \`.npmrc\`, a \`.yarnrc\` or \`node_modules/\`, so the fixer won't install it beside its login token."
           # The fix job can fail after its session too, on a changed config, a nested repository or a
           # token, so a failed job isn't put down to the session.
           [ "$FIXED" = success ] || give_up "The fix job failed before the fix was kept. The run says why."

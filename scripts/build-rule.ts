@@ -1,6 +1,6 @@
 // The build rule: how far a factory pull request, whose CI has passed, may land by itself. Classify's
 // verdict, ship, show or ask, starts it off, and the rule can only move that towards ask: its own
-// tests of the change (paths, size, binaries, symbolic links, removed tests), a commit since main
+// tests of the change (paths, test helpers, size, binaries, symbolic links, gitlinks, removed tests), a commit since main
 // that isn't the factory's, or Classify saying ask or nothing mean ask; a fix commit on the branch,
 // or Nits the reviews left unfixed, mean at least show. It prints the verdict, then one reason a
 // line. land.yml runs main's copy of it, with main's settings, on the head commit CI judged, staged
@@ -15,7 +15,9 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
-export type Config = { reviewPaths: string[]; maxChangedLines: number };
+// reviewPaths are paths, or folders ending in /, that always need review; reviewNonTests are folders
+// whose files other than tests always need review, such as a test's helpers and fixtures.
+export type Config = { reviewPaths: string[]; reviewNonTests: string[]; maxChangedLines: number };
 export type Verdict = { verdict: "ship" | "show" | "ask"; reasons: string[] };
 // What land read from GitHub and git: Classify's verdict, or "missing" when its check has none; how
 // many Nits the reviews' checks carry; and the branch's commits since main, from base to head, with
@@ -58,8 +60,11 @@ const imagesAndFonts: [RegExp, (head: Buffer) => boolean][] = [
   [/\.woff$/i, (head) => startsWith(head, ascii("wOFF"))],
   [/\.woff2$/i, (head) => startsWith(head, ascii("wOF2"))],
 ];
-// A symbolic link's mode in git.
+// A symbolic link's mode in git, and a gitlink's, which points at another repository's commit.
 const symbolicLink = "120000";
+const gitlink = "160000";
+// The largest image or font the rule lets through unread.
+const largestBinary = 1024 * 1024;
 
 export function loadConfig(path: string): Config {
   return readConfig(readFileSync(path, "utf8"));
@@ -69,7 +74,7 @@ export function loadConfig(path: string): Config {
 // either inline in brackets or one "- item" a line, and comments on lines of their own. Anything
 // else is refused, so a setting can never be quietly misread.
 export function readConfig(text: string): Config {
-  const config: Config = { reviewPaths: [], maxChangedLines: 0 };
+  const config: Config = { reviewPaths: [], reviewNonTests: [], maxChangedLines: 0 };
   let list: string[] | undefined;
   for (const [index, raw] of text.split("\n").entries()) {
     const line = raw.trimEnd();
@@ -78,7 +83,7 @@ export function readConfig(text: string): Config {
 
     const item = line.match(/^\s+-(.*)$/);
     if (item) {
-      if (!list) throw new Error(`${where}: a list item belongs under review_paths`);
+      if (!list) throw new Error(`${where}: a list item belongs under review_paths or review_non_tests`);
       list.push(item[1].trim());
       continue;
     }
@@ -88,14 +93,15 @@ export function readConfig(text: string): Config {
     if (!setting) throw new Error(`${where}: can't read "${line}"`);
     const [, key, rest] = setting;
     const value = rest.trim();
-    if (key === "review_paths") {
+    if (key === "review_paths" || key === "review_non_tests") {
+      const field = key === "review_paths" ? "reviewPaths" : "reviewNonTests";
       if (value === "") {
-        list = config.reviewPaths = [];
+        list = config[field] = [];
       } else if (value.startsWith("[") && value.endsWith("]")) {
         const inside = value.slice(1, -1).trim();
-        config.reviewPaths = inside === "" ? [] : inside.split(",").map((path) => path.trim());
+        config[field] = inside === "" ? [] : inside.split(",").map((path) => path.trim());
       } else {
-        throw new Error(`${where}: review_paths must be a list`);
+        throw new Error(`${where}: ${key} must be a list`);
       }
     } else if (key === "max_changed_lines") {
       if (!/^-?\d+$/.test(value)) throw new Error(`${where}: max_changed_lines must be a whole number`);
@@ -106,9 +112,12 @@ export function readConfig(text: string): Config {
   }
 
   if (config.maxChangedLines < 0) throw new Error("max_changed_lines must not be negative");
-  for (const path of config.reviewPaths) {
+  for (const path of [...config.reviewPaths, ...config.reviewNonTests]) {
     if (path === "") throw new Error("review_paths must not contain an empty path");
     if (/^["'#]|\s#/.test(path)) throw new Error(`review_paths can't read ${path}; write each path bare`);
+  }
+  for (const folder of config.reviewNonTests) {
+    if (!folder.endsWith("/")) throw new Error(`review_non_tests must name a folder, ending in /: ${folder}`);
   }
   return config;
 }
@@ -152,6 +161,9 @@ export function evaluate(repo: string, config: Config, judged: Judged = {}): Ver
       (rule) => path === rule || (rule.endsWith("/") && path.startsWith(rule)),
     );
     if (protectedPath) reasons.push(`${shown(path)} is a path that always needs review.`);
+    else if (config.reviewNonTests.some((folder) => path.startsWith(folder)) && !testFile.test(path)) {
+      reasons.push(`${shown(path)} is a test's helper or fixture, so it always needs review.`);
+    }
   }
 
   // The rule reads no attributes from the change, but a .gitattributes would change how git reads
@@ -178,6 +190,7 @@ export function evaluate(repo: string, config: Config, judged: Judged = {}): Ver
   const modes = newModes(repo);
   for (const [path, mode] of modes) {
     if (mode === symbolicLink) reasons.push(`${shown(path)} is a symbolic link, so it always needs review.`);
+    if (mode === gitlink) reasons.push(`${shown(path)} is another repository's commit, so it always needs review.`);
   }
 
   // A file git finds binary by its content can't be counted or read, so it needs review, unless it's
@@ -189,6 +202,8 @@ export function evaluate(repo: string, config: Config, judged: Judged = {}): Ver
       reasons.push(`${shown(path)} is binary, so the rule can't count or read it.`);
     } else if (modes.get(path) !== "000000" && !kind[1](head(repo, path))) {
       reasons.push(`${shown(path)} is binary, and doesn't start as its name says, so the rule can't read it.`);
+    } else if (modes.get(path) !== "000000" && size(repo, path) > largestBinary) {
+      reasons.push(`${shown(path)} is over 1 MiB, so it always needs review.`);
     }
   }
   if (changedLines > config.maxChangedLines) {
@@ -268,6 +283,11 @@ function head(repo: string, path: string): Buffer {
   } catch (error) {
     throw new Error(`read ${path}: ${(error as Error).message}`);
   }
+}
+
+// The size in bytes of a path as the change stages it.
+function size(repo: string, path: string): number {
+  return Number(run(repo, ["cat-file", "-s", `:0:${path}`]).trim());
 }
 
 // A path as a reason shows it: in a code span, with anything that could end the span or the line

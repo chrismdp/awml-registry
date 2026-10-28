@@ -158,7 +158,7 @@ jobs:
       - name: Copy main's prompt, scripts, AGENTS.md and REVIEW.md out
         run: |
           mkdir -p "$RUNNER_TEMP/main" "$RUNNER_TEMP/input"
-          cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh "$RUNNER_TEMP/main/"
+          cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh "$RUNNER_TEMP/main/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
 
       # The label approves the issue as it reads then, and a try drafts from it only if it hasn't
@@ -232,8 +232,9 @@ jobs:
       # commands writes to node_modules/.bin and package-lock.json, and its sandbox has no network.
       # So the dependencies are installed here, with every package's scripts off, so no code of
       # theirs runs beside the secret, and from npm's own registry, whatever an .npmrc says. None of
-      # the registry's checks needs a package's install script. Git's config is copied out, for the
-      # check after the session.
+      # the registry's checks needs a package's install script. npm still runs a git dependency's
+      # prepare script, so the lockfile must name only packages from npm's registry, with their
+      # integrity. Git's config is copied out, for the check after the session.
       - name: Install the dependencies with their scripts off
         env:
           npm_config_userconfig: /dev/null
@@ -243,6 +244,7 @@ jobs:
         run: |
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
+          bash "$RUNNER_TEMP/main/check-lockfile.sh" .
           npm ci --ignore-scripts --no-audit --no-fund
           echo "::$stop::"
           mkdir -p "$RUNNER_TEMP/baseline"
@@ -319,7 +321,8 @@ jobs:
             echo "Git's config changed during the session, so no git runs on the tree."
             exit 1
           fi
-          if [ -n "$(find . -mindepth 2 -path ./node_modules -prune -o -name .git -print -quit)" ]; then
+          # node_modules counts too: a session may write there, apart from its .bin.
+          if [ -n "$(find . -mindepth 2 -name .git -print -quit)" ]; then
             echo "The session left a repository nested in the tree, whose config git would read, so no git runs on it."
             exit 1
           fi

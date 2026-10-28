@@ -645,6 +645,11 @@ describe("the factory's workflows", () => {
         const commands = runOf(each).replace(/"Bash\([^"]*\)"/g, "");
         if (!/\bnpm ci\b/.test(commands)) continue;
         expect(each.env, `${file} ${id} "${each.name}"`).toMatchObject(hostNpm);
+        // A git dependency's prepare script runs even with scripts off, so the lockfile is checked
+        // first: every package from npm's registry, with its integrity.
+        const checked = commands.indexOf("check-lockfile.sh");
+        expect(checked, `${file} ${id} "${each.name}"`).toBeGreaterThan(-1);
+        expect(checked, `${file} ${id} "${each.name}"`).toBeLessThan(commands.indexOf("npm ci"));
       }
     }
   });
@@ -725,7 +730,6 @@ describe("the factory's workflows", () => {
     for (const [file, id, job] of everyJob())
       for (const each of steps(job)) {
         if (!each.uses?.startsWith("actions/setup-node")) continue;
-        if (file === "ci.yml" && id === "test") continue;
         expect(each.with?.["package-manager-cache"], `${file} ${id}`).toBe(false);
         expect(each.with?.cache, `${file} ${id}`).toBeUndefined();
       }
@@ -851,6 +855,49 @@ describe("claude-settings.sh", () => {
       "resolve.yml draft: ",
       "resolve.yml draft: ",
     ]);
+  });
+});
+
+// npm runs a git dependency's prepare script on the host even with scripts off, so before any host
+// npm ci the lockfile must name only packages from npm's registry, each with its integrity.
+describe("check-lockfile.sh", () => {
+  const check = (lock: unknown) => {
+    const root = scratch();
+    put(join(root, "tree/package-lock.json"), JSON.stringify(lock));
+    return rehearse(script("check-lockfile.sh", [join(root, "tree")]), { root });
+  };
+  const good = {
+    lockfileVersion: 3,
+    packages: {
+      "": { name: "awml-registry" },
+      "node_modules/a": { resolved: "https://registry.npmjs.org/a/-/a-1.0.0.tgz", integrity: "sha512-x" },
+      "node_modules/b": { link: true, resolved: "packages/b" },
+    },
+  };
+
+  it.runIf(canRehearse)("passes a lockfile of npm's registry alone, in-repo links included", () => {
+    expect(check(good).failed).toBe(false);
+  });
+
+  it.runIf(canRehearse)("passes the repository's own lockfile", () => {
+    expect(rehearse(script("check-lockfile.sh", [join(__dirname, "..")]), { root: scratch() }).failed).toBe(false);
+  });
+
+  it.runIf(canRehearse).each([
+    ["a git dependency", { ...good, packages: { ...good.packages, "node_modules/c": { resolved: "git+ssh://git@github.com/x/c.git#abc", integrity: "sha512-x" } } }],
+    ["a tarball from another host", { ...good, packages: { ...good.packages, "node_modules/c": { resolved: "https://example.com/c.tgz", integrity: "sha512-x" } } }],
+    ["a package without its integrity", { ...good, packages: { ...good.packages, "node_modules/c": { resolved: "https://registry.npmjs.org/c/-/c-1.0.0.tgz" } } }],
+    ["a package without a source", { ...good, packages: { ...good.packages, "node_modules/c": { version: "1.0.0" } } }],
+    ["an old lockfile", { ...good, lockfileVersion: 1 }],
+    ["no packages", { lockfileVersion: 3 }],
+  ])("refuses %s", (_, lock) => {
+    expect(check(lock).failed).toBe(true);
+  });
+
+  it.runIf(canRehearse)("refuses a tree with no lockfile", () => {
+    const root = scratch();
+    mkdirSync(join(root, "tree"));
+    expect(rehearse(script("check-lockfile.sh", [join(root, "tree")]), { root }).failed).toBe(true);
   });
 });
 
@@ -1631,6 +1678,12 @@ describe("build.yml", () => {
       const { run } = patch((repo) => git(join(repo), "init", "-q", "src/inner"));
       expect(run.failed).toBe(true);
     });
+
+    // A session may write under node_modules, apart from its .bin, so a repository there counts.
+    it.runIf(canRehearse)("refuses a repository nested in node_modules", () => {
+      const { run } = patch((repo) => git(join(repo), "init", "-q", "node_modules/left-pad"));
+      expect(run.failed).toBe(true);
+    });
   });
 
   it.runIf(canRehearse)("unclose.sh puts each closing reference in a code span", () => {
@@ -2028,7 +2081,7 @@ describe("fix.yml", () => {
 
   // npm would read the branch's .npmrc or a committed node_modules/ beside the Claude token, so a
   // branch that changes them is never installed: a person must fix it.
-  it.runIf(canRehearse).each([".npmrc", "web/.npmrc", ".yarnrc", "node_modules/left-pad/index.js"])(
+  it.runIf(canRehearse).each([".npmrc", "web/.npmrc", ".yarnrc", "node_modules/left-pad/index.js", "package.json", "package-lock.json"])(
     "refuses a branch that changes %s",
     (path) => {
       expect(decide({ files: [path] }).outputs.outcome).toBe("npmfiles");
@@ -2386,6 +2439,15 @@ describe("resolve.yml", () => {
     git(origin, "commit", "-qm", "workflow change");
     const workflowHead = git(origin, "rev-parse", "HEAD");
     git(origin, "switch", "-q", "main");
+    // A branch that changes the dependencies is held back too: npm runs a git dependency's
+    // prepare script on the host even with scripts off.
+    git(origin, "switch", "-q", "-c", "deps");
+    put(join(origin, "a.txt"), "deps\n");
+    put(join(origin, "package.json"), '{"dependencies": {"c": "git+ssh://git@example.com/c.git"}}\n');
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "dependency change");
+    const depsHead = git(origin, "rev-parse", "HEAD");
+    git(origin, "switch", "-q", "main");
     put(join(origin, "a.txt"), "main\n");
     git(origin, "commit", "-qam", "main moves");
     const main = git(origin, "rev-parse", "HEAD");
@@ -2399,7 +2461,9 @@ describe("resolve.yml", () => {
       env: { MAIN_SHA: main },
       answers: `
   *"users/awml-factory"*) echo 99 ;;
-  *"pulls?state=open"*) printf '1\\n2\\n3\\n4\\n' ;;
+  *"pulls?state=open"*) printf '1\\n2\\n3\\n4\\n5\\n' ;;
+  *"pr view 5 "*) answer <<< '{"mergeable": "CONFLICTING", "headRefOid": "${depsHead}"}' ;;
+  *"pulls/5"*) answer <<< '${pull(5, "deps", depsHead)}' ;;
   *"pr view 4 "*) answer <<< '{"mergeable": "CONFLICTING", "headRefOid": "${workflowHead}"}' ;;
   *"pulls/4"*) answer <<< '${pull(4, "workflow", workflowHead)}' ;;
   *"pr view 1 "*) answer <<< '{"mergeable": "CONFLICTING", "headRefOid": "${cleanHead}"}' ;;
@@ -2414,6 +2478,7 @@ describe("resolve.yml", () => {
       { number: 1, branch: "clean", head_sha: cleanHead, clean: true, guarded: false },
       { number: 2, branch: "clash", head_sha: clashHead, clean: false, guarded: false },
       { number: 4, branch: "workflow", head_sha: workflowHead, clean: false, guarded: true },
+      { number: 5, branch: "deps", head_sha: depsHead, clean: false, guarded: true },
     ]);
     expect(run.outputs.conflicted).toBe("true");
     expect(existsSync(join(root, "runner/rebased/1.bundle"))).toBe(true);
@@ -2574,6 +2639,7 @@ describe("resolve.yml", () => {
         execFileSync("cp", ["-r", join(root, "old-git"), join(clone, ".git")]);
       }],
       ["with a repository nested below the top", (clone: string) => git(clone, "init", "-q", "src/inner")],
+      ["with a repository nested in node_modules", (clone: string) => git(clone, "init", "-q", "node_modules/left-pad")],
     ])("runs no git in a clone %s", (_, spoil) => {
       const { root, clone } = midRebase();
       put(join(clone, "a.txt"), "both\n");
@@ -2636,6 +2702,7 @@ describe("resolve.yml", () => {
       ["a token the resolution adds", (work: string) => put(join(work, "c.txt"), `key sk-ant-oat01-${"x".repeat(20)}\n`)],
       ["a change to .github/", (work: string) => put(join(work, ".github/workflows/x.yml"), "on: push\n")],
       ["a change to an .npmrc", (work: string) => put(join(work, ".npmrc"), "registry=https://example.com/\n")],
+      ["a change to the dependencies", (work: string) => put(join(work, "package.json"), '{"dependencies": {"c": "git+ssh://x"}}\n')],
     ])("keeps no bundle with %s", (_, resolve) => {
       const { root, run } = rebased(resolve);
       expect(run.failed, run.printed).toBe(false);
@@ -2676,6 +2743,8 @@ describe("resolve.yml", () => {
       ["a clone whose git config changed", (root: string) =>
         writeFileSync(join(root, "runner/pr/5/work/.git/config"), "[diff]\n\texternal = touch /tmp/owned\n")],
       ["a repository nested in the clone", (root: string) => git(join(root, "runner/pr/5/work"), "init", "-q", "src/inner")],
+      ["a repository nested in the clone's node_modules", (root: string) =>
+        git(join(root, "runner/pr/5/work"), "init", "-q", "node_modules/left-pad")],
     ])("bundles nothing from %s", (_, spoil) => {
       const { root, run } = rebased(() => {}, spoil);
       expect(run.failed, run.printed).toBe(false);
