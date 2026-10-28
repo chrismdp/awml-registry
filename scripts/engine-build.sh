@@ -44,7 +44,7 @@ fi
 tag=$(pin field tag)
 commit=$(pin field commit)
 if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || ! [[ "$commit" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "vendor/awml/version.json must pin a release tag, such as v0.7.1, and its full commit" >&2
+  echo "vendor/awml/version.json must pin a release tag, such as v0.8.0, and its full commit" >&2
   exit 1
 fi
 if ! $record; then

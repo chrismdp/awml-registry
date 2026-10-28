@@ -20,6 +20,9 @@ export type DrawnPart = Rect & {
   lines: string[];
   tier?: string;
   scope?: string;
+  // The thick outline of a part untrusted text comes from (#83): orange, or
+  // red when its text reaches an outside action that nothing stops.
+  outline?: "untrusted" | "unstopped";
 };
 
 export type DrawnScope = Rect & {

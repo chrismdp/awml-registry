@@ -1,7 +1,7 @@
 # A try that failed, by a check, by CI or by a review's Important finding, starts the build again,
 # up to three tries in all, each time telling Claude why the last one failed. After three, why it
 # failed is commented on the issue.
-awml: "0.7"
+awml: "0.8"
 title: A failed build tries again
 scopes:
   - { id: public, label: "public: anyone who reads the repository", processing: any }

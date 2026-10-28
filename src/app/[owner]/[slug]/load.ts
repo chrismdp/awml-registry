@@ -155,8 +155,13 @@ export async function versionProps(
   const source: FileName | undefined = workflow ? "workflow" : views.find((view) => view === shown);
   const nowhere = Boolean(workflow) && shown === "platform" && !placed;
   // Only the security and platform views show a drawing, so only they draw.
-  const drawn = shown === "security" || shown === "platform";
-  const drawable = drawn && source && !nowhere && mistakesIn(checks.filter((c) => c.name === source)) === 0;
+  // A file is drawn when nothing stops AWML drawing it: it may have mistakes
+  // only where a line breaks a rule, such as untrusted text reaching an
+  // outside action that nothing stops, which the drawing draws red (#83). A
+  // list of checks stored at push with a check failed is never drawn.
+  const drawnFile = source && !nowhere && (shown === "security" || shown === "platform") ? readFile(source) : undefined;
+  const storedFailed = checks.some((c) => c.name === source && c.listed === "stored" && mistakesIn([c]) > 0);
+  const drawable = drawnFile !== undefined && !storedFailed && (await engine.unsound(drawnFile)).length === 0;
   // A public workflow can be forked into the viewer's own account or one of
   // their organisations; someone signed out is asked to sign in first.
   const fork =
@@ -198,7 +203,8 @@ export async function versionProps(
     systems: systems ?? [],
     // The drawing, laid out here from the engine's graph (src/server/drawing.ts),
     // so the page draws it with no layout of its own.
-    drawing: drawable ? await layOut(await engine.graph(readFile(source)!, drawnImplementation(source, placed, readFile(source)!))) : null,
+    drawing: drawable ? await layOut(await engine.graph(drawnFile, drawnImplementation(source!, placed, drawnFile))) : null,
+    drawnMistakes: drawable ? mistakesIn(checks.filter((c) => c.name === source)) : 0,
     summary: v.summary,
     versions: v.versions,
   };

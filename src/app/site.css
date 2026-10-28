@@ -11,9 +11,10 @@
   --on-ink: #d4d7dd;
   --link: #3b4bb0;
 
-  /* Box colours: a fill and an outline for each kind of step. */
-  --ai-fill: #cdd3fb;
-  --ai-line: #3b4bb0;
+  /* Box colours: a fill and an outline for each kind of step. AI is a cyan,
+     never a violet (#83), and apart from untrusted text's orange, green and red. */
+  --ai-fill: #c9ebf5;
+  --ai-line: #0b6e8a;
   --code-fill: #c4e3d1;
   --code-line: #2b7a4f;
   --person-fill: #f7d79a;
@@ -188,6 +189,7 @@ pre, code { font-family: var(--mono); }
 .check-warnings li + li { margin-top: 6px; }
 @media (max-width: 600px) { .checks section { padding: 16px; border-radius: 22px; } }
 .cannot-draw { margin: 0; font-size: 15px; }
+.drawn-mistakes { margin: 0 0 16px; font-size: 15px; }
 /* A 0.4 workflow's platform view: which implementation is drawn. */
 .implementations { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; font-size: 15px; font-weight: 600; color: var(--ink-soft); }
 .implementations a { color: var(--ink-soft); padding: 8px 14px; min-height: 40px; display: inline-flex; align-items: center; border-radius: 999px; box-shadow: inset 0 0 0 1.5px var(--wash); text-decoration: none; }

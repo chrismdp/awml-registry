@@ -16,7 +16,7 @@ import { call } from "./mcp-client";
 import { renderPage } from "./pages";
 
 // A shopping workflow whose list others refer to, and its label.
-const shopping = (label = "Shopping list") => `awml: "0.7"
+const shopping = (label = "Shopping list") => `awml: "0.8"
 title: Shopping
 parts:
   - { id: list, kind: context, label: "${label}" }
@@ -26,7 +26,7 @@ lines:
 `;
 
 // A dinners workflow that keeps its own copy of the list, referring to it as `ref`.
-const dinners = (ref: string, label = "Shopping list") => `awml: "0.7"
+const dinners = (ref: string, label = "Shopping list") => `awml: "0.8"
 title: Dinners
 parts:
   # The list is shopping's.
@@ -325,7 +325,7 @@ describe("a workflow of many refs, within D1's limit on bound values", () => {
   // acme/list-n, which a private workflow may do before they are pushed.
   const manyLists = (n: number) => {
     const lists = Array.from({ length: n }, (_, i) => i + 1);
-    return `awml: "0.7"
+    return `awml: "0.8"
 title: Many lists
 parts:
   - { id: plan, kind: ai, label: "Plan the week's dinners" }

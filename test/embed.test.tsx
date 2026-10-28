@@ -19,7 +19,7 @@ const dinners = example("dinners.yaml");
 const HOST = new URL(ownUrl("/")).host;
 
 // A workflow with two implementations, so the platform view has one to pick.
-const twoPlaces = `awml: "0.7"
+const twoPlaces = `awml: "0.8"
 title: Shopping
 parts:
   - { id: list, kind: context, label: "Shopping list" }
@@ -38,7 +38,7 @@ implementations:
 `;
 
 // A workflow that keeps its own copy of the shopping list, by a ref.
-const referring = `awml: "0.7"
+const referring = `awml: "0.8"
 title: Dinners
 parts:
   - { id: list, kind: context, label: "Shopping list", ref: acme/shopping#list }

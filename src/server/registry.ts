@@ -54,7 +54,7 @@ async function readable(db: Db, viewer: Viewer, ownerSlug: string, slug: string)
   return { owner, workflow: w };
 }
 
-// The one file a push sends: an AWML 0.7 workflow, as `workflow`, or alone
+// The one file a push sends: an AWML 0.8 workflow, as `workflow`, or alone
 // as `security`, as awml push 0.4.0 sent it. Anything marked as an older
 // AWML is refused with a 400 that says how to convert it, whichever field it
 // came in.
@@ -67,9 +67,9 @@ function fileFrom(body: PushBody): Result<{ file: string }> {
     sent.push(text);
   }
   if (sent.some(isOlderAwml)) return refuse(400, WORKFLOW_IS_TOO_OLD);
-  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.7 file as workflow.");
+  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.8 file as workflow.");
   if (sent.length > 1)
-    return refuse(422, "Send one file, as workflow: an AWML 0.7 workflow holds its design and its implementations.");
+    return refuse(422, "Send one file, as workflow: an AWML 0.8 workflow holds its design and its implementations.");
   return { ok: true, file: sent[0] };
 }
 

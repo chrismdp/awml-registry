@@ -2,7 +2,7 @@
 # 0.7 added: its two triggers start two workflows, nothing links the list to
 # a trigger, no trigger's run starts the stray step, and the aside is tied to
 # nothing.
-awml: "0.7"
+awml: "0.8"
 title: Loose ends
 scopes:
   - { id: home, label: "home: the family" }

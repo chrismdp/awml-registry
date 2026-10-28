@@ -1,0 +1,2 @@
+bad-08.yaml: the line from "plan" to "missing" ends at unknown part "missing"
+bad-08.yaml: part "notes" is not placed in implementation "home"

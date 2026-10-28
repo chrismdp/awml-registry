@@ -1,7 +1,7 @@
 # An AWML 0.7 workflow whose every label is markup, a javascript: address or
 # broken over lines. The engine's graph gives each exactly as written here,
 # unescaped, so the registry must show each only as text.
-awml: "0.7"
+awml: "0.8"
 title: "Hostile <script>alert('title')</script>"
 scopes:
   - { id: home, label: "home: <img src=x onerror=alert('scope')>" }

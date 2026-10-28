@@ -63,8 +63,13 @@ export type VersionViewProps = {
   // The systems the viewer may see whose latest version has this workflow.
   systems: ListedSystem[];
   // The shown file drawn, laid out by the server, or why the server didn't
-  // lay it out, or null when it is not a drawing view or the file has mistakes.
+  // lay it out, or null when it is not a drawing view or the file has
+  // mistakes AWML will not draw.
   drawing: Drawings | Undrawn | null;
+  // How many mistakes the drawn file has alone: only lines that break a rule,
+  // such as untrusted text reaching an outside action nothing stops, which
+  // the drawing draws red (#83). Its refs' mistakes aren't counted.
+  drawnMistakes: number;
   summary: Summary;
   versions: ListedVersion[];
 };
@@ -196,7 +201,15 @@ export function VersionView(p: VersionViewProps) {
               ) : p.drawing && "undrawn" in p.drawing ? (
                 <p className="cannot-draw">{undrawnText(p.drawing, "workflow")}</p>
               ) : p.drawing ? (
-                <Drawing drawings={p.drawing} links={p.links} />
+                <>
+                  {p.drawnMistakes > 0 && (
+                    <p className="drawn-mistakes">
+                      {p.drawnFrom}.yaml has {count(p.drawnMistakes, "mistake", "mistakes")}, drawn in red.{" "}
+                      <a href={`${p.address}/checks`}>See Checks.</a>
+                    </p>
+                  )}
+                  <Drawing drawings={p.drawing} links={p.links} />
+                </>
               ) : (
                 <CannotDraw file={p.checks.find((f) => f.name === p.drawnFrom)!} checks={`${p.address}/checks`} />
               )}

@@ -34,7 +34,7 @@ import { laidOut } from "./drawn";
 // A workflow that the fit can judge: one scope any company may process, a
 // trigger that waits up to an hour, a note kept in the scope and a step a
 // person takes, each labelled so a test can find it on a page.
-const workflow = (title: string, words: string) => `awml: "0.7"
+const workflow = (title: string, words: string) => `awml: "0.8"
 title: ${title}
 scopes:
   - { id: home, label: "home: the family", processing: any }
@@ -430,7 +430,7 @@ describe("a system's page", () => {
 
   it("draws a part two members share once, by the ref between them, and says who shares it", async () => {
     const { ana } = await world();
-    const meals = `awml: "0.7"
+    const meals = `awml: "0.8"
 title: Meals
 scopes:
   - { id: home, label: "home: the family", processing: any }
@@ -761,8 +761,10 @@ describe("a big system, within D1's limit on bound values", () => {
 // AWML 0.7 starts another workflow with an outside action whose ref names that workflow's
 // trigger (awml#109), and the engine's map draws a line from the action to the trigger it starts
 // (awml#122). Given together, as a system gives its members, untrusted text follows the action
-// into the workflow it starts (awml#112). The bakery's stock count starts its supplier order:
-// AWML's own example, pushed with its path refs, as bakery-stock and bakery-order.
+// into the workflow it starts (awml#112). From AWML 0.8 untrusted text reaching an outside action
+// that nothing stops is a mistake, unless a standing approval in front of it accepts the risk
+// (awml#146, awml#151). The bakery's stock count starts its supplier order: AWML's own example,
+// pushed with its path refs, as bakery-stock and bakery-order.
 describe("a system whose members start one another", () => {
   // The supplier order with no review before the order is placed, so text that reaches it from
   // the stock count reaches its outside action.
@@ -772,8 +774,29 @@ describe("a system whose members start one another", () => {
       .replace("{ from: ask, to: approve, kind: start }", "{ from: ask, to: place, kind: start }")
       .replace(/\n  - \{ from: approve, to: place[^\n]*/, "")
       .replace("Place the order: Ask", "Place the order: Allow");
-  const untrusted = (stock: string) =>
+  const marked = (stock: string) =>
     stock.replace('{ id: close, kind: trigger, label: "Every day 18:00" }', '{ id: close, kind: trigger, label: "Every day 18:00", untrusted: true }');
+  // The stock count's trigger marked untrusted, and the supplier order started under Ana's
+  // standing approval, which accepts the risk, so the stock count passes check on its own.
+  const accepted = "Ana's standing approval: orders only, risk accepted by Ana on a month of counts";
+  const untrusted = (stock: string) =>
+    marked(stock)
+      .replace(
+        '  - { id: start, kind: outside, label: "Start the supplier order: Allow", in: bakery, ref: bakery-order.yaml#low }',
+        [
+          `  - { id: risk, kind: approval, label: "${accepted}", in: bakery }`,
+          `  - { id: list, kind: surface, label: "Ana's list", in: bakery }`,
+          '  - { id: start, kind: outside, label: "Start the supplier order: Ask", in: bakery, ref: bakery-order.yaml#low }',
+        ].join("\n"),
+      )
+      .replace(
+        "  - { from: tell, to: start, kind: start }",
+        [
+          "  - { from: tell, to: risk, kind: start }",
+          '  - { from: risk, to: start, kind: data, label: "[within limits]" }',
+          '  - { from: risk, to: list, kind: data, label: "each order started, as sent" }',
+        ].join("\n"),
+      );
 
   // Ana's organisation acme holds the two, private, so each may refer to the other before it is
   // pushed; the order first, then the stock count, whose action is checked against the order.
@@ -835,16 +858,38 @@ describe("a system whose members start one another", () => {
     expect(order.referredBy.map((r) => [`${r.owner}/${r.slug}`, r.parts])).toEqual([["acme/bakery-stock", ["low"]]]);
   });
 
-  it("follows untrusted text through the action into the workflow it starts, on Checks and Who waits, and not for a file checked alone", async () => {
+  it("refuses a stock count whose untrusted text starts the supplier order with nothing to stop it or accept the risk", async () => {
+    const ana = await person("ana");
+    await orgWith("acme", ana);
+    const res = await request("POST", "/api/v1/acme/bakery-stock/versions", {
+      as: { token: ana.token },
+      json: { workflow: marked(example("bakery-stock.yaml")), visibility: "private" },
+    });
+    expect(res.status).toBe(422);
+    expect((await res.json()).errors).toEqual([
+      'workflow: untrusted text from part "close" reaches outside action "start" with nothing to stop it or accept the risk: ' +
+        "a review, a person's own step or a code step marked cleans on the way would stop it, or a standing approval in front of the action would accept the risk",
+    ]);
+  });
+
+  it("follows untrusted text past an accepted risk into the workflow it starts, a mistake there on Checks, and not for a file checked alone", async () => {
     const { ana } = await bakery(untrusted(example("bakery-stock.yaml")), unreviewed(example("bakery-order.yaml")));
     const reached = "untrusted text from part &quot;close&quot; in acme/bakery-stock.yaml reaches outside action &quot;place&quot;";
     const checks = await tab("acme", "bakery", "checks", ana);
     const order = checks.html.slice(checks.html.indexOf("acme/bakery-order.yaml"));
     expect(order).toContain(reached);
-    expect(checks.html).toContain('<li data-check="warn.untrusted-outside">');
+    expect(checks.html).toContain('<li data-check="untrusted.outside">');
+    expect(checks.html).not.toContain("warn.untrusted-outside");
     const waits = (await tab("acme", "bakery", "who-waits", ana)).html;
     expect(waits).toContain("<h2>Where untrusted text reaches</h2>");
-    expect(waits).toContain("Every day 18:00<span class=\"note\"> · reaches Start the supplier order: Allow, Place the order: Allow</span>");
+    expect(waits).toContain(
+      `Every day 18:00<span class="note"> · reaches Start the supplier order: Ask, Place the order: Allow · risk accepted for Start the supplier order: Ask, by ${accepted.replace("'", "&#x27;")}</span>`,
+    );
+    // On the map, the stock count's trigger is outlined red: its text reaches the order's outside
+    // action with nothing to stop it.
+    const { panel } = (await as(ana, () => loadSystem("acme", "bakery", "latest", "map"))) as Awaited<ReturnType<typeof loadSystem>>;
+    if (panel.tab !== "map" || !panel.drawing) throw new Error("no map");
+    expect(laidOut(panel.drawing).full.parts.flatMap((p) => (p.outline ? [[p.id, p.outline]] : []))).toEqual([["w1_close", "unstopped"]]);
     // The supplier order's own Checks tab gives it with the stock count its ref names, so says so
     // too; the list stored at its push, of the file checked alone, doesn't.
     const own = await renderPage(WorkflowChecksPage, { owner: "acme", slug: "bakery-order" }, { as: { cookie: ana.cookie } });
@@ -854,7 +899,7 @@ describe("a system whose members start one another", () => {
       .from(version)
       .innerJoin(workflowTable, eq(workflowTable.id, version.workflowId))
       .where(eq(workflowTable.slug, "bakery-order"));
-    expect(row.checks?.checks.find((c) => c.id === "warn.untrusted-outside")).toMatchObject({ result: "pass", mistakes: [] });
+    expect(row.checks?.checks.find((c) => c.id === "untrusted.outside")).toMatchObject({ result: "pass", mistakes: [] });
   });
 
   it("shows none of it to someone outside acme", async () => {

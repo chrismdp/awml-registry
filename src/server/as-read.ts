@@ -27,10 +27,11 @@ export function asRead(files: Files, name: keyof Files): Promise<AsRead> {
 
 // The graph of the design drawn from one stored file for a card: a workflow,
 // or a security view stored before 0.4. "" when the engine can't draw it, as
-// for a platform view stored on its own, which doesn't convert.
+// for a platform view stored on its own, which doesn't convert. A file whose
+// only mistakes are lines that break a rule is drawn, those lines red (#83).
 export async function designGraph(stored: string) {
   const read = await converted([stored]);
-  if ("error" in read || (await engine.check(read.file)).length) return "";
+  if ("error" in read || (await engine.unsound(read.file)).length) return "";
   return engine.graph(read.file);
 }
 
