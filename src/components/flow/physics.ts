@@ -2,9 +2,8 @@ import { forceLink, forceManyBody, forceSimulation, forceX, forceY, type Simulat
 import { headHeight, headWidth, SCOPE_PAD, squareRoute, type Drawing, type DrawnScope, type Point, type Rect } from "./drawing";
 
 // A box the physics moves: a part, or a scope with no parts, by its centre.
-// `scopes` are the scopes it is in, the nearest first. A part the reader has
-// dropped is `pinned` where they left it.
-export type Body = SimulationNodeDatum & { id: string; width: number; height: number; scopes: string[]; rank: number; pinned?: boolean };
+// `scopes` are the scopes it is in, the nearest first.
+export type Body = SimulationNodeDatum & { id: string; width: number; height: number; scopes: string[]; rank: number };
 type Spring = SimulationLinkDatum<Body> & { strength: number };
 
 export type Physics = {
@@ -18,10 +17,8 @@ export type Physics = {
   open(): void;
   // Holds a box where the pointer is while it is dragged, so its neighbours follow.
   hold(id: string, at: Point): void;
-  // Pins it where it was dropped, for the rest to settle round it.
+  // Lets it go where it was dropped, what is near it settling round it.
   drop(id: string): void;
-  // Lets a pinned box go, to settle with the rest.
-  release(id: string): void;
   stop(): void;
 };
 
@@ -45,13 +42,23 @@ const LAYER = 190;
 const KEPT = 0.4;
 // How hot the physics runs (d3-force's alpha), which every force but the
 // collisions is scaled by: as the drawing opens, while a part is dragged,
-// and at least as it settles once a part is dropped or let go. And how fast
-// it cools.
-const HEAT = { open: 0.5, drag: 0.1, release: 0.05 };
+// and at least as it settles once a part is dropped. And how fast it cools.
+const HEAT = { open: 0.5, drag: 0.03, settle: 0.03 };
 const COOLING = 0.04;
-// How long the drawing takes to open, and to settle once a part is dropped or
-// let go, in milliseconds, and how it eases in and out of the move, so it
-// starts just where it was, the server's SVG or the dropped part's drawing.
+// Once the drawing has opened, a drag disturbs only what is near the part
+// dragged (#78). Each line is a spring of a tenth the strength, at rest at the
+// length it has when the drag begins, so a part dragged out stays stretched
+// out, and pulls its neighbours only a little; and once it is dropped, its
+// lines rest at the length they have then, so nothing pulls it back. Parts
+// push each other apart only weakly, and only within `charge.reach`; the pulls
+// down the page, to the middle and into each scope stop. And no force moves a
+// part more than `far` from the one dragged, and a part within `near` of it
+// moves freely, between them less the further it is. Collisions still push
+// whatever is bumped clear, however far.
+const DRAG = { springs: 0.1, charge: { strength: -80, reach: 150 }, near: 120, far: 280 };
+// How long the drawing takes to open, and to settle once a part is dropped,
+// in milliseconds, and how it eases in and out of the move, so it starts just
+// where it was, the server's SVG or the dropped part's drawing.
 export const OPENING = 900;
 const SETTLING = 600;
 export const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
@@ -221,6 +228,17 @@ export function startPhysics(
   // Where a body will be once this tick's speed has moved it.
   const next = (b: Body): Point => (b.fx != null ? { x: b.fx, y: b.fy! } : { x: b.x! + b.vx! * KEPT, y: b.y! + b.vy! * KEPT });
 
+  // The part being dragged, or settling once dropped, and how freely each
+  // body moves by the forces then: all the way within DRAG.near of it, not at
+  // all beyond DRAG.far, and less the further it is between them.
+  let focus: Body | undefined;
+  const reach = (b: Body) => {
+    if (!focus || b === focus) return 1;
+    const [r, f] = [boxAt(b, now(b)), boxAt(focus, now(focus))];
+    const gap = Math.max(0, r.x - (f.x + f.width), f.x - (r.x + r.width), r.y - (f.y + f.height), f.y - (r.y + r.height));
+    return Math.max(0, Math.min(1, (DRAG.far - gap) / (DRAG.far - DRAG.near)));
+  };
+
   // Moves a body by so much now, unless something holds it. The move is made
   // to where it is, not to its speed, so it undoes an overlap without leaving
   // the body moving on past it.
@@ -232,12 +250,19 @@ export function startPhysics(
     b.y! += dy * k;
   };
   // A label moves by moving the ends of its line: both alike, or, with one
-  // held, the other twice as far, the label being halfway between them.
+  // held, the other twice as far, the label being halfway between them. Once a
+  // part has been dragged, an end far from it moves less, or not at all.
   const moveLabel = (l: Label, dx: number, dy: number) => {
     const free = [l.from, l.to].filter((b) => b.fx == null);
-    for (const b of free) move(b, (dx * 2) / free.length, (dy * 2) / free.length);
+    for (const b of free) move(b, (dx * 2 * reach(b)) / free.length, (dy * 2 * reach(b)) / free.length);
   };
   const labelHeld = (l: Label) => l.from.fx != null && l.to.fx != null;
+  // How far a label moves for each pixel it is asked to: 1 when its free ends
+  // move freely, 0 when it has none or they are out of reach of a drag.
+  const mobility = (l: Label) => {
+    const free = [l.from, l.to].filter((b) => b.fx == null);
+    return free.length ? free.reduce((t, b) => t + reach(b), 0) / free.length : 0;
+  };
 
   // How far two boxes, `gap` apart at least, must move apart, along the
   // shorter way out, or undefined when they are far enough apart.
@@ -256,12 +281,14 @@ export function startPhysics(
   // Each line runs square between its ends, its label halfway along
   // (squareRoute). So every part but its ends is moved off the line and out
   // from under its label, to the side it is already on, and no two labels
-  // overlap, each moving its line.
+  // overlap, each moving its line. A line swung by a drag moves only a part
+  // near the one dragged off it.
   const clear = (box: Rect, from: Body, to: Body, gap: number) => {
     for (const b of bodies) {
       if (b === from || b === to || b.fx != null) continue;
       const by = step(push(box, boxAt(b, next(b)), gap));
-      if (by) move(b, by.x, by.y);
+      const k = reach(b);
+      if (by && k) move(b, by.x * k, by.y * k);
     }
   };
   const clearLines = () => {
@@ -281,10 +308,11 @@ export function startPhysics(
       for (const b of labels.slice(i + 1)) {
         if (a.from === b.from ? a.to === b.to : a.from === b.to && a.to === b.from) continue;
         const by = step(push(labelBox(a, next), labelBox(b, next), LABEL_GAP));
-        if (!by) continue;
-        const share = labelHeld(a) ? 0 : labelHeld(b) ? 1 : 0.5;
-        moveLabel(a, -by.x * share, -by.y * share);
-        moveLabel(b, by.x * (1 - share), by.y * (1 - share));
+        const both = mobility(a) + mobility(b);
+        if (!by || !both) continue;
+        // Each moves as far as it can of the way, the one that can move more the further.
+        moveLabel(a, -by.x / both, -by.y / both);
+        moveLabel(b, by.x / both, by.y / both);
       }
   };
 
@@ -293,8 +321,8 @@ export function startPhysics(
   // that would overlap where their speed takes them is pushed apart along the
   // shorter way out. A scope moves as one, everything in it alike, so what is
   // inside it stays as it was. The lighter of the two takes more of the push;
-  // whatever holds a box the reader holds or has pinned stays put, and the
-  // other takes all of it.
+  // whatever holds the box the reader holds stays put, and the other takes all
+  // of it.
   type Piece = { box: Rect; bodies: Body[]; kind: "part" | "scope" | "label"; held: boolean; label?: Label };
   const shift = (p: Piece, dx: number, dy: number) => {
     if (p.label) moveLabel(p.label, dx, dy);
@@ -312,14 +340,16 @@ export function startPhysics(
     if (!by) return;
     const near = other.bodies.includes(label.from) ? label.from : other.bodies.includes(label.to) ? label.to : undefined;
     const far = near === label.from ? label.to : label.from;
-    if (near && far.fx == null) {
-      move(far, -2 * by.x, -2 * by.y);
-      l.box = { ...l.box, x: l.box.x - by.x, y: l.box.y - by.y };
-    } else if (near && !other.held) {
-      shift(other, 2 * by.x, 2 * by.y);
-      l.box = { ...l.box, x: l.box.x + by.x, y: l.box.y + by.y };
-    } else if (!near && !other.held) shift(other, by.x, by.y);
-    else if (!near && !l.held) shift(l, -by.x, -by.y);
+    if (near) {
+      // As much of it as the far end can take, in reach of a drag, and the
+      // rest by what holds the near one.
+      const f = far.fx == null ? reach(far) : 0;
+      const n = other.held ? 0 : (1 - f) * reach(near);
+      move(far, -2 * by.x * f, -2 * by.y * f);
+      shift(other, 2 * by.x * n, 2 * by.y * n);
+      l.box = { ...l.box, x: l.box.x - by.x * f + by.x * n, y: l.box.y - by.y * f + by.y * n };
+    } else if (!other.held) shift(other, by.x, by.y);
+    else if (!l.held) shift(l, -by.x, -by.y);
   };
   const collide = (lines: boolean) => {
     if (lines) clearLines();
@@ -355,9 +385,11 @@ export function startPhysics(
     }
   };
 
-  // Each scope draws its parts towards their middle. A scope round nearly
-  // everything has nothing to gather.
+  // Each scope draws its parts towards their middle, as the drawing opens. A
+  // scope round nearly everything has nothing to gather.
+  let gathering = true;
   const gather = (alpha: number) => {
+    if (!gathering) return;
     for (const s of holding) {
       const inside = [...within.get(s.id)!];
       if (!inside.length) continue;
@@ -371,26 +403,49 @@ export function startPhysics(
     }
   };
 
-  const middle = g.box.x + g.box.width / 2;
+  // Each line's spring rests at its length as the drawing opens, or at the
+  // length it was given since (relax).
+  const resting = new Map<Spring, number>();
+  const ends = (s: Spring) => [s.source as Body, s.target as Body] as const;
+  const lineSprings = forceLink<Body, Spring>(springs)
+    .id((b) => b.id)
+    .distance((s) => {
+      const [a, b] = ends(s);
+      return resting.get(s) ?? 90 + (a.height + b.height) / 2;
+    })
+    .strength((s) => s.strength);
+  // Lets some springs rest at the length they have now.
+  const relax = (which: Spring[]) => {
+    for (const s of which) {
+      const [a, b] = ends(s);
+      resting.set(s, Math.hypot(b.x! - a.x!, b.y! - a.y!));
+    }
+    lineSprings.distance(lineSprings.distance());
+  };
+  const apart = forceManyBody<Body>().strength(-500).distanceMax(450);
+  const down = forceY<Body>((b) => top + b.rank * LAYER).strength(0.1);
+  const centred = forceX<Body>(g.box.x + g.box.width / 2).strength(0.004);
+  // How freely each body moves by the forces, near a part dragged or not.
+  const local = () => {
+    if (!focus) return;
+    for (const b of bodies) {
+      const k = reach(b);
+      b.vx! *= k;
+      b.vy! *= k;
+    }
+  };
   const top = Math.min(...bodies.map((b) => b.y!));
   const sim = forceSimulation(bodies)
-    .force(
-      "springs",
-      forceLink<Body, Spring>(springs)
-        .id((b) => b.id)
-        .distance((s) => {
-          const a = s.source as Body;
-          const b = s.target as Body;
-          return 90 + (a.height + b.height) / 2;
-        })
-        .strength((s) => s.strength),
-    )
-    .force("apart", forceManyBody<Body>().strength(-500).distanceMax(450))
-    .force("down", forceY<Body>((b) => top + b.rank * LAYER).strength(0.1))
-    .force("middle", forceX<Body>(middle).strength(0.004))
+    .force("springs", lineSprings)
+    .force("apart", apart)
+    .force("down", down)
+    .force("middle", centred)
     .force("scopes", gather)
+    .force("local", local)
     .force("collide", () => {
-      for (let i = 0; i < 4; i++) collide(i === 0);
+      // Lines and labels are kept clear on the first of the passes, and on
+      // every pass as a dropped part settles, so they settle clear.
+      for (let i = 0; i < 4; i++) collide(i === 0 || (focus !== undefined && !dragging));
     })
     .velocityDecay(1 - KEPT)
     .alphaDecay(COOLING)
@@ -436,11 +491,12 @@ export function startPhysics(
     };
     frame(onwards);
   };
-  // Settles from where everything is now, the part dropped or let go pinned
-  // or not: worked out at once and eased there, so it moves without a jitter.
+  // Settles from where everything is now, once a part is dropped: worked out
+  // at once and eased there, so it moves without a jitter.
   const settle = (heat: number) => {
     const fromHulls = hullsOf(deepestFirst, held, now);
     const { from, to } = restFrom(heat);
+    focus = undefined;
     glide(from, to, fromHulls, SETTLING, false);
   };
 
@@ -450,6 +506,13 @@ export function startPhysics(
   const opening = restFrom(HEAT.open);
   const rest = { bodies: bodies.map((b) => ({ ...b, ...opening.to.get(b) })), hulls: hullsOf(deepestFirst, held, at(opening.to)) };
   let opened = false;
+
+  // From then on, a drag is gentle (DRAG).
+  lineSprings.strength((s) => s.strength * DRAG.springs);
+  apart.strength(DRAG.charge.strength).distanceMax(DRAG.charge.reach);
+  down.strength(0);
+  centred.strength(0);
+  gathering = false;
 
   const told = () => tick(bodies, hullsOf(deepestFirst, held, now), 1);
   sim.on("tick", told);
@@ -469,7 +532,10 @@ export function startPhysics(
       // A part dragged as the drawing settles stops it settling, where it is.
       opened = true;
       gliding++;
+      // As the drag begins, every line rests at the length it has.
+      if (!dragging) relax(springs);
       dragging = true;
+      focus = b;
       b.fx = at.x;
       b.fy = at.y;
       sim.alphaTarget(HEAT.drag).restart();
@@ -477,18 +543,13 @@ export function startPhysics(
     drop(id) {
       const b = byId.get(id);
       if (!b) return;
-      b.pinned = true;
+      // It stays where it was dropped while what is near it settles round it,
+      // and is then let go; nothing moves after that until the next drag.
       dragging = false;
-      settle(Math.max(sim.alpha(), HEAT.release));
-    },
-    release(id) {
-      const b = byId.get(id);
-      if (!b) return;
+      relax(springs.filter((s) => ends(s).includes(b)));
+      settle(Math.max(sim.alpha(), HEAT.settle));
       b.fx = null;
       b.fy = null;
-      b.pinned = false;
-      gliding++;
-      settle(HEAT.release);
     },
     stop() {
       gliding++;

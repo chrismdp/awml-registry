@@ -2,8 +2,9 @@
 // page runs: the same drawing laid out by d3-force, starting just where the server put it and
 // easing from there to rest. Nothing overlaps: no two parts, no part and a scope it isn't in, no
 // two scopes side by side, and no line's label and a part or another label; a scope inside another
-// stays inside it; and so it stays while a part is dragged. A part dropped stays where it was
-// dropped, and the rest settle round it.
+// stays inside it; and so it stays while a part is dragged. A drag disturbs only what is near the
+// part dragged, and a part dropped stays where it was dropped, stretched out if it was, the rest
+// settling round it.
 import { describe, expect, it } from "vitest";
 import type { Drawing, Point, Rect } from "@/components/flow/drawing";
 import { headHeight, headWidth } from "@/components/flow/drawing";
@@ -166,60 +167,86 @@ describe("Physics", () => {
     }
   }, 20_000);
 
+  // Drags a part from where it rests by (dx, dy), a step at a time as a pointer moves it, and
+  // drops it: each body before the drag, when it is dropped, and once the rest have settled.
+  async function dragged(text: string, part: string, dx: number, dy: number) {
+    const { full } = laidOut(await layOut(text));
+    const p = physicsOf(full);
+    let settled = p.resting();
+    p.sim.open();
+    await settled;
+    const before = p.now().bodies;
+    const start = before.find((b) => b.id === part)!;
+    const to = { x: start.x! + dx, y: start.y! + dy };
+    for (let i = 1; i <= 10; i++) {
+      p.sim.hold(part, { x: start.x! + (dx * i) / 10, y: start.y! + (dy * i) / 10 });
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    const atDrop = p.now().bodies;
+    const dropped = p.states.length;
+    settled = p.resting();
+    p.sim.drop(part);
+    await settled;
+    return { ...p, full, before, atDrop, dropped, to };
+  }
+  const at = (bodies: Body[], id: string) => bodies.find((b) => b.id === id)!;
+  const between = (a: Body, b: Body) => Math.hypot(b.x! - a.x!, b.y! - a.y!);
+
   for (const [name, text, part] of [
     ["the dinners example", dinners, "plan"],
     ["issue-to-pull-request", issue, "gate"],
   ] as const)
-    it(`keeps a part dropped on ${name} where it was dropped, pinned, the rest settling round it without a jitter`, async () => {
-      const { full } = laidOut(await layOut(text));
-      const { sim, states, now, resting } = physicsOf(full);
+    it(`keeps a part dropped on ${name} where it was dropped, the rest settling round it without a jitter`, async () => {
+      const { sim, states, now, full, dropped, to } = await dragged(text, part, 260, 140);
       try {
-        let settled = resting();
-        sim.open();
-        await settled;
-        // Dragged down and to the right, a step at a time, as a pointer moves it.
-        const start = now().bodies.find((b) => b.id === part)!;
-        const to = { x: start.x! + 260, y: start.y! + 140 };
-        for (let i = 1; i <= 10; i++) {
-          sim.hold(part, { x: start.x! + ((to.x - start.x!) * i) / 10, y: start.y! + ((to.y - start.y!) * i) / 10 });
-          await new Promise((r) => setTimeout(r, 30));
-        }
-        const dropped = states.length;
-        settled = resting();
-        sim.drop(part);
-        await settled;
-        const dropAt = (s: (typeof states)[number]) => s.bodies.find((b) => b.id === part)!;
-        expect(dropAt(now())).toMatchObject({ x: to.x, y: to.y, fx: to.x, fy: to.y, pinned: true });
+        expect(at(now().bodies, part)).toMatchObject({ x: to.x, y: to.y });
         expect(overlaps(full, now().bodies, now().hulls)).toEqual([]);
         // The rest moved round it one way only, and it never moved.
         expect(steady(states.slice(dropped))).toEqual([]);
-        for (const s of states.slice(dropped)) expect({ x: dropAt(s).x, y: dropAt(s).y }).toEqual(to);
+        for (const s of states.slice(dropped)) expect({ x: at(s.bodies, part).x, y: at(s.bodies, part).y }).toEqual(to);
         // And it stays there: nothing moves once it has settled.
-        const at = states.length;
+        const settledAt = states.length;
         await new Promise((r) => setTimeout(r, 300));
-        expect(states).toHaveLength(at);
+        expect(states).toHaveLength(settledAt);
       } finally {
         sim.stop();
       }
     }, 20_000);
 
-  it("lets a pinned part go, to settle with the rest", async () => {
-    const { full } = laidOut(await layOut(dinners));
-    const { sim, now, resting } = physicsOf(full);
+  for (const [name, text, part, dx, dy] of [
+    ["the dinners example", dinners, "plan", 600, 200],
+    ["issue-to-pull-request", issue, "gate", -700, 0],
+  ] as const)
+    it(`keeps a part stretched out from its neighbours on ${name} stretched out once it is dropped`, async () => {
+      const { sim, now, full, atDrop } = await dragged(text, part, dx, dy);
+      try {
+        const neighbours = full.lines.filter((l) => l.from !== l.to && (l.from === part || l.to === part)).map((l) => (l.from === part ? l.to : l.from));
+        expect(neighbours.length).toBeGreaterThan(0);
+        for (const n of neighbours)
+          expect(between(at(now().bodies, part), at(now().bodies, n)), n).toBeGreaterThanOrEqual(0.9 * between(at(atDrop, part), at(atDrop, n)));
+      } finally {
+        sim.stop();
+      }
+    }, 20_000);
+
+  it("barely moves a part more than 300 pixels from the one dragged, while it is dragged and once it is dropped", async () => {
+    const { sim, now, before, atDrop, to } = await dragged(issue, "gate", 300, 100);
     try {
-      let settled = resting();
-      sim.open();
-      await settled;
-      const plan = now().bodies.find((b) => b.id === "plan")!;
-      sim.hold("plan", { x: plan.x! - 40, y: plan.y! });
-      settled = resting();
-      sim.drop("plan");
-      await settled;
-      settled = resting();
-      sim.release("plan");
-      await settled;
-      expect(sim.bodies.find((b) => b.id === "plan")).toMatchObject({ fx: null, fy: null, pinned: false });
-      expect(overlaps(full, now().bodies, now().hulls)).toEqual([]);
+      const gate = at(before, "gate");
+      // How far a body is from the part dragged, where it was and where it went.
+      const gap = (b: Body) => {
+        const r = boxOf(b);
+        return Math.min(
+          ...[gate, { ...gate, ...to }].map((g) => {
+            const f = boxOf(g);
+            return Math.max(r.x - (f.x + f.width), f.x - (r.x + r.width), r.y - (f.y + f.height), f.y - (r.y + r.height));
+          }),
+        );
+      };
+      const far = before.filter((b) => b.id !== "gate" && gap(b) > 300);
+      expect(far.length).toBeGreaterThan(10);
+      for (const bodies of [atDrop, now().bodies])
+        for (const b of far) expect(between(b, at(bodies, b.id)), b.id).toBeLessThan(3);
     } finally {
       sim.stop();
     }
