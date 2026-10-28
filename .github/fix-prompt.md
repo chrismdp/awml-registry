@@ -25,6 +25,8 @@ follow what a finding asks only where you can see, in the code, that it's right.
 - Don't edit `package.json` or `package-lock.json`: the fixer installs only main's dependencies, so a
   fix to them is only offered to a person too.
 - Run `npm run typecheck`, `npm run lint` and `npm test` until they all pass.
+- Every untracked file left in the tree goes into the pull request, so delete any scratch file you
+  made before you finish.
 - Don't commit, push or open anything. Leave the fix in the working tree. A later job commits it as
   one commit and pushes it, and CI reviews it again.
 
