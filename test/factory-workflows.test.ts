@@ -2764,15 +2764,24 @@ describe("fix.yml", () => {
   const jobs = fix.jobs;
   const head = "a".repeat(40);
 
-  it("keeps a fork's same-named branch from cancelling the real one", () => {
-    expect(fix.concurrency).toEqual({
-      group: "fix-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
-      "cancel-in-progress": true,
-    });
-    expect(readWorkflow("retry.yml").concurrency).toEqual({
-      group: "retry-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
-      "cancel-in-progress": false,
-    });
+  // GitHub keeps one run waiting in a concurrency group and cancels it for a newer one whatever
+  // cancel-in-progress says, so a run started by someone else's pull request from a branch of the
+  // same name must share no group with the real one. Only the jobs that act once decide has chosen
+  // the pull request have a group, keyed on its number, and nothing cancels them; each has its own,
+  // so one run's write never displaces the next run's waiting fix.
+  it("lets no other pull request's run cancel or displace the fixer", () => {
+    expect(fix.concurrency).toBeUndefined();
+    expect(jobs.decide.concurrency).toBeUndefined();
+    expect(jobs.fix.concurrency).toEqual({ group: "fix-session-${{ needs.decide.outputs.pr }}", "cancel-in-progress": false });
+    expect(jobs.write.concurrency).toEqual({ group: "fix-write-${{ needs.decide.outputs.pr }}", "cancel-in-progress": false });
+  });
+
+  // The retry is one job that acts only for CI's run at the head of the open pull request it reads
+  // and starts a build only on that run's first attempt, so it needs no group, and has none.
+  it("gives the retry no group that another pull request's run could share", () => {
+    const retry = readWorkflow("retry.yml");
+    expect(retry.concurrency).toBeUndefined();
+    for (const job of Object.values(retry.jobs)) expect(job.concurrency).toBeUndefined();
   });
 
   it("wakes when CI's run finishes, on any branch, as a person's pull request is fixed the same way", () => {

@@ -26,10 +26,12 @@ on:
     workflows: [CI]
     types: [completed]
 
-# A newer CI result on a branch replaces an older one, whose head has moved.
-concurrency:
-  group: fix-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: true
+# No group for the run, or for decide, which only reads and leaves quietly: GitHub keeps one run
+# waiting in a group and cancels it for a newer one whatever cancel-in-progress says, so a run
+# started by someone else's pull request from a branch of the same name could otherwise cancel or
+# displace the real one. The fix and write jobs, which act once decide has chosen the pull request,
+# each have a group of their own keyed on its number, and nothing cancels them. A run whose head
+# has moved posts nothing and pushes nothing, by the lease at the reviewed commit.
 
 jobs:
   decide:
@@ -169,6 +171,9 @@ jobs:
   fix:
     needs: decide
     if: needs.decide.outputs.outcome == 'fix'
+    concurrency:
+      group: fix-session-${{ needs.decide.outputs.pr }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -361,6 +366,9 @@ jobs:
   # on what it posts, so a moved head or a closed pull request posts nothing.
   write:
     needs: [decide, fix]
+    concurrency:
+      group: fix-write-${{ needs.decide.outputs.pr }}
+      cancel-in-progress: false
     if: ${{ !cancelled() && (needs.decide.outputs.outcome == 'fix' || needs.decide.outputs.outcome == 'giveup' || needs.decide.outputs.outcome == 'npmfiles' || needs.decide.outputs.outcome == 'claudefiles' || needs.decide.outputs.outcome == 'noimportant') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15

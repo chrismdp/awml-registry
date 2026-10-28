@@ -24,9 +24,11 @@ on:
     types: [completed]
     branches: ["build/issue-*"]
 
-concurrency:
-  group: retry-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: false
+# No concurrency group: GitHub keeps one run waiting in a group and cancels it for a newer one
+# whatever cancel-in-progress says, so a run started by someone else's pull request from a branch of
+# the same name could displace the real one. None is needed: a run acts only for CI's run at the
+# head of the open pull request it reads, starts a build only on that run's first attempt, and
+# works out from earlier runs whether each of its comments was already posted.
 
 jobs:
   retry:
