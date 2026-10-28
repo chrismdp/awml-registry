@@ -279,7 +279,8 @@ jobs:
           session="$RUNNER_TEMP/sessions/build"
           rm -rf "$session"
           mkdir -p "$session/out"
-          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write ./.git --deny-write "$RUNNER_TEMP/baseline"
+          bash "$RUNNER_TEMP/main/claude-settings.sh" "$session/home" --deny-write ./.git --deny-write "$RUNNER_TEMP/baseline" \
+            --deny-write "$RUNNER_TEMP/change"
           prompt="$(sed -e "s|INPUT_DIR|$INPUT_DIR|g" -e "s|OUT_DIR|$session/out|g" "$RUNNER_TEMP/main/build-prompt.md")"
           status=0
           HOME="$session/home" claude -p "$prompt" --model opus --max-turns 200 --permission-mode default \
@@ -323,8 +324,10 @@ jobs:
             exit 1
           fi
           out="$RUNNER_TEMP/sessions/build/out"
+          # Made afresh, so nothing a session put there goes into the artifact.
           change="$RUNNER_TEMP/change"
-          mkdir -p "$change"
+          rm -rf "$change"
+          mkdir "$change"
           git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= add -A
           git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= diff --cached --binary --no-ext-diff --no-textconv > "$change/change.patch"
           for file in message.md pull-request.md pictures.json; do
@@ -348,6 +351,11 @@ jobs:
       - name: Keep the change, with its digest
         id: pack
         run: |
+          # Only regular files are kept: a link a session planted would be uploaded as what it points at.
+          if [ -n "$(find "$RUNNER_TEMP/change" ! -type f ! -type d -print -quit)" ]; then
+            echo "The change folder holds something other than files, so nothing is kept."
+            exit 1
+          fi
           bash "$RUNNER_TEMP/main/scan-tokens.sh" "$RUNNER_TEMP/change"
           digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c 1-64; }
           echo "digest=$(digest "$RUNNER_TEMP/change")" >> "$GITHUB_OUTPUT"

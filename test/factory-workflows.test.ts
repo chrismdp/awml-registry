@@ -1478,6 +1478,32 @@ describe("build.yml", () => {
     }
   });
 
+  // A session could plant files or a symbolic link in the folder the pack step uploads, so that
+  // folder is denied to it, made afresh after it, and checked: every file scanned, no link kept.
+  it("makes the uploaded folder afresh after the session, denied to it, with no link in it", () => {
+    for (const [file, id, folder] of [["build.yml", "draft", "change"], ["fix.yml", "fix", "fix"]]) {
+      const job = readJobs(file)[id];
+      expect(stepWithId(job, "session").run, file).toContain(`--deny-write "$RUNNER_TEMP/${folder}"`);
+      const patch = stepWithId(job, "patch").run ?? "";
+      expect(patch, file).toMatch(new RegExp(`rm -rf "\\$${folder === "change" ? "change" : "fixed"}"\n\s*mkdir "\\$${folder === "change" ? "change" : "fixed"}"`));
+      const pack = stepWithId(job, "pack").run ?? "";
+      expect(pack, file).toContain(`find "$RUNNER_TEMP/${folder}" ! -type f ! -type d`);
+      expect(pack.indexOf("find"), file).toBeLessThan(pack.indexOf("scan-tokens.sh"));
+    }
+  });
+
+  it.runIf(canRehearse)("refuses a change folder that holds a symbolic link", () => {
+    for (const [file, id, folder] of [["build.yml", "draft", "change"], ["fix.yml", "fix", "fix"]]) {
+      const root = scratch();
+      put(join(root, "runner/main/scan-tokens.sh"), readFileSync(join(github, "scan-tokens.sh"), "utf8"));
+      put(join(root, `runner/${folder}/change.patch`), "diff\n");
+      symlinkSync("/etc/hostname", join(root, `runner/${folder}/planted`));
+      const run = rehearse(stepWithId(readJobs(file)[id], "pack").run ?? "", { root });
+      expect(run.failed, `${file}: ${run.printed}`).toBe(true);
+      expect(run.outputs.digest, file).toBeUndefined();
+    }
+  });
+
   it("keeps the change for 30 days, so an offered draft can be downloaded", () => {
     const upload = steps(jobs.draft).find((each) => each.uses?.startsWith("actions/upload-artifact"));
     expect(upload?.with).toEqual({ name: "change", path: "${{ runner.temp }}/change", "retention-days": 30 });
@@ -1629,7 +1655,8 @@ describe("build.yml", () => {
     const pull = stepWithId(jobs.open, "pull");
     for (const [open, want] of [
       ["[]", "pr create --repo owner/repo --base main --head build/issue-7"],
-      ['[{"number": 12}]', "pr edit 12 --repo owner/repo"],
+      // Every try's push updates the open pull request, so its title and description are the try's.
+      ['[{"number": 12}]', "pr edit 12 --repo owner/repo --title Fix the page --body-file"],
     ]) {
       const root = scratch();
       put(join(root, "runner/title.txt"), "Fix the page\n");
@@ -2122,11 +2149,18 @@ describe("fix.yml", () => {
     });
 
     it.runIf(canRehearse)("gives up in a new comment when the session made no fix", () => {
-      for (const env of [{ FIXED: "failure" }, { CHANGED: "false" }] as Record<string, string>[]) {
-        const run = guard(env);
-        expect(run.outputs.result).toBe("done");
-        expect(run.calls).toMatch(/> .*need a person/);
-      }
+      const run = guard({ CHANGED: "false" });
+      expect(run.outputs.result).toBe("done");
+      expect(run.calls).toMatch(/> .*made no fix.*need a person/);
+    });
+
+    // The fix job can fail after its session, on a changed config, a nested .git or the token scan,
+    // so a failed job isn't blamed on the session.
+    it.runIf(canRehearse)("says the fix job failed before the fix was kept, not that the session did", () => {
+      const run = guard({ FIXED: "failure" });
+      expect(run.outputs.result).toBe("done");
+      expect(run.calls).toContain("The fix job failed before the fix was kept. The run says why.");
+      expect(run.calls).not.toContain("session");
     });
 
     it.runIf(canRehearse)("prints the paths it offers without letting one start a workflow command", () => {
