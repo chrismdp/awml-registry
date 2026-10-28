@@ -3,18 +3,20 @@
 # checked, so each commit has one run: on pull_request for every branch but main, and on push only
 # for main. A push to main runs the tests only.
 #
-# On a pull request from a branch of this repository, opened by its own people or the factory's app,
-# the tests, Bug review and Security review run side by side as jobs of one run, and on a factory
-# branch, build/issue-*, Classify runs once both reviews have ended. Each job's result is its own
-# check on the commit, so the commit as pushed has one judge, and land.yml, fix.yml and retry.yml
-# read that judge's verdict from GitHub when this run finishes. On a fork's pull request, or one a
-# stranger opened, the reviews fail without starting a session, since its author could steer the
-# sessions, which hold the maintainer's login token, and a person reviews it.
+# On a pull request from a branch of this repository, opened by someone with write access to this
+# repository, or the build's app, the tests, Bug review and Security review run side by side as jobs
+# of one run, and on a factory branch, build/issue-*, Classify runs once both reviews have passed.
+# Each job's result is its own check on the commit, so the commit as pushed has one judge, and
+# land.yml, fix.yml and retry.yml read that judge's verdict from GitHub when this run finishes. On a
+# fork's pull request, or one a stranger opened, the reviews fail without starting a session, since
+# its author could steer the sessions, which hold the maintainer's login token, and a person reviews
+# it.
 #
 # On pull_request, GitHub runs the pull request's own copy of this file, not main's. So a person with
 # write access could change, in their own pull request, how it is reviewed and classified. That is
-# accepted: only the repository's own people and the factory's app get the reviews at all, they are
-# trusted, and the app can't push .github/, so nothing the factory pushes can change this file.
+# accepted: only someone with write access to this repository, or the build's app, gets the reviews
+# at all, they are trusted, and the app can't push .github/, so nothing the factory pushes can change
+# this file.
 #
 # The reviews run on every pull request, since GitHub counts a skipped required check as passed. On
 # a fork's, or one a stranger opened, their first step fails before anything else runs, so neither

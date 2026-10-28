@@ -58,6 +58,7 @@ jobs:
           HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
           CI_EVENT: ${{ github.event.workflow_run.event }}
           CI_RUN: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
           # Whether GitHub says someone may write to the repository: their role or its base permission is
           # exactly admin, maintain or write, so a custom role counts only by what it grants.
@@ -199,6 +200,8 @@ jobs:
           builds="$(jq length "$RUNNER_TEMP/builds.json")"
           echo "#$issue has had $builds builds since the label was last added."
           if [ "$builds" -lt 3 ]; then
+            # A re-run of CI's run would start another build for the same failure.
+            [ "$RUN_ATTEMPT" = 1 ] || leave "This is attempt $RUN_ATTEMPT of CI's run, so its first attempt has already started a build."
             gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main -f issue="$issue"
             exit 0
           fi

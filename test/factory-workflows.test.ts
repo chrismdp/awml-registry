@@ -851,7 +851,7 @@ describe("the factory's workflows", () => {
         expect(text.slice(at, at + mayWrite.length), `${file} ${id}`).toBe(mayWrite);
         expect(text.match(/\/permission/g)?.length, `${file} ${id}`).toBe(1);
       }
-    expect(found.sort()).toEqual(["build.yml draft", "ci.yml review", "fix.yml decide", "resolve.yml find", "retry.yml retry"]);
+    expect(found.sort()).toEqual(["build.yml draft", "build.yml start", "ci.yml review", "fix.yml decide", "resolve.yml find", "retry.yml retry"]);
   });
 
   it("take each artifact's digest the same way everywhere", () => {
@@ -1654,7 +1654,15 @@ describe("build.yml", () => {
     for (const [id, job] of Object.entries(jobs)) expect(runs(job), id).not.toMatch(/^\s*npm (test|run)\b/m);
   });
 
-  const startAnswers = (labels: string[], edited: string | null, labelled = "2026-10-01T10:00:00Z", renamed?: string) => `
+  const labelEvents = (login: string, type = "User") =>
+    JSON.stringify([
+      { event: "labeled", label: { name: "build" }, actor: { login: "stranger", type: "User" } },
+      { event: "labeled", label: { name: "bug" }, actor: { login: "maintainer", type: "User" } },
+      { event: "labeled", label: { name: "build" }, actor: { login, type } },
+    ]);
+  const startAnswers = (labels: string[], edited: string | null, labelled = "2026-10-01T10:00:00Z", renamed?: string, labeller = "maintainer", labellerType = "User") => `
+${permissionStub}
+  *"issues/7/events"*) answer <<< '${labelEvents(labeller, labellerType)}' ;;
   *"api graphql"*) answer <<< '${JSON.stringify({
     data: {
       repository: {
@@ -1724,6 +1732,25 @@ describe("build.yml", () => {
       expect(text).toContain("itemTypes: [LABELED_EVENT, RENAMED_TITLE_EVENT]");
   });
 
+  // Someone who may only triage can add a label, so the label is the decision only from someone with
+  // write access, or the build's app.
+  it.runIf(canRehearse).each([
+    ["a writer", "maintainer", "User", "true"],
+    ["the build's app", "awml-factory[bot]", "Bot", "true"],
+    ["a triager", "triager", "User", "false"],
+    ["a user named like the app", "awml-factory[bot]", "User", "false"],
+  ])("builds from a label %s added only if they may write", (_, login, type, go) => {
+    const root = scratch();
+    const run = rehearse(stepWithId(jobs.start, "start").run ?? "", {
+      root,
+      env: { ISSUE: "7" },
+      answers: startAnswers(["build"], null, "2026-10-01T10:00:00Z", undefined, login, type),
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.go).toBe(go);
+    if (go === "false") expect(run.calls).toMatch(/> .*someone with write access to this repository/);
+  });
+
   it.runIf(canRehearse)("stops quietly when the label is off", () => {
     const root = scratch();
     const run = rehearse(stepWithId(jobs.start, "start").run ?? "", {
@@ -1773,12 +1800,13 @@ describe("build.yml", () => {
         },
       },
     });
-    const keep = (edited: string | null, renamed?: string) => {
+    const keep = (edited: string | null, renamed?: string, labeller = "maintainer") => {
       const root = scratch();
       const run = rehearse(stepWithId(jobs.draft, "keep").run ?? "", {
         root,
         env: { ISSUE: "7" },
         answers: `  *"api graphql"*) answer <<< '${JSON.stringify(issue(edited, renamed))}' ;;
+  *"issues/7/events"*) answer <<< '${labelEvents(labeller)}' ;;
 ${permissionStub}`,
       });
       return { run, issue: left(root, "input/issue.md") };
@@ -1810,6 +1838,11 @@ ${permissionStub}`,
     it.runIf(canRehearse)("refuses an issue edited since the label was last added", () => {
       const { run } = keep("2026-10-01T10:30:00Z");
       expect(run.failed).toBe(true);
+    });
+
+    it.runIf(canRehearse)("refuses an issue whose build label someone who may not write added", () => {
+      expect(keep(null, undefined, "triager").run.failed).toBe(true);
+      expect(keep(null, undefined, "maintainer").run.failed).toBe(false);
     });
 
     it.runIf(canRehearse)("refuses an issue renamed since the label was last added", () => {
@@ -1898,6 +1931,13 @@ ${permissionStub}`,
       expect(prompt, name).toContain("applied to the commit of main the branch started from, which may be behind main");
       expect(prompt, name).not.toContain("applied to main in the working tree");
     }
+  });
+
+  it("name who's trusted as someone with write access, or the build's app", () => {
+    const texts = [...workflowFiles.map((file) => join(github, "workflows", file)), join(github, "build-prompt.md")].map((path) =>
+      squash(readFileSync(path, "utf8").replace(/^\s*# ?/gm, "")),
+    );
+    for (const text of texts) expect(text).not.toMatch(/own people|owner, members?|members and collaborators/);
   });
 
   it("tells the fixer not to change the dependencies", () => {
@@ -2316,8 +2356,10 @@ describe("land.yml", () => {
       labeller = { login: "maintainer", type: "User" },
       pullRepository = "owner/repo",
       attempt = "1",
+      earlier = "success",
     }: {
       attempt?: string;
+      earlier?: string;
       event?: string;
       repository?: string;
       pullHead?: string;
@@ -2336,10 +2378,18 @@ describe("land.yml", () => {
         CI_EVENT: event,
         CHECK_SUITE: "300",
         RUN_ATTEMPT: attempt,
+        CI_RUN: "77",
       },
       answers: `
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(head), appPull(pullHead, pullRepository)])}' ;;
   *"commits/${head}/check-runs"*) answer <<< '${JSON.stringify(checks)}' ;;
+  *"actions/runs/77/attempts/1/jobs"*) answer <<< '${JSON.stringify({
+    jobs: [
+      { name: "test", conclusion: "success" },
+      { name: "Bug review", conclusion: earlier },
+      { name: "Security review", conclusion: "success" },
+    ],
+  })}' ;;
   *"issues/7/events"*) answer <<< '${JSON.stringify([
     { event: "labeled", label: { name: "build" }, actor: { login: "someone-earlier", type: "User" } },
     { event: "labeled", label: { name: "bug" }, actor: { login: "other", type: "User" } },
@@ -2370,10 +2420,16 @@ describe("land.yml", () => {
   });
 
   // A re-run of CI would land, or ask, again for the same commit, so only a first attempt does.
-  it.runIf(canRehearse)("leaves a re-run of CI quietly", () => {
-    const run = ready({ attempt: "2" });
-    expect(run.failed, run.printed).toBe(false);
-    expect(run.outputs.go).toBe("false");
+  // A re-run after an attempt whose tests and reviews all passed is for a commit land already acted
+  // on; a re-run after a failed attempt, a flaky one, is the first it can act on.
+  it.runIf(canRehearse)("leaves a re-run after a passing attempt quietly, and acts on one after a failing attempt", () => {
+    const quiet = ready({ attempt: "2", earlier: "success" });
+    expect(quiet.failed, quiet.printed).toBe(false);
+    expect(quiet.outputs.go).toBe("false");
+    expect(quiet.calls).toContain("actions/runs/77/attempts/1/jobs");
+    const goes = ready({ attempt: "2", earlier: "failure" });
+    expect(goes.failed, goes.printed).toBe(false);
+    expect(goes.outputs.go).toBe("true");
     expect(stepWithId(jobs.find, "ready").env?.RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
   });
 
@@ -2996,6 +3052,7 @@ describe("retry.yml", () => {
     actor = { login: "awml-factory[bot]", type: "Bot" },
     personCommits = false,
     earlierTaken = false,
+    attempt = "1",
   } = {}) => {
     const root = scratch();
     // The branch's commits, the factory's, then a person's if asked.
@@ -3038,7 +3095,7 @@ describe("retry.yml", () => {
     return rehearse(stepWithId(jobs.retry, "tries").run ?? "", {
       root,
       cwd: work,
-      env: { BRANCH: "build/issue-7", HEAD_SHA: sha, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77" },
+      env: { BRANCH: "build/issue-7", HEAD_SHA: sha, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77", RUN_ATTEMPT: attempt },
       answers: `
 ${permissionStub}
   *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: test }, { name: "Bug review", conclusion: bug }] })}' ;;
@@ -3088,6 +3145,15 @@ ${permissionStub}
       expect(run.calls).not.toContain("issue comment");
     }
     expect(tries({ bug: "success" }).calls).toContain("workflow run build.yml");
+  });
+
+  // A re-run of CI's run would start another build for the same failure, so only a first attempt
+  // starts one.
+  it.runIf(canRehearse)("starts no build from a re-run of CI", () => {
+    const run = tries({ attempt: "2" });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.calls).not.toMatch(/workflow run|issue comment/);
+    expect(stepWithId(jobs.retry, "tries").env?.RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
   });
 
   it.runIf(canRehearse)("counts only build.yml runs for the issue since the label was last added", () => {

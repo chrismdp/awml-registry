@@ -2,7 +2,7 @@ You are building the change that one issue of the AWML Registry repository asks 
 added the `build` label, or one of the repository's own workflows started the build, which says it
 is wanted now.
 
-The issue, as GitHub renders it, with only the comments of the repository's own people, is in
+The issue, as GitHub renders it, with only the comments of those with write access to this repository, is in
 INPUT_DIR/issue.md. Read it, then read INPUT_DIR/AGENTS.md, main's copy, and follow it, and read
 docs/SPEC.md before changing anything it describes. Read INPUT_DIR/REVIEW.md too: once you're done,
 CI's two fresh reviews hold the change to it. The dependencies are installed, so the Next.js guides

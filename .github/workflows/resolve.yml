@@ -1,8 +1,8 @@
 # The factory's rebase, drawn in .github/drawings/rebase-conflicting-pull-requests.yaml (A pull
 # request that conflicts with main is rebased onto it). When a commit lands on main, each open pull
-# request that GitHub marks as conflicting, from a branch of this repository opened by its own people
-# or the build, is rebased onto main. Main doesn't require branches to be up to date, so only a
-# conflict needs this. A plain git rebase comes first, and a clean one is pushed at once with no
+# request that GitHub marks as conflicting, from a branch of this repository opened by someone with
+# write access to this repository, or the build's app, is rebased onto main. Main doesn't require
+# branches to be up to date, so only a conflict needs this. A plain git rebase comes first, and a clean one is pushed at once with no
 # Claude session. Claude starts only on a real conflict, resolves it with a read-only token and hands
 # back the rebased branch. It runs no checks of its own: the app's push starts CI, whose reviews run
 # on the pushed commit, since a resolution is new code. When it ends, one new comment on each pull

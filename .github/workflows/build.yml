@@ -3,7 +3,7 @@
 # access, and the repository's own app, can add a label, so the label is the decision. The build
 # says on the issue, in one new comment, that it has started. Claude drafts with a read-only token,
 # from the issue as GitHub renders it, unedited since the label was last added, with only the
-# comments of the repository's own people, and why the last try failed, read from CI's latest run on
+# comments of those with write access to this repository, and why the last try failed, read from CI's latest run on
 # the issue's branch. The pages the change alters are pictured, before and after. The app then
 # pushes the branch and the pictures and opens the pull request, which says Closes #n, unless one is
 # open from the branch already, which the push updates.
@@ -86,6 +86,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Whether GitHub says someone may write to the repository: their role or its base permission is
+          # exactly admin, maintain or write, so a custom role counts only by what it grants.
+          may_write() {
+            [[ "$1" =~ ^[A-Za-z0-9-]{1,39}$ ]] || return 1
+            local role="" permission=""
+            IFS=$'\t' read -r role permission < <(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq '[.role_name // "", .permission // ""] | @tsv' || true) || true
+            case "$role" in admin|maintain|write) return 0 ;; esac
+            case "$permission" in admin|maintain|write) return 0 ;; esac
+            return 1
+          }
           case "$ISSUE" in ''|*[!0-9]*) echo "The issue must be a number: $ISSUE"; exit 1 ;; esac
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           here="$RUNNER_TEMP/start"
@@ -105,6 +115,22 @@ jobs:
             }' > "$here/issue.json"
           if ! jq -e '.data.repository.issue.labels.nodes | any(.name == "build")' "$here/issue.json" > /dev/null; then
             echo "The build label is no longer on #$ISSUE, so there's nothing to build."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Someone who may only triage can add a label, so the label is the decision only if whoever last
+          # added it may write to the repository, or is the build's app, by its exact login and type.
+          labelled_by="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE/events" |
+            jq -rs '[.[][] | select(.event == "labeled" and .label.name == "build")] | last | "\(.actor.login // "")\t\(.actor.type // "")"')"
+          IFS=$'\t' read -r by by_type <<< "$labelled_by"
+
+          if ! { [ "$by" = "awml-factory[bot]" ] && [ "$by_type" = Bot ]; } && ! may_write "$by"; then
+            {
+              echo "**The build label was last added by someone who may not write to this repository, so the build won't start.**"
+              echo
+              echo "Only someone with write access to this repository, or the build's app, can start a build, by adding the build label. [The run]($run_url)"
+            } > "$here/comment.md"
+            gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$here/comment.md"
             echo "go=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -204,6 +230,16 @@ jobs:
           edited="$(jq -r '.data.repository.issue | [.lastEditedAt // empty, (.timelineItems.nodes[] | select(.__typename == "RenamedTitleEvent") | .createdAt)] | max // empty' "$RUNNER_TEMP/issue.json")"
           if [ -z "$labelled" ] || { [ -n "$edited" ] && [[ "$edited" > "$labelled" ]]; }; then
             echo "The issue was edited since the build label was last added, so it isn't drafted from."
+            exit 1
+          fi
+          # Someone who may only triage can add a label, so the label is the decision only if whoever last
+          # added it may write to the repository, or is the build's app, by its exact login and type.
+          labelled_by="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE/events" |
+            jq -rs '[.[][] | select(.event == "labeled" and .label.name == "build")] | last | "\(.actor.login // "")\t\(.actor.type // "")"')"
+          IFS=$'\t' read -r by by_type <<< "$labelled_by"
+
+          if ! { [ "$by" = "awml-factory[bot]" ] && [ "$by_type" = Bot ]; } && ! may_write "$by"; then
+            echo "The build label was last added by someone who may not write to this repository, so it isn't drafted from."
             exit 1
           fi
           # A comment is kept by what GitHub says its author may do to the repository, write,
