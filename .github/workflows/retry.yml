@@ -30,6 +30,12 @@ on:
 # head of the open pull request it reads, starts a build only on that run's first attempt, and
 # works out from earlier runs whether each of its comments was already posted.
 
+# Named, so GitHub runs each step's script with bash -eo pipefail, not bash -e alone, and a failure
+# inside a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   retry:
     runs-on: ubuntu-latest

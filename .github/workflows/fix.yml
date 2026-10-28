@@ -33,6 +33,12 @@ on:
 # each have a group of their own keyed on its number, and nothing cancels them. A run whose head
 # has moved posts nothing and pushes nothing, by the lease at the reviewed commit.
 
+# Named, so GitHub runs each step's script with bash -eo pipefail, not bash -e alone, and a failure
+# inside a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   decide:
     runs-on: ubuntu-latest
@@ -233,11 +239,16 @@ jobs:
       # config is copied out, for the check after the session.
       - name: Install the dependencies with their scripts off
         env:
-          npm_config_userconfig: /dev/null
-          npm_config_globalconfig: /dev/null
+          npm_config_userconfig: ${{ runner.temp }}/npm/user.npmrc
+          npm_config_globalconfig: ${{ runner.temp }}/npm/global.npmrc
           npm_config_registry: https://registry.npmjs.org/
           npm_config_ignore_scripts: "true"
         run: |
+          # npm refuses to load one file as both its user and its global config, so each is an
+          # empty file of its own.
+          mkdir -p "$RUNNER_TEMP/npm"
+          : > "$npm_config_userconfig"
+          : > "$npm_config_globalconfig"
           stop="$(openssl rand -hex 16)"
           echo "::stop-commands::$stop"
           bash "$HOST_DIR/main/check-lockfile.sh" .
@@ -259,7 +270,12 @@ jobs:
           # The runner user could start a privileged container through Docker's socket, from inside
           # the sandbox, so it's closed to them before any session starts.
           if [ -e /var/run/docker.sock ]; then sudo chmod 600 /var/run/docker.sock; fi
-          (cd "$RUNNER_TEMP" && npm_config_userconfig=/dev/null npm_config_globalconfig=/dev/null npm install -g @anthropic-ai/claude-code@2.1.312)
+          # npm refuses to load one file as both its user and its global config, so each is an empty
+          # file of its own.
+          mkdir -p "$RUNNER_TEMP/npm"
+          : > "$RUNNER_TEMP/npm/user.npmrc"
+          : > "$RUNNER_TEMP/npm/global.npmrc"
+          (cd "$RUNNER_TEMP" && npm_config_userconfig="$RUNNER_TEMP/npm/user.npmrc" npm_config_globalconfig="$RUNNER_TEMP/npm/global.npmrc" npm install -g @anthropic-ai/claude-code@2.1.312)
 
       # The findings came from sessions that read the patch, and the patch is the branch's, so text in
       # either can steer this session. Its commands run in its sandbox, which reaches no network, sees
