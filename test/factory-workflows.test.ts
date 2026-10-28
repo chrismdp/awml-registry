@@ -824,39 +824,34 @@ describe("the factory's workflows", () => {
   });
 
   // A session that checks or draws a workflow needs the AWML engine, which npm ci --ignore-scripts
-  // doesn't build. It's built before any session, outside the sandbox, by main's copy of the build
-  // script from main's pin, copied out before any branch is checked out, never by the branch's own
-  // script or package.json, and copied into each tree a session works in.
-  it("build the engine with main's script and pin before any session", () => {
-    const copied = [
-      'cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"',
-      'cp vendor/awml/version.json vendor/awml/awml.js "$HOST_DIR/engine/vendor/awml/"',
-    ];
-    const built = 'bash "$HOST_DIR/engine/scripts/engine-build.sh"';
-    for (const [file, id, into] of [
-      ["build.yml", "draft", "vendor/awml/"],
-      ["fix.yml", "fix", "vendor/awml/"],
-      ["resolve.yml", "draft", '"$root/work/vendor/awml/"'],
+  // doesn't build. It's built before any session, outside the sandbox, from the tree's own pin, by
+  // main's copy of the build script, copied out before any branch is checked out or cloned, never
+  // by the branch's own script or package.json.
+  it("build each tree's engine from its own pin with main's script, before any session", () => {
+    const copied = 'cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"';
+    for (const [file, id, built] of [
+      ["build.yml", "draft", 'bash "$HOST_DIR/main/engine-for.sh" . "$HOST_DIR/engine-tree"'],
+      ["fix.yml", "fix", 'bash "$HOST_DIR/main/engine-for.sh" . "$HOST_DIR/engine-tree"'],
+      ["resolve.yml", "draft", 'bash "$HOST_DIR/main/engine-for.sh" "$root/work" "$HOST_DIR/engine-$number"'],
     ]) {
       const where = `${file} ${id}`;
       const all = steps(readJobs(file)[id]);
       const at = (test: (each: Step) => boolean) => all.findIndex(test);
-      const copy = at((each) => copied.every((line) => (each.run ?? "").includes(line)));
+      const copy = at((each) => (each.run ?? "").includes(copied) && (each.run ?? "").includes(".github/engine-for.sh"));
       const build = at((each) => (each.run ?? "").includes(built));
       const session = at((each) => /\bclaude -p\b|resolve-session\.sh" 1/.test(each.run ?? ""));
       // Main's copy is taken while main is the tree: before the branch is checked out or cloned.
       const branch = at((each) => (each.uses?.startsWith(cloneAction) && String(each.with?.ref ?? "").includes("head_sha")) || each.id === "prepare");
       expect(copy, where).toBeGreaterThan(-1);
-      if (branch > -1) expect(copy, where).toBeLessThan(branch);
+      if (branch > -1) expect(copy, where).toBeLessThanOrEqual(branch);
+      if (copy === branch) expect((all[copy].run ?? "").indexOf(copied), where).toBeLessThan((all[copy].run ?? "").indexOf("safe_git clone"));
       expect(build, where).toBeGreaterThanOrEqual(copy);
       expect(build, where).toBeLessThan(session);
+      // After the tree's npm ci, so nothing it installs is in the way.
+      const text = all[build].run ?? "";
+      if (text.includes("npm ci")) expect(text.indexOf("npm ci"), where).toBeLessThan(text.indexOf(built));
       expect(Object.keys(all[build].env ?? {}), where).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
-      const copyIn = at((each) => (each.run ?? "").includes(`"$HOST_DIR/engine/vendor/awml/awml.wasm" "$HOST_DIR/engine/vendor/awml/wasm_exec.js" "$HOST_DIR/engine/vendor/awml/build.json" ${into}`));
-      expect(copyIn, where).toBeGreaterThanOrEqual(build);
-      expect(copyIn, where).toBeLessThan(session);
-      for (const each of all) {
-        expect(each.run ?? "", where).not.toMatch(/npm run engine:build|bash scripts\/engine-build\.sh/);
-      }
+      for (const each of all) expect(each.run ?? "", where).not.toMatch(/npm run engine:build|bash scripts\/engine-build\.sh|engine\/vendor\/awml\/version\.json/);
     }
   });
 
@@ -1057,18 +1052,11 @@ describe("the factory's workflows", () => {
 const claudesPattern = "(^|/)\\.claude(/|$)|(^|/)\\.mcp\\.json$|(^|/)CLAUDE(\\.local)?\\.md$";
 const npmPattern =
   "(^|/)\\.npmrc$|(^|/)\\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\\.json$|(^|/)yarn\\.lock$";
-// The engine's pin, vendor/awml/, is held back with the dependencies: the session's engine is built
-// from main's pin, so a branch that changes it would run against an engine it doesn't pin.
-const dependencies = "(^|/)package(-lock)?\\.json$|^vendor/awml/";
+const dependencies = "(^|/)package(-lock)?\\.json$";
 const neverPushPattern = `^\\.github/|${claudesPattern}|${npmPattern}`;
 const heldBackPattern = `${neverPushPattern}|${dependencies}`;
 
 describe("the factory's path patterns", () => {
-  it("hold back the engine's pin at the top of the tree, and nothing else named like it", () => {
-    for (const path of ["vendor/awml/version.json", "vendor/awml/awml.js", "vendor/awml/awml.d.ts"])
-      expect(new RegExp(heldBackPattern).test(path), path).toBe(true);
-    expect(new RegExp(heldBackPattern).test("src/vendor/awml/version.json")).toBe(false);
-  });
 
   it("are one never-push pattern in the build, and one held-back pattern in the fixer and in resolve", () => {
     const found: string[] = [];
@@ -3154,10 +3142,6 @@ ${permissionStub}`,
     expect(decide({ files: [".github/workflows/ci.yml"] }).outputs.outcome).toBe("fix");
   });
 
-  it.runIf(canRehearse).each(["vendor/awml/version.json", "vendor/awml/awml.js"])("holds back a branch that changes the engine's pin, %s", (path) => {
-    expect(decide({ files: [path] }).outputs.outcome).toBe("npmfiles");
-  });
-
   it.runIf(canRehearse)("reads every changed file with git, so a package.json past the 300th is still held back", () => {
     const files = Array.from({ length: 301 }, (_, n) => `src/file-${n}.ts`);
     expect(decide({ files: [...files, "package.json"] }).outputs.outcome).toBe("npmfiles");
@@ -4746,5 +4730,55 @@ describe("placeholders.sh", () => {
     spoil(repo);
     const run = clear(root, repo);
     expect(run.failed).toBe(true);
+  });
+});
+
+// A session's engine is built from its own tree's pin, which can differ from main's when main moved
+// since the branch was cut, but by main's copy of the build script, from AWML's own repository
+// whatever the pin says, and only from plain files.
+describe("engine-for.sh", () => {
+  // Main's build script stands in as one that logs what it was asked to build, and from where.
+  const stubBuild = `#!/bin/bash
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+printf '%s\\t%s\\t%s\\n' "$(cat "$root/vendor/awml/version.json")" "\${AWML_SOURCE:-}" "\${AWML_SOURCE_DIR:-unset}" >> "$BUILD_LOG"
+for file in awml.wasm wasm_exec.js build.json; do echo "built $file" > "$root/vendor/awml/$file"; done
+`;
+  const setUp = (pin: string) => {
+    const root = scratch();
+    const tree = join(root, "tree");
+    put(join(tree, "vendor/awml/version.json"), pin);
+    put(join(tree, "vendor/awml/awml.js"), "// the wrapper\n");
+    for (const name of ["engine-build.sh", "engine-lib.sh", "engine-pin.mjs"]) put(join(root, "runner/engine/scripts", name), name === "engine-build.sh" ? stubBuild : "");
+    return { root, tree };
+  };
+  const build = (root: string, tree: string, env: Record<string, string> = {}) =>
+    rehearse(script("engine-for.sh", [tree, join(root, "runner/engine-tree")]), { root, env: { BUILD_LOG: join(root, "build.log"), ...env } });
+
+  it.runIf(canRehearse)("builds the tree's own pin with main's script, from AWML's repository, into the tree", () => {
+    const { root, tree } = setUp('{"tag": "v0.8.0"}\n');
+    const run = build(root, tree, { AWML_SOURCE: "https://example.com/evil.git", AWML_SOURCE_DIR: "/tmp/evil" });
+    expect(run.failed, run.printed).toBe(false);
+    expect(readFileSync(join(root, "build.log"), "utf8")).toBe('{"tag": "v0.8.0"}\thttps://github.com/chrismdp/awml.git\tunset\n');
+    for (const file of ["awml.wasm", "wasm_exec.js", "build.json"]) expect(readFileSync(join(tree, "vendor/awml", file), "utf8")).toBe(`built ${file}\n`);
+  });
+
+  it.runIf(canRehearse).each([
+    ["a pin that names another repository", (tree: string) => put(join(tree, "vendor/awml/version.json"), '{"tag": "v0.8.0", "source": "https://example.com/evil.git"}\n')],
+    ["a pin that's a link", (tree: string) => {
+      rmSync(join(tree, "vendor/awml/version.json"));
+      symlinkSync("/proc/self/environ", join(tree, "vendor/awml/version.json"));
+    }],
+    ["a wrapper that's a link", (tree: string) => {
+      rmSync(join(tree, "vendor/awml/awml.js"));
+      symlinkSync("/proc/self/environ", join(tree, "vendor/awml/awml.js"));
+    }],
+    ["no pin", (tree: string) => rmSync(join(tree, "vendor/awml/version.json"))],
+  ])("builds nothing from %s", (_, spoil) => {
+    const { root, tree } = setUp('{"tag": "v0.8.0"}\n');
+    spoil(tree);
+    const run = build(root, tree);
+    expect(run.failed).toBe(true);
+    expect(existsSync(join(root, "build.log"))).toBe(false);
   });
 });

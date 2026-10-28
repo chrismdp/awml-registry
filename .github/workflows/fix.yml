@@ -156,7 +156,7 @@ jobs:
           # A session would load Claude Code's own files from the tree, so a branch that changes them is
           # held back too, for its own reason. .github/ is read by nothing the fixer runs, and a fix
           # to it is offered rather than pushed, so it isn't held back.
-          deps='(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$|^vendor/awml/'
+          deps='(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
           claudes='(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$'
           safe_git diff --name-only --no-renames --no-ext-diff --no-textconv -z "$base" "$HEAD_SHA" > "$RUNNER_TEMP/changed"
           if [ "$important" -eq 0 ]; then
@@ -220,11 +220,10 @@ jobs:
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
         run: |
           mkdir -p "$HOST_DIR/main" "$RUNNER_TEMP/input"
-          cp .github/fix-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/review-findings.sh .github/unclose.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh "$HOST_DIR/main/"
-          # Main's engine build script and pin, for the engine every session needs, built below.
-          mkdir -p "$HOST_DIR/engine/scripts" "$HOST_DIR/engine/vendor/awml"
+          cp .github/fix-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/review-findings.sh .github/unclose.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh .github/engine-for.sh "$HOST_DIR/main/"
+          # Main's engine build script, which builds each tree's engine from the tree's own pin below.
+          mkdir -p "$HOST_DIR/engine/scripts"
           cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"
-          cp vendor/awml/version.json vendor/awml/awml.js "$HOST_DIR/engine/vendor/awml/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
           bash "$HOST_DIR/main/review-findings.sh" findings "$CI_RUN" > "$RUNNER_TEMP/input/findings.json"
           gh api "repos/$GITHUB_REPOSITORY/compare/main...$HEAD_SHA" -H "Accept: application/vnd.github.diff" \
@@ -266,13 +265,13 @@ jobs:
           bash "$HOST_DIR/main/placeholders.sh" record . "$HOST_DIR/baseline/protected"
 
       # A session that checks or draws a workflow needs the AWML engine, which npm ci --ignore-scripts
-      # doesn't build. Main's copy of the build script builds it from main's pin, outside the sandbox
-      # and before any session, never the tree's own script: it fetches AWML's source and the
-      # pinned Go, and keeps the build only if each file has the SHA-256 the pin names.
-      - name: Build the AWML engine from main's pin
-        run: |
-          bash "$HOST_DIR/engine/scripts/engine-build.sh"
-          cp "$HOST_DIR/engine/vendor/awml/awml.wasm" "$HOST_DIR/engine/vendor/awml/wasm_exec.js" "$HOST_DIR/engine/vendor/awml/build.json" vendor/awml/
+      # doesn't build. Main's copy of the build script builds it from the tree's own pin, outside the
+      # sandbox and before any session, never the tree's own script: it fetches AWML's source from
+      # AWML's own repository and the pinned Go, and keeps the build only if each file has the
+      # SHA-256 the pin names. A go build of the pinned commit runs no code here, and the
+      # WebAssembly runs only inside the sandbox.
+      - name: Build the AWML engine from the tree's pin
+        run: bash "$HOST_DIR/main/engine-for.sh" . "$HOST_DIR/engine-tree"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
       # to start without it. Ubuntu's runners restrict the user namespaces bubblewrap needs, so allow
@@ -481,14 +480,14 @@ jobs:
           case "$FAILED_REVIEWS" in "Bug review"|"Security review"|"Bug review and Security review") ;; *) FAILED_REVIEWS="A review" ;; esac
           [ "$OUTCOME" != noimportant ] || give_up "$FAILED_REVIEWS failed with no Important finding: it may have refused the patch or run out of time, so there's nothing for the fixer to fix."
           [ "$OUTCOME" != claudefiles ] || give_up "This branch changes Claude Code's own files (\`.claude/\`, \`.mcp.json\` or a \`CLAUDE.md\`), which a session would load, so the fixer won't start one on it."
-          [ "$OUTCOME" != npmfiles ] || give_up "This branch changes its dependencies (\`package.json\`, \`package-lock.json\`, \`npm-shrinkwrap.json\` or \`yarn.lock\`), an \`.npmrc\`, a \`.yarnrc\`, \`node_modules/\` or the engine's pin in \`vendor/awml/\`, so the fixer won't install it beside its login token."
+          [ "$OUTCOME" != npmfiles ] || give_up "This branch changes its dependencies (\`package.json\`, \`package-lock.json\`, \`npm-shrinkwrap.json\` or \`yarn.lock\`), an \`.npmrc\`, a \`.yarnrc\` or \`node_modules/\`, so the fixer won't install it beside its login token."
           # The fix job can fail after its session too, on a changed config, a nested repository or a
           # token, so a failed job isn't put down to the session.
           [ "$FIXED" = success ] || give_up "The fix job failed before the fix was kept. The run says why."
           [ "$CHANGED" = true ] || give_up "The fixer's session made no fix."
           git -c core.hooksPath=/dev/null apply --index "$RUNNER_TEMP/fix/fix.patch" ||
             give_up "The fixer's fix doesn't apply to the reviewed commit."
-          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$|^vendor/awml/'
+          guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
           # A symbolic link is read wherever it's followed, so the app never pushes one either.
           links="$(git diff --cached --raw --no-renames | awk '$2 == "120000" { found = 1 } END { if (found) print "link" }')"
           # The names go to a file that grep reads whole: a grep at the end of a pipe may stop at its
