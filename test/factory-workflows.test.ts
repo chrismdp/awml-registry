@@ -2815,9 +2815,11 @@ describe("fix.yml", () => {
     actor = { login: "awml-factory[bot]", type: "Bot" },
     attempt = "1",
     earlierReview = "success",
+    earlierTest = "success",
   }: Partial<{
     attempt: string;
     earlierReview: string;
+    earlierTest: string;
     runPulls: number[];
     actor: { login: string; type: string };
     event: string;
@@ -2869,7 +2871,7 @@ describe("fix.yml", () => {
   })}' ;;
   *"check-runs/11/annotations"*) answer <<< '${JSON.stringify(important && bug === "failure" ? [{ annotation_level: "failure", title: "Important: Wrong", message: "m", path: "src/a.ts", start_line: 1 }] : [])}' ;;
   *"check-runs/12/annotations"*) answer <<< '${JSON.stringify(important && security === "failure" ? [{ annotation_level: "failure", title: "Important: Hole", message: "m", path: "src/a.ts", start_line: 1 }] : [])}' ;;
-  *"actions/runs/77/attempts/1/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: "success" }, { name: "Bug review", conclusion: earlierReview }] })}' ;;
+  *"actions/runs/77/attempts/1/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: earlierTest }, { name: "Bug review", conclusion: earlierReview }] })}' ;;
   *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })), triggering_actor: actor })}' ;;
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([
     strangerPull(pullHead ?? sha),
@@ -2948,11 +2950,13 @@ ${permissionStub}`,
     expect(run.outputs.outcome).toBe("none");
   });
 
-  // An earlier attempt of the same run, on the same head, whose review failed has already woken the
-  // fixer, so a re-run doesn't fix, or comment, again.
-  it.runIf(canRehearse)("leaves a re-run quietly when an earlier attempt already failed a review", () => {
+  // An earlier attempt of the same run, on the same head, whose tests passed and review failed has
+  // already woken the fixer, so a re-run doesn't fix, or comment, again. One whose tests failed was
+  // retry's, and the fixer never acted on it.
+  it.runIf(canRehearse)("leaves a re-run quietly only when an earlier attempt already woke the fixer", () => {
     expect(decide({ attempt: "2", earlierReview: "failure" }).outputs.outcome).toBe("none");
     expect(decide({ attempt: "2", earlierReview: "success" }).outputs.outcome).toBe("fix");
+    expect(decide({ attempt: "2", earlierTest: "failure", earlierReview: "failure" }).outputs.outcome).toBe("fix");
     expect(stepWithId(jobs.decide, "ready").env?.RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
   });
 
@@ -3203,6 +3207,7 @@ describe("retry.yml", () => {
     personCommits = false,
     earlierTaken = false,
     attempt = "1",
+    earlierTest = "failure",
   } = {}) => {
     const root = scratch();
     // The branch's commits, the factory's, then a person's if asked.
@@ -3249,6 +3254,7 @@ describe("retry.yml", () => {
       answers: `
 ${permissionStub}
   *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: test }, { name: "Bug review", conclusion: bug }] })}' ;;
+  *"actions/runs/77/attempts/1/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: earlierTest }, { name: "Bug review", conclusion: "failure" }] })}' ;;
   *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })), triggering_actor: actor })}' ;;
   *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(sha), appPull(at, pullRepository)])}' ;;
   *"actions/workflows/ci.yml/runs"*) answer <<< '${JSON.stringify(ciRuns)}' ;;
@@ -3297,12 +3303,15 @@ ${permissionStub}
     expect(tries({ bug: "success" }).calls).toContain("workflow run build.yml");
   });
 
-  // A re-run of CI's run would start another build for the same failure, so only a first attempt
-  // starts one.
-  it.runIf(canRehearse)("starts no build from a re-run of CI", () => {
+  // A re-run of CI's run whose earlier attempt failed its tests would start another build for the
+  // same failure, so it starts none. One whose earlier attempts passed their tests started none.
+  it.runIf(canRehearse)("starts no build from a re-run of CI whose earlier attempt already started one", () => {
     const run = tries({ attempt: "2" });
     expect(run.failed, run.printed).toBe(false);
     expect(run.calls).not.toMatch(/workflow run|issue comment/);
+    const first = tries({ attempt: "2", earlierTest: "success" });
+    expect(first.failed, first.printed).toBe(false);
+    expect(first.calls).toContain("workflow run build.yml --repo owner/repo --ref main -f issue=7\n");
     expect(stepWithId(jobs.retry, "tries").env?.RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
   });
 

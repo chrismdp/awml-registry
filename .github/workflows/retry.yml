@@ -202,8 +202,15 @@ jobs:
           builds="$(jq length "$RUNNER_TEMP/builds.json")"
           echo "#$issue has had $builds builds since the label was last added."
           if [ "$builds" -lt 3 ]; then
-            # A re-run of CI's run would start another build for the same failure.
-            [ "$RUN_ATTEMPT" = 1 ] || leave "This is attempt $RUN_ATTEMPT of CI's run, so its first attempt has already started a build."
+            # An earlier attempt of CI's run that failed its tests started a build then, so a re-run
+            # of it would start another for the same failure.
+            case "$RUN_ATTEMPT" in ''|*[!0-9]*) leave "CI's attempt isn't a number." ;; esac
+            for earlier in $(seq 1 $((RUN_ATTEMPT - 1))); do
+              if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/attempts/$earlier/jobs" --paginate --jq '.jobs[]' |
+                jq -se 'any(.[]; .name == "test" and .conclusion == "failure")' > /dev/null; then
+                leave "Attempt $earlier of CI's run already failed its tests, and started a build then."
+              fi
+            done
             gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main -f issue="$issue"
             exit 0
           fi

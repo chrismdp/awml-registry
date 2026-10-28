@@ -91,13 +91,15 @@ jobs:
             leave "CI's tests didn't all pass, so this is retry's, or nothing's."
           jq -e 'any(.[]; (.name | IN("Bug review", "Security review")) and .conclusion == "failure")' "$RUNNER_TEMP/jobs.json" > /dev/null ||
             leave "Neither review failed."
-          # An earlier attempt of this run, on this head, whose review failed has already woken the
-          # fixer, so a re-run neither fixes nor comments again.
+          # An earlier attempt of this run, on this head, whose tests all passed and a review failed
+          # has already woken the fixer, so a re-run neither fixes nor comments again. One whose tests
+          # failed was retry's, and the fixer left it.
           case "$RUN_ATTEMPT" in ''|*[!0-9]*) leave "CI's attempt isn't a number." ;; esac
           for earlier in $(seq 1 $((RUN_ATTEMPT - 1))); do
             if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/attempts/$earlier/jobs" --paginate --jq '.jobs[]' |
-              jq -se 'any(.[]; (.name | IN("Bug review", "Security review")) and .conclusion == "failure")' > /dev/null; then
-              leave "Attempt $earlier of CI's run already failed a review on this head, and woke the fixer then."
+              jq -se '([.[] | select(.name == "test")] | length > 0 and all(.[]; .conclusion == "success"))
+                and any(.[]; (.name | IN("Bug review", "Security review")) and .conclusion == "failure")' > /dev/null; then
+              leave "Attempt $earlier of CI's run already passed its tests and failed a review on this head, and woke the fixer then."
             fi
           done
           # The first open pull request at the reviewed commit opened by the factory's app, known by
