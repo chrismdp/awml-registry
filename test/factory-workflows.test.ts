@@ -45,6 +45,7 @@ type Workflow = {
   "run-name"?: string;
   on?: Record<string, unknown>;
   concurrency?: { group?: string; "cancel-in-progress"?: boolean };
+  defaults?: { run?: { shell?: string } };
   jobs: Record<string, Job>;
 };
 
@@ -442,9 +443,11 @@ function runOf(each: Step): string {
 // The npm settings every npm run on the host takes in a job that holds the Claude token, so a tree's
 // .npmrc, user or global config can't point npm at another registry or a script shell, and no
 // package's script runs.
+// npm refuses to load one file as both its user and its global config, so each is an empty file of
+// its own, made by the step before npm runs.
 const hostNpm = {
-  npm_config_userconfig: "/dev/null",
-  npm_config_globalconfig: "/dev/null",
+  npm_config_userconfig: "${{ runner.temp }}/npm/user.npmrc",
+  npm_config_globalconfig: "${{ runner.temp }}/npm/global.npmrc",
   npm_config_registry: "https://registry.npmjs.org/",
   npm_config_ignore_scripts: "true",
 };
@@ -738,7 +741,9 @@ describe("the factory's workflows", () => {
         if (line.includes("@anthropic-ai/claude-code")) installs.push(`${file} ${id}: ${line.trim()}`);
     expect(installs.length).toBe(5);
     for (const install of installs)
-      expect(install).toMatch(/: \(cd "\$RUNNER_TEMP" && npm_config_userconfig=\/dev\/null npm_config_globalconfig=\/dev\/null npm install -g @anthropic-ai\/claude-code@2\.1\.312\)$/);
+      expect(install).toMatch(
+        /: \(cd "\$RUNNER_TEMP" && npm_config_userconfig="\$RUNNER_TEMP\/npm\/user\.npmrc" npm_config_globalconfig="\$RUNNER_TEMP\/npm\/global\.npmrc" npm install -g @anthropic-ai\/claude-code@2\.1\.312\)$/,
+      );
   });
 
   // A session that runs the checks finds the dependencies already installed, with their scripts
@@ -753,6 +758,37 @@ describe("the factory's workflows", () => {
       expect(all[install].env, `${file} ${id}`).toMatchObject(hostNpm);
       expect(all[install].env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     }
+  });
+
+  // npm refuses to load one file as both its user and its global config ("double-loading config"),
+  // so wherever both are named they're two files, each emptied in the step before any npm runs.
+  it("give npm's user and global config two different empty files", () => {
+    let named = 0;
+    for (const [file, id, job] of everyJob())
+      for (const each of steps(job)) {
+        const where = `${file} ${id} "${each.name}"`;
+        const text = each.run ?? "";
+        const env = each.env ?? {};
+        if ("npm_config_userconfig" in env || "npm_config_globalconfig" in env) {
+          named++;
+          expect(env.npm_config_userconfig, where).not.toBe(env.npm_config_globalconfig);
+          const made = text.indexOf(': > "$npm_config_globalconfig"');
+          expect(text.indexOf(': > "$npm_config_userconfig"'), where).toBeGreaterThan(-1);
+          expect(made, where).toBeGreaterThan(-1);
+          expect(made, where).toBeLessThan(text.search(/\bnpm (ci|install)\b/));
+        }
+        for (const line of text.split("\n").filter((each) => /npm_config_userconfig=/.test(each))) {
+          named++;
+          const user = /npm_config_userconfig=("[^"]*"|\S+)/.exec(line)?.[1];
+          const global = /npm_config_globalconfig=("[^"]*"|\S+)/.exec(line)?.[1];
+          expect(user, where).toBeDefined();
+          expect(user, where).not.toBe(global);
+          const before = text.slice(0, text.indexOf(line));
+          expect(before, where).toContain(`: > ${user}`);
+          expect(before, where).toContain(`: > ${global}`);
+        }
+      }
+    expect(named).toBeGreaterThan(0);
   });
 
   // Every npm the host runs beside the Claude token ignores the tree's, user and global config.
@@ -839,6 +875,13 @@ describe("the factory's workflows", () => {
       "resolve.yml push": { "permission-contents": "write" },
       "land.yml land": { "permission-contents": "write", "permission-pull-requests": "write" },
     });
+  });
+
+  // Without a shell named, GitHub runs a step's script with bash -e alone, so a failure inside a
+  // pipe passes unseen. Named, it runs bash --noprofile --norc -eo pipefail, as the rehearsals do.
+  it("run every factory step with bash and pipefail", () => {
+    for (const file of ["ci.yml", "build.yml", "fix.yml", "land.yml", "retry.yml", "resolve.yml"])
+      expect(readWorkflow(file).defaults, file).toEqual({ run: { shell: "bash" } });
   });
 
   it("pin every action to a commit", () => {
@@ -1622,6 +1665,30 @@ describe("ci.yml", () => {
     const run = rehearse(stepWithId(jobs.classify, "verdict").run ?? "", { root, env: { GITHUB_STEP_SUMMARY: join(root, "summary.md") } });
     expect(run.failed, run.printed).toBe(false);
     expect(run.printed).toBe("::notice title=No verdict::Classify's session didn't run, so land asks for a review.\n");
+  });
+
+  // The output is fenced one backtick longer than its longest run of them, and output with none, or
+  // no output at all, where grep finds nothing, still gets a fence of three: the count must not
+  // fail the step under pipefail.
+  it.runIf(canRehearse).each([
+    ["no backticks", "Error: expected 1, got 2", "```"],
+    ["a run of four", "Error: ````odd````", "`````"],
+    ["nothing", "", "```"],
+  ])("reports a failing main whose output holds %s", (_, log, fence) => {
+    const root = scratch();
+    const run = rehearse(stepWithId(jobs.report, "report").run ?? "", {
+      root,
+      env: { GITHUB_SHA: "a".repeat(40) },
+      answers: `
+  *"actions/runs/1000/jobs"*) answer <<< '{"jobs": [{"id": 5, "name": "test", "conclusion": "failure"}]}' ;;
+  *"run view"*) ${log ? `echo '${log}'` : ":"} ;;
+  *"commits/"*) answer <<< '{"commit": {"message": "Change it"}}' ;;
+  *"issue list"*) answer <<< '[{"number": 3}]' ;;
+  *"issue comment"*) ;;`,
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.calls).toContain("issue comment 3");
+    expect(run.calls).toContain(log ? `> ${fence}\n> ${log}\n> ${fence}\n` : `> ${fence}\n> ${fence}\n`);
   });
 
   it("keeps the failing-main report on main's pushes only", () => {

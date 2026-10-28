@@ -56,6 +56,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Named, so GitHub runs each step's script with bash -eo pipefail, not bash -e alone, and a failure
+# inside a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -190,7 +196,12 @@ jobs:
           # The runner user could start a privileged container through Docker's socket, from inside
           # the sandbox, so it's closed to them before any session starts.
           if [ -e /var/run/docker.sock ]; then sudo chmod 600 /var/run/docker.sock; fi
-          (cd "$RUNNER_TEMP" && npm_config_userconfig=/dev/null npm_config_globalconfig=/dev/null npm install -g @anthropic-ai/claude-code@2.1.312)
+          # npm refuses to load one file as both its user and its global config, so each is an empty
+          # file of its own.
+          mkdir -p "$RUNNER_TEMP/npm"
+          : > "$RUNNER_TEMP/npm/user.npmrc"
+          : > "$RUNNER_TEMP/npm/global.npmrc"
+          (cd "$RUNNER_TEMP" && npm_config_userconfig="$RUNNER_TEMP/npm/user.npmrc" npm_config_globalconfig="$RUNNER_TEMP/npm/global.npmrc" npm install -g @anthropic-ai/claude-code@2.1.312)
 
       # The session keeps the login token from its commands (chrismdp/awml#121), loads only the
       # settings claude-settings.sh writes in its own empty home and no MCP servers, and reads only
@@ -314,7 +325,12 @@ jobs:
           # The runner user could start a privileged container through Docker's socket, from inside
           # the sandbox, so it's closed to them before any session starts.
           if [ -e /var/run/docker.sock ]; then sudo chmod 600 /var/run/docker.sock; fi
-          (cd "$RUNNER_TEMP" && npm_config_userconfig=/dev/null npm_config_globalconfig=/dev/null npm install -g @anthropic-ai/claude-code@2.1.312)
+          # npm refuses to load one file as both its user and its global config, so each is an empty
+          # file of its own.
+          mkdir -p "$RUNNER_TEMP/npm"
+          : > "$RUNNER_TEMP/npm/user.npmrc"
+          : > "$RUNNER_TEMP/npm/global.npmrc"
+          (cd "$RUNNER_TEMP" && npm_config_userconfig="$RUNNER_TEMP/npm/user.npmrc" npm_config_globalconfig="$RUNNER_TEMP/npm/global.npmrc" npm install -g @anthropic-ai/claude-code@2.1.312)
 
       # The classifier starts as each review did: in an empty home of its own, reading inputs it
       # can't change, editing only its verdict, in a folder of its own.
@@ -412,7 +428,8 @@ jobs:
           done < "$here/jobs.txt" > "$here/log.txt"
           tail -n 150 "$here/log.txt" > "$here/output.txt"
 
-          longest="$(grep -o '`*' "$here/output.txt" | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')"
+          # grep finds nothing in an empty output, which mustn't fail the step under pipefail.
+          longest="$({ grep -o '`*' "$here/output.txt" || true; } | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')"
           fence="$(printf '%*s' "$(( longest >= 3 ? longest + 1 : 3 ))" '' | tr ' ' '`')"
           subject="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq .commit.message | sed -n 1p)"
           {

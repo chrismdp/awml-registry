@@ -28,6 +28,12 @@ on:
     types: [completed]
     branches: ["build/issue-*"]
 
+# Named, so GitHub runs each step's script with bash -eo pipefail, not bash -e alone, and a failure
+# inside a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   # The reading has no concurrency group, since GitHub keeps one run waiting in a group and cancels
   # it for a newer one whatever cancel-in-progress says, and a run started by someone else's pull
