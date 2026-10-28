@@ -115,6 +115,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash "$RUNNER_TEMP/main/bring-patch.sh" "$RUNNER_TEMP/input"
 
       # Claude Code runs its commands in a sandbox, bubblewrap with socat for its network, and refuses
@@ -206,6 +207,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           bash "$RUNNER_TEMP/main/bring-patch.sh" "$RUNNER_TEMP/input"
           bash "$RUNNER_TEMP/main/review-findings.sh" findings "$GITHUB_RUN_ID" > "$RUNNER_TEMP/input/findings.json"

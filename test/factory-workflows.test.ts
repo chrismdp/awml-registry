@@ -1078,14 +1078,45 @@ describe("ci.yml", () => {
     const run = rehearse(script("bring-patch.sh", [join(root, "input")]), {
       root,
       cwd: repo,
-      env: { HEAD_SHA: "b".repeat(40) },
+      env: { HEAD_SHA: "b".repeat(40), PR_NUMBER: "12" },
       answers: `
+  *"pulls/12"*) answer <<< '{"title": "T", "body": "B"}' ;;
   *"merge_base_commit"*) echo ${main} ;;
   *"application/vnd.github.diff"*) cat ${join(root, "change.patch")} ;;`,
     });
     expect(run.failed, run.printed).toBe(true);
     expect(run.printed).toContain("CLAUDE.md");
     expect(commandsIn(run.printed)).toEqual([]);
+  });
+
+  // A build's push can land before its description is edited, and the event holds the pull request
+  // as it was when CI started, so the title and description are read from GitHub as the job runs.
+  it.runIf(canRehearse)("reads the pull request's title and description from GitHub, not the event", () => {
+    const root = scratch();
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q");
+    put(join(repo, "README.md"), "A registry\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-qm", "main");
+    const main = git(repo, "rev-parse", "HEAD");
+    put(join(repo, "README.md"), "Changed\n");
+    git(repo, "add", "-A");
+    put(join(root, "change.patch"), git(repo, "diff", "--cached") + "\n");
+    git(repo, "reset", "-q", "--hard");
+    put(join(root, "event.json"), JSON.stringify({ pull_request: { title: "Old title", body: "Old description" } }));
+    const run = rehearse(script("bring-patch.sh", [join(root, "input")]), {
+      root,
+      cwd: repo,
+      env: { HEAD_SHA: "b".repeat(40), PR_NUMBER: "12", GITHUB_EVENT_PATH: join(root, "event.json") },
+      answers: `
+  *"pulls/12"*) answer <<< '{"title": "New title", "body": "New description"}' ;;
+  *"merge_base_commit"*) echo ${main} ;;
+  *"application/vnd.github.diff"*) cat ${join(root, "change.patch")} ;;`,
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(readFileSync(join(root, "input/pull-request.md"), "utf8")).toBe("# New title\n\nNew description\n");
+    for (const id of ["review", "classify"]) expect(stepWithId(jobs[id], "bring").env?.PR_NUMBER, id).toBe("${{ github.event.pull_request.number }}");
   });
 
   // The job's own check carries the findings, as annotations GitHub keeps on it, and fails on an
@@ -1698,33 +1729,48 @@ describe("build.yml", () => {
       for (const each of steps(job)) {
         if (!JSON.stringify(each.env ?? {}).includes("steps.app.outputs.token")) continue;
         expect(id).toBe("open");
-        expect(["push", "media", "pull"]).toContain(each.id);
+        expect(["edit", "push", "media", "pull"]).toContain(each.id);
       }
   });
 
   // GitHub starts CI from the app's pull request. One that is open from the branch is updated by
   // the push, and keeps its number.
-  it.runIf(canRehearse)("opens a pull request that closes the issue, unless one is open from the branch", () => {
-    const pull = stepWithId(jobs.open, "pull");
-    for (const [open, want] of [
-      ["[]", "pr create --repo owner/repo --base main --head build/issue-7"],
-      // Every try's push updates the open pull request, so its title and description are the try's.
-      ['[{"number": 12}]', "pr edit 12 --repo owner/repo --title Fix the page --body-file"],
-    ]) {
-      const root = scratch();
-      put(join(root, "runner/title.txt"), "Fix the page\n");
-      put(join(root, "runner/pull-request.md"), "Closes #7\n");
-      const run = rehearse(pull.run ?? "", {
-        root,
-        env: { ISSUE: "7", BRANCH: "build/issue-7" },
-        answers: `
+  // CI's synchronize run reads the pull request as it is when the push lands, so an open one gets
+  // the try's title and description before the push, and a new one is opened after it.
+  it("edits an open pull request before the push, and opens one after it", () => {
+    const ids = steps(jobs.open).map((each) => each.id);
+    expect(ids.indexOf("describe")).toBeLessThan(ids.indexOf("edit"));
+    expect(ids.indexOf("edit")).toBeLessThan(ids.indexOf("push"));
+    expect(ids.indexOf("push")).toBeLessThan(ids.indexOf("pull"));
+  });
+
+  const pullStep = (id: string, open: string) => {
+    const root = scratch();
+    put(join(root, "runner/title.txt"), "Fix the page\n");
+    put(join(root, "runner/pull-request.md"), "Closes #7\n");
+    return rehearse(stepWithId(jobs.open, id).run ?? "", {
+      root,
+      env: { ISSUE: "7", BRANCH: "build/issue-7" },
+      answers: `
   *"pulls?head=owner:build/issue-7"*) answer <<< '${open}' ;;
   *"pr create"*) echo "https://github.com/owner/repo/pull/13" ;;
   *"pr edit"*) ;;`,
-      });
-      expect(run.failed, run.printed).toBe(false);
-      expect(run.calls).toContain(want);
-    }
+    });
+  };
+
+  it.runIf(canRehearse)("gives an open pull request the try's title and description before the push", () => {
+    const run = pullStep("edit", '[{"number": 12}]');
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.calls).toContain("pr edit 12 --repo owner/repo --title Fix the page --body-file");
+    expect(run.calls).not.toContain("pr create");
+    expect(pullStep("edit", "[]").calls).not.toMatch(/pr (edit|create)/);
+  });
+
+  it.runIf(canRehearse)("opens a pull request that closes the issue after the push, unless one is open from the branch", () => {
+    const run = pullStep("pull", "[]");
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.calls).toContain("pr create --repo owner/repo --base main --head build/issue-7 --title Fix the page --body-file");
+    expect(pullStep("pull", '[{"number": 12}]').calls).not.toMatch(/pr (edit|create)/);
   });
 
   it.runIf(canRehearse)("posts Claude's message, escaped, when it changed nothing", () => {

@@ -12,7 +12,7 @@
 #
 #   HEAD_SHA=<the head commit> bring-patch.sh DIR
 #
-# It writes DIR/change.patch, DIR/pull-request.md from the event when there is a pull request, and
+# It writes DIR/change.patch, DIR/pull-request.md, from GitHub, when PR_NUMBER names a pull request, and
 # DIR/binary-files.md when there are binary files.
 set -euo pipefail
 
@@ -35,9 +35,11 @@ if ! [[ "$base" =~ ^[0-9a-f]{40}$ ]] || ! git merge-base --is-ancestor "$base" "
   exit 1
 fi
 gh api "$compare" -H "Accept: application/vnd.github.diff" > "$review/change.patch"
-if [ -n "${GITHUB_EVENT_PATH:-}" ] && jq -e '.pull_request' "$GITHUB_EVENT_PATH" > /dev/null 2>&1; then
-  jq -r '"# \(.pull_request.title)\n\n\(.pull_request.body // "")"' "$GITHUB_EVENT_PATH" \
-    > "$review/pull-request.md"
+# The title and description are read from GitHub as the job runs, never from the event, which holds
+# the pull request as it was when CI started: a build's push can land before its description is.
+if [ -n "${PR_NUMBER:-}" ]; then
+  case "$PR_NUMBER" in *[!0-9]*) echo "The pull request's number isn't a number: $PR_NUMBER"; exit 1 ;; esac
+  gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '"# \(.title)\n\n\(.body // "")"' > "$review/pull-request.md"
 fi
 git -c core.hooksPath=/dev/null switch -q --detach "$base"
 # Every path the patch touches: git's numstat gives each file's name, the new one for a
