@@ -2192,7 +2192,7 @@ describe("resolve.yml", () => {
     const session = readFileSync(join(github, "resolve-session.sh"), "utf8");
     const commands = session.replace(/"Bash\([^"]*\)"/g, "").split("\n").filter((line) => !/^\s*(#|echo )/.test(line));
     for (const line of commands) expect(line).not.toMatch(/(^|[\s;(|&])git\s/);
-    expect(session).not.toMatch(/"Bash\(git (add|rebase|switch|checkout|commit)/);
+    expect(session).not.toMatch(/"Bash\(git (add|rebase|switch|commit|reset)/);
     expect(session).toContain('claude-settings.sh" "$round_dir/home" --deny-write ./.git');
   });
 
