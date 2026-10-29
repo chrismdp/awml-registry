@@ -219,6 +219,10 @@ export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promis
       422,
       `parts judges at most ${PARTS_LIMITS.platforms} platforms together: name at most ${PARTS_LIMITS.platforms} in platforms.`,
     );
+  // The engine knows each platform by its address alone, so two versions of
+  // one would be judged as one.
+  const twice = body.parts && found.platforms.find((p, i) => found.platforms.findIndex((q) => q.owner.slug === p.owner.slug && q.slug === p.slug) !== i);
+  if (twice) return refuse(422, `parts judges each platform once: ${twice.owner.slug}/${twice.slug} is named twice.`);
   const answer = (results: Fit["results"], gaps: string[] = [], parts?: PartsFit) => ({
     ok: true as const,
     fit: { workflow, implementation, results, gaps, ...(parts ? { parts } : {}) },

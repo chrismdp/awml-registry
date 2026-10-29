@@ -332,6 +332,22 @@ describe("how much parts judges together", () => {
     expect(longest.body.parts.options[0].placement[1].part).toBe(`c${"x".repeat(63)}`);
   });
 
+  it("judges each platform once, since the engine knows a platform by its address alone", async () => {
+    const i = await ida([holding("q0", [0])]);
+    const again = await request("POST", `/api/v1/platforms/${i.username}/q0/versions`, {
+      as: { token: i.token },
+      json: { description: holding("q0", [0, 1]) },
+    });
+    expect(again.status).toBe(201);
+    const both = [`${i.username}/q0@1`, `${i.username}/q0@2`];
+    expect(await fit({ file: contexts(1), platforms: both, parts: true })).toEqual({
+      status: 422,
+      body: { errors: [`parts judges each platform once: ${i.username}/q0 is named twice.`] },
+    });
+    // Without parts, each version is judged on its own, as before.
+    expect((await fit({ file: contexts(1), platforms: both })).status).toBe(200);
+  });
+
   it("judges a design of at most 80 parts", async () => {
     const { username } = await ida([holding("q0", Array.from({ length: 81 }, (_, i) => i))]);
     expect(await fit({ file: contexts(81), parts: true })).toEqual({
