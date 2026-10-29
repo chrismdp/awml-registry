@@ -200,7 +200,7 @@ pre, code { font-family: var(--mono); }
 .check-errors li + li { margin-top: 6px; }
 @media (max-width: 600px) { .checks section { padding: 16px; border-radius: 22px; } }
 .cannot-draw { margin: 0; font-size: 15px; }
-.drawn-errors { margin: 0 0 16px; font-size: 15px; }
+.drawn-errors { margin: 0; padding: 20px 28px 0; font-size: 15px; }
 /* A 0.4 workflow's platform view: which implementation is drawn. */
 .implementations { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; font-size: 15px; font-weight: 600; color: var(--ink-soft); }
 .implementations a { color: var(--ink-soft); padding: 8px 14px; min-height: 40px; display: inline-flex; align-items: center; border-radius: 999px; box-shadow: inset 0 0 0 1.5px var(--wash); text-decoration: none; }
