@@ -265,3 +265,87 @@ describe("fitting each part", () => {
     });
   });
 });
+
+// A design of `count` contexts, each at its own place, p0 to p{count - 1}.
+const contexts = (count: number) => `awml: "0.9"
+title: Contexts
+scopes:
+  - { id: kept, label: "Kept", processing: any }
+parts:
+${Array.from({ length: count }, (_, i) => `  - { id: c${i}, kind: context, label: "Context ${i}", at: p${i}/notes, in: kept }`).join("\n")}
+lines: []
+`;
+
+// A platform that holds the contexts at each place given.
+const holding = (id: string, places: number[]) => `awml: "0.9"
+platform: { id: ${id}, label: "${id}" }
+off_for_up_to: PT0S
+steps: code
+agents: []
+calls: []
+holds: [${places.map((p) => `p${p}`).join(", ")}]
+`;
+
+// Ida, who has pushed `descriptions` as public platforms of her own, q0, q1
+// and on, under the descriptions' ids.
+async function ida(descriptions: string[]) {
+  const ida = await person("ida");
+  for (const [i, description] of descriptions.entries()) {
+    const res = await request("POST", `/api/v1/platforms/${ida.username}/q${i}/versions`, {
+      as: { token: ida.token },
+      json: { description },
+    });
+    expect(res.status).toBe(201);
+  }
+  return ida;
+}
+
+describe("how much parts judges together", () => {
+  // The engine judges every set of the platforms it is given, so each
+  // platform more doubles its work, and the options it lists grow with the
+  // parts as well (#100).
+  it("judges at most 16 platforms together, whether named or every one the caller can see", async () => {
+    const { username } = await ida(Array.from({ length: 17 }, (_, i) => holding(`q${i}`, [0])));
+    const all = Array.from({ length: 17 }, (_, i) => `${username}/q${i}`);
+    const refused = { status: 422, body: { errors: ["parts judges at most 16 platforms together: name at most 16 in platforms."] } };
+    expect(await fit({ file: contexts(1), parts: true })).toEqual(refused);
+    expect(await fit({ file: contexts(1), platforms: all, parts: true })).toEqual(refused);
+    // Without parts, every platform is judged on its own, as before.
+    const whole = await fit({ file: contexts(1) });
+    expect(whole.status).toBe(200);
+    expect(whole.body.results).toHaveLength(17);
+    const sixteen = await fit({ file: contexts(1), platforms: all.slice(0, 16), parts: true });
+    expect(sixteen.status).toBe(200);
+    expect(sixteen.body.parts.options).toHaveLength(16);
+  });
+
+  it("judges a design of at most 80 parts", async () => {
+    const { username } = await ida([holding("q0", Array.from({ length: 81 }, (_, i) => i))]);
+    expect(await fit({ file: contexts(81), parts: true })).toEqual({
+      status: 422,
+      body: { errors: ["parts judges a design of at most 80 parts."] },
+    });
+    expect((await fit({ file: contexts(81) })).status).toBe(200);
+    const eighty = await fit({ file: contexts(80), platforms: [`${username}/q0`], parts: true });
+    expect(eighty.status).toBe(200);
+    expect(eighty.body.parts.options).toEqual([
+      { platforms: [`${username}/q0`], placement: Array.from({ length: 80 }, (_, i) => ({ part: `c${i}`, platforms: [`${username}/q0`] })) },
+    ]);
+  });
+
+  it("answers at the limits with the most options found there", async () => {
+    // Each of 80 parts held by its own 14 of 16 platforms, so that any 3
+    // that hold every part between them are an option.
+    const fourteens: number[][] = [];
+    const choose = (from: number, chosen: number[]) => {
+      if (fourteens.length === 80) return;
+      if (chosen.length === 14) return void fourteens.push(chosen);
+      for (let q = from; q < 16; q++) choose(q + 1, [...chosen, q]);
+    };
+    choose(0, []);
+    await ida(Array.from({ length: 16 }, (_, q) => holding(`q${q}`, fourteens.flatMap((s, i) => (s.includes(q) ? [i] : [])))));
+    const res = await fit({ file: contexts(80), parts: true });
+    expect(res.status).toBe(200);
+    expect(res.body.parts.options).toHaveLength(300);
+  });
+});

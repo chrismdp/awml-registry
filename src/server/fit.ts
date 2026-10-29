@@ -56,6 +56,13 @@ export const NOT_JUDGED_ACROSS =
 // one platform.
 export type PartsFit = Omit<PartsReport, "options"> & { options: (PartsReport["options"][number] & { note?: string })[] };
 
+// How much `parts` judges together (#100). The engine tries every set of the
+// platforms it is given, so each platform more doubles its work, and the
+// options it lists, each placing every part, grow with the parts as well. At
+// these limits the most options found was 300, about 1 MB of answer, in
+// 300 ms on Node; a design or a list of platforms beyond them is refused.
+export const PARTS_LIMITS = { platforms: 16, parts: 80 };
+
 export type Fit = {
   workflow: { owner: string; slug: string; number: number } | null;
   implementation: string | null;
@@ -196,8 +203,16 @@ export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promis
   const judged = await design(db, viewer, body);
   if (!judged.ok) return judged;
   const { source, workflow, implementation } = judged;
+  const designed = readYaml(source)?.parts;
+  if (body.parts && Array.isArray(designed) && designed.length > PARTS_LIMITS.parts)
+    return refuse(422, `parts judges a design of at most ${PARTS_LIMITS.parts} parts.`);
   const found = await candidates(db, viewer, body.platforms);
   if (!found.ok) return found;
+  if (body.parts && found.platforms.length > PARTS_LIMITS.platforms)
+    return refuse(
+      422,
+      `parts judges at most ${PARTS_LIMITS.platforms} platforms together: name at most ${PARTS_LIMITS.platforms} in platforms.`,
+    );
   const answer = (results: Fit["results"], gaps: string[] = [], parts?: PartsFit) => ({
     ok: true as const,
     fit: { workflow, implementation, results, gaps, ...(parts ? { parts } : {}) },
@@ -253,7 +268,8 @@ export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promis
 // named in the answer as the fit's results name it, owner/slug. Nothing else
 // in the engine's answer changes, but that each option of more than one
 // platform says that whether its parts can reach each other isn't judged.
-// With no platform to judge against, nothing is judged.
+// With no platform to judge against, nothing is judged. fitWorkflow keeps
+// what it is given within PARTS_LIMITS.
 async function partsOf(source: string, platforms: Candidate[]): Promise<PartsFit> {
   if (platforms.length === 0) return { parts: [], options: [], gaps: [] };
   const named = new Map(platforms.map((p) => [platformAddress(p.owner.slug, p.slug), `${p.owner.slug}/${p.slug}`]));

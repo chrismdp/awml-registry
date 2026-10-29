@@ -94,9 +94,12 @@ export const wasmEngine: Engine = {
     async (workflow: string, descriptions: string[], implementation = "") =>
       JSON.parse((await awml()).fitJSON([workflow, ...descriptions], implementation)) as FitReport,
   ),
+  // An answer at PARTS_LIMITS in src/server/fit.ts can be about 1 MB, so
+  // only the 20 used last are kept.
   fitParts: memoise(
     async (workflow: string, descriptions: string[]) =>
       JSON.parse((await awml()).fitPartsJSON([workflow, ...descriptions])) as PartsReport,
+    20,
   ),
   checksAcross: memoise(async (files: Named[]) => {
     const listed = JSON.parse((await awml()).checksJSON(files)) as Listed;

@@ -538,7 +538,9 @@ function server(person: Person) {
         parts: z
           .boolean()
           .optional()
-          .describe("Also judge each part of the design on its own, and give every option of platforms that holds them all. Not with implementation."),
+          .describe(
+            "Also judge each part of the design on its own, and give every option of platforms that holds them all. Not with implementation. At most 16 platforms and a design of 80 parts.",
+          ),
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
