@@ -304,19 +304,32 @@ describe("how much parts judges together", () => {
   // The engine judges every set of the platforms it is given, so each
   // platform more doubles its work, and the options it lists grow with the
   // parts as well (#100).
-  it("judges at most 16 platforms together, whether named or every one the caller can see", async () => {
-    const { username } = await ida(Array.from({ length: 17 }, (_, i) => holding(`q${i}`, [0])));
-    const all = Array.from({ length: 17 }, (_, i) => `${username}/q${i}`);
-    const refused = { status: 422, body: { errors: ["parts judges at most 16 platforms together: name at most 16 in platforms."] } };
+  it("judges at most 8 platforms together, whether named or every one the caller can see", async () => {
+    const { username } = await ida(Array.from({ length: 9 }, (_, i) => holding(`q${i}`, [0])));
+    const all = Array.from({ length: 9 }, (_, i) => `${username}/q${i}`);
+    const refused = { status: 422, body: { errors: ["parts judges at most 8 platforms together: name at most 8 in platforms."] } };
     expect(await fit({ file: contexts(1), parts: true })).toEqual(refused);
     expect(await fit({ file: contexts(1), platforms: all, parts: true })).toEqual(refused);
     // Without parts, every platform is judged on its own, as before.
     const whole = await fit({ file: contexts(1) });
     expect(whole.status).toBe(200);
-    expect(whole.body.results).toHaveLength(17);
-    const sixteen = await fit({ file: contexts(1), platforms: all.slice(0, 16), parts: true });
-    expect(sixteen.status).toBe(200);
-    expect(sixteen.body.parts.options).toHaveLength(16);
+    expect(whole.body.results).toHaveLength(9);
+    const eight = await fit({ file: contexts(1), platforms: all.slice(0, 8), parts: true });
+    expect(eight.status).toBe(200);
+    expect(eight.body.parts.options).toHaveLength(8);
+  });
+
+  it("judges a design whose part ids are at most 64 characters", async () => {
+    const { username } = await ida([holding("q0", [0, 1])]);
+    const named = (id: string) => contexts(2).replace("id: c1,", `id: ${id},`);
+    expect(await fit({ file: named(`c${"x".repeat(64)}`), parts: true })).toEqual({
+      status: 422,
+      body: { errors: ["parts judges a design whose part ids are at most 64 characters."] },
+    });
+    expect((await fit({ file: named(`c${"x".repeat(64)}`) })).status).toBe(200);
+    const longest = await fit({ file: named(`c${"x".repeat(63)}`), platforms: [`${username}/q0`], parts: true });
+    expect(longest.status).toBe(200);
+    expect(longest.body.parts.options[0].placement[1].part).toBe(`c${"x".repeat(63)}`);
   });
 
   it("judges a design of at most 80 parts", async () => {
@@ -333,19 +346,36 @@ describe("how much parts judges together", () => {
     ]);
   });
 
-  it("answers at the limits with the most options found there", async () => {
-    // Each of 80 parts held by its own 14 of 16 platforms, so that any 3
-    // that hold every part between them are an option.
-    const fourteens: number[][] = [];
+  it("answers at the limits within the most an answer can be", async () => {
+    // An option holds every part with none to spare, so no option holds
+    // another, and of 8 platforms at most C(8, 4) = 70 sets do that. Each of
+    // 56 parts held by its own 5 of the 8 makes every 4 an option, and 24
+    // more held by all 8 make each option place them on all 4 of its own.
+    const fives: number[][] = [];
     const choose = (from: number, chosen: number[]) => {
-      if (fourteens.length === 80) return;
-      if (chosen.length === 14) return void fourteens.push(chosen);
-      for (let q = from; q < 16; q++) choose(q + 1, [...chosen, q]);
+      if (chosen.length === 5) return void fives.push(chosen);
+      for (let q = from; q < 8; q++) choose(q + 1, [...chosen, q]);
     };
     choose(0, []);
-    await ida(Array.from({ length: 16 }, (_, q) => holding(`q${q}`, fourteens.flatMap((s, i) => (s.includes(q) ? [i] : [])))));
-    const res = await fit({ file: contexts(80), parts: true });
+    const all = [0, 1, 2, 3, 4, 5, 6, 7];
+    const holders = [...fives, ...Array.from({ length: 24 }, () => all)];
+    // Each platform's slug and each part's id as long as they may be.
+    const slug = (q: number) => `${"q".repeat(39)}${q}`;
+    const id = (i: number) => `c${"x".repeat(61)}${String(i).padStart(2, "0")}`;
+    const { username, token } = await ida([]);
+    for (const q of all) {
+      const res = await request("POST", `/api/v1/platforms/${username}/${slug(q)}/versions`, {
+        as: { token },
+        json: { description: holding(slug(q), holders.flatMap((s, i) => (s.includes(q) ? [i] : []))) },
+      });
+      expect(res.status).toBe(201);
+    }
+    let file = contexts(80);
+    for (let i = 79; i >= 0; i--) file = file.replace(`id: c${i},`, `id: ${id(i)},`);
+    const res = await fit({ file, parts: true });
     expect(res.status).toBe(200);
-    expect(res.body.parts.options).toHaveLength(300);
+    expect(res.body.parts.options).toHaveLength(70);
+    // About 2 MB at most, as PARTS_LIMITS in src/server/fit.ts works out.
+    expect(JSON.stringify(res.body.parts).length).toBeLessThan(2.5 * 2 ** 20);
   });
 });

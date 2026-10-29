@@ -539,7 +539,7 @@ function server(person: Person) {
           .boolean()
           .optional()
           .describe(
-            "Also judge each part of the design on its own, and give every option of platforms that holds them all. Not with implementation. At most 16 platforms and a design of 80 parts.",
+            "Also judge each part of the design on its own, and give every option of platforms that holds them all. Not with implementation. At most 8 platforms and a design of 80 parts, each id at most 64 characters.",
           ),
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },

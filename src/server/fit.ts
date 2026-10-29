@@ -58,10 +58,14 @@ export type PartsFit = Omit<PartsReport, "options"> & { options: (PartsReport["o
 
 // How much `parts` judges together (#100). The engine tries every set of the
 // platforms it is given, so each platform more doubles its work, and the
-// options it lists, each placing every part, grow with the parts as well. At
-// these limits the most options found was 300, about 1 MB of answer, in
-// 300 ms on Node; a design or a list of platforms beyond them is refused.
-export const PARTS_LIMITS = { platforms: 16, parts: 80 };
+// options it lists, each placing every part, grow with the parts as well. An
+// option holds every part with none to spare, so no option holds another,
+// and of 8 platforms at most C(8, 4) = 70 sets do that, with at most 280
+// platforms between them. So an answer places each part at most 70 times,
+// under an id of at most 64 characters, and names a platform, owner/slug of
+// at most 81, at most 280 times for each part: about 2.4 MB, worked out in
+// 300 ms on Node. A design or a list of platforms beyond these is refused.
+export const PARTS_LIMITS = { platforms: 8, parts: 80, id: 64 };
 
 export type Fit = {
   workflow: { owner: string; slug: string; number: number } | null;
@@ -206,6 +210,8 @@ export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promis
   const designed = readYaml(source)?.parts;
   if (body.parts && Array.isArray(designed) && designed.length > PARTS_LIMITS.parts)
     return refuse(422, `parts judges a design of at most ${PARTS_LIMITS.parts} parts.`);
+  if (body.parts && Array.isArray(designed) && (designed as { id?: unknown }[]).some((p) => String(p.id).length > PARTS_LIMITS.id))
+    return refuse(422, `parts judges a design whose part ids are at most ${PARTS_LIMITS.id} characters.`);
   const found = await candidates(db, viewer, body.platforms);
   if (!found.ok) return found;
   if (body.parts && found.platforms.length > PARTS_LIMITS.platforms)
