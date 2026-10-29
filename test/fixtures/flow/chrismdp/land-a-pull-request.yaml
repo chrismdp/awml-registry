@@ -1,11 +1,12 @@
-# A pull request the app opened lands once CI has run on it. If CI fails, it goes to
-# retry-a-build. If CI passes, a code rule decides whether the change is straightforward, by rules
-# the maintainer wrote down, reading the reviews' findings and the classifier's verdict, which can
-# send a change to review but never skip one. A straightforward change the app sets to merge by
-# itself. Otherwise the person who added the label is asked to review it, and merges it from their
-# own account, which is their yes. Main's own rule holds every merge until CI has passed.
-awml: "0.8"
+awml: "0.9"
 title: A pull request lands once CI has run
+description: |
+  A pull request the app opened lands once CI has run on it. If CI fails, it goes to
+  retry-a-build. If CI passes, a code rule decides whether the change is straightforward, by rules
+  the maintainer wrote down, reading the reviews' findings and the classifier's verdict, which can
+  send a change to review but never skip one. A straightforward change the app sets to merge by
+  itself. Otherwise the person who added the label is asked to review it, and merges it from their
+  own account, which is their yes. Main's own rule holds every merge until CI has passed.
 scopes:
   - { id: public, label: "public: anyone who reads the repository", processing: any }
 parts:

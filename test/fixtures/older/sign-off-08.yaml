@@ -1,0 +1,19 @@
+awml: "0.8"
+title: Sending the club's newsletter
+description: |
+  The club's newsletter goes out on Sam's yes, and the outside action notes it in the record of what
+  went out. AWML 0.8 let a line go from an outside action into a context; AWML 0.9 finds the file
+  invalid, since an outside action changes only what's outside the system. Sam is fictional.
+scopes:
+  - { id: club, label: "club: Sam", processing: any }
+parts:
+  - { id: month, kind: trigger, label: "Month end", wait: P1D }
+  - { id: make, kind: code, op: do, label: "Put the newsletter together", in: club }
+  - { id: approve, kind: review, label: "Sam's yes to the newsletter", in: club }
+  - { id: send, kind: outside, label: "Send the newsletter: Ask", in: club }
+  - { id: record, kind: context, label: "What went out", in: club }
+lines:
+  - { from: month, to: make, kind: start }
+  - { from: make, to: approve, kind: start, label: the newsletter }
+  - { from: approve, to: send, kind: start, label: "[yes]" }
+  - { from: send, to: record, kind: data, label: sent }

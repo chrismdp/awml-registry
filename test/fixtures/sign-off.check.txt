@@ -1,0 +1,1 @@
+sign-off.yaml: the line from "send" to "record" goes from outside action "send" into context "record": an outside action changes only what's outside the system, so draw a recorded sign-off as a review whose [yes] leads to a code do step that writes it, or, where it's given outside the system, as a connector that a bring-in step reads

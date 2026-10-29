@@ -34,7 +34,7 @@ import { laidOut } from "./drawn";
 // A workflow that the fit can judge: one scope any company may process, a
 // trigger that waits up to an hour, a note kept in the scope and a step a
 // person takes, each labelled so a test can find it on a page.
-const workflow = (title: string, words: string) => `awml: "0.8"
+const workflow = (title: string, words: string) => `awml: "0.9"
 title: ${title}
 scopes:
   - { id: home, label: "home: the family", processing: any }
@@ -430,7 +430,7 @@ describe("a system's page", () => {
 
   it("draws a part two members share once, by the ref between them, and says who shares it", async () => {
     const { ana } = await world();
-    const meals = `awml: "0.8"
+    const meals = `awml: "0.9"
 title: Meals
 scopes:
   - { id: home, label: "home: the family", processing: any }
@@ -858,27 +858,39 @@ describe("a system whose members start one another", () => {
     expect(order.referredBy.map((r) => [`${r.owner}/${r.slug}`, r.parts])).toEqual([["acme/bakery-stock", ["low"]]]);
   });
 
-  it("refuses a stock count whose untrusted text starts the supplier order with nothing to stop it or accept the risk", async () => {
-    const ana = await person("ana");
-    await orgWith("acme", ana);
+  // Untrusted text that reaches an outside action with nothing to stop it is an error from AWML
+  // 0.9, a line that breaks a rule in a valid drawing (#100), so the stock count is taken, saying
+  // so, and drawn on the map with the order it starts.
+  it("takes a stock count whose untrusted text starts the supplier order with nothing to stop it, as a drawing with an error, and draws it on the map", async () => {
+    const reaches =
+      'untrusted text from part "close" reaches outside action "start" with nothing to stop it or accept the risk: ' +
+      "a review, a person's own step or a code step marked cleans on the way would stop it, or a standing approval in front of the action would accept the risk";
+    const { ana: owner } = await bakery(marked(example("bakery-stock.yaml")));
     const res = await request("POST", "/api/v1/acme/bakery-stock/versions", {
-      as: { token: ana.token },
-      json: { workflow: marked(example("bakery-stock.yaml")), visibility: "private" },
+      as: { token: owner.token },
+      json: { workflow: marked(example("bakery-stock.yaml")) },
     });
-    expect(res.status).toBe(422);
-    expect((await res.json()).errors).toEqual([
-      'workflow: untrusted text from part "close" reaches outside action "start" with nothing to stop it or accept the risk: ' +
-        "a review, a person's own step or a code step marked cleans on the way would stop it, or a standing approval in front of the action would accept the risk",
-    ]);
+    expect(res.status).toBe(201);
+    expect((await res.json()).errors).toEqual([{ check: "untrusted.outside", message: reaches }]);
+
+    const map = await tab("acme", "bakery", "map", owner);
+    expect(map.html).not.toContain("not drawn");
+    const { panel } = (await as(owner, () => loadSystem("acme", "bakery", "latest", "map"))) as Awaited<ReturnType<typeof loadSystem>>;
+    if (panel.tab !== "map" || !panel.drawing) throw new Error("no map");
+    expect(laidOut(panel.drawing).full.scopes.map((sc) => sc.workflow).filter(Boolean)).toEqual(["acme/bakery-stock", "acme/bakery-order"]);
+    const checksTab = /<a [^>]*\brole="tab"[^>]*>(?:(?!<\/a>).)*Checks(?:(?!<\/a>).)*<\/a>/.exec(map.html)![0];
+    expect(checksTab).toContain('<svg class="warning-mark"');
+    expect(checksTab.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).toBe("Checks 1 error");
   });
 
-  it("follows untrusted text past an accepted risk into the workflow it starts, a mistake there on Checks, and not for a file checked alone", async () => {
+  it("follows untrusted text past an accepted risk into the workflow it starts, an error there on Checks, and not for a file checked alone", async () => {
     const { ana } = await bakery(untrusted(example("bakery-stock.yaml")), unreviewed(example("bakery-order.yaml")));
     const reached = "untrusted text from part &quot;close&quot; in acme/bakery-stock.yaml reaches outside action &quot;place&quot;";
     const checks = await tab("acme", "bakery", "checks", ana);
     const order = checks.html.slice(checks.html.indexOf("acme/bakery-order.yaml"));
     expect(order).toContain(reached);
     expect(checks.html).toContain('<li data-check="untrusted.outside">');
+    expect(order).toContain('<span class="badge error"><svg class="warning-mark"');
     expect(checks.html).not.toContain("warn.untrusted-outside");
     const waits = (await tab("acme", "bakery", "who-waits", ana)).html;
     expect(waits).toContain("<h2>Where untrusted text reaches</h2>");

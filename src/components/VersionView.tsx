@@ -9,7 +9,7 @@ import type { ListedSystem } from "@/server/systems";
 import { fork } from "@/app/[owner]/[slug]/actions";
 import { names, stepCount } from "@/server/summary";
 import { CURRENT_AWML } from "@/server/awml-file";
-import { Checks, ConvertNotes, mistakesIn, Tick, type CheckedFile } from "./Checks";
+import { Checks, ChecksMark, ConvertNotes, mistakesIn, type CheckedFile } from "./Checks";
 import { ConvertedNote } from "./ConvertedNote";
 import { CopyButton } from "./CopyButton";
 import { ForkForm } from "./ForkForm";
@@ -63,13 +63,13 @@ export type VersionViewProps = {
   // The systems the viewer may see whose latest version has this workflow.
   systems: ListedSystem[];
   // The shown file drawn, laid out by the server, or why the server didn't
-  // lay it out, or null when it is not a drawing view or the file has
-  // mistakes AWML will not draw.
+  // lay it out, or null when it is not a drawing view or the file is
+  // invalid, which AWML will not draw.
   drawing: Drawings | Undrawn | null;
-  // How many mistakes the drawn file has alone: only lines that break a rule,
-  // such as untrusted text reaching an outside action nothing stops, which
-  // the drawing draws red (#83). Its refs' mistakes aren't counted.
-  drawnMistakes: number;
+  // How many errors the drawn file has alone (AWML 0.9, #100): the lines that
+  // break a rule, such as untrusted text reaching an outside action nothing
+  // stops, which the drawing draws red (#83). Its refs' errors aren't counted.
+  drawnErrors: number;
   summary: Summary;
   versions: ListedVersion[];
 };
@@ -83,7 +83,6 @@ const TAB: Record<PageView, string> = {
 
 export function VersionView(p: VersionViewProps) {
   const base = `/${p.owner}/${p.slug}`;
-  const mistakes = mistakesIn(p.checks);
   const latest = p.versions[0]?.number ?? p.number;
   const s = p.summary;
   const { publishingLabels } = names(s);
@@ -95,18 +94,7 @@ export function VersionView(p: VersionViewProps) {
       {tabs.map((view) => (
         <Link key={view} role="tab" href={`${p.address}/${view}`} aria-selected={view === p.shown} scroll={false}>
           {TAB[view]}
-          {view === "checks" &&
-            (mistakes === 0 ? (
-              <>
-                <Tick />
-                <span className="hidden-label">No mistakes</span>
-              </>
-            ) : (
-              <>
-                <span className="tab-count">{mistakes}</span>
-                <span className="hidden-label">{mistakes === 1 ? "mistake" : "mistakes"}</span>
-              </>
-            ))}
+          {view === "checks" && <ChecksMark files={p.checks} />}
         </Link>
       ))}
     </div>
@@ -202,9 +190,9 @@ export function VersionView(p: VersionViewProps) {
                 <p className="cannot-draw">{undrawnText(p.drawing, "workflow")}</p>
               ) : p.drawing ? (
                 <>
-                  {p.drawnMistakes > 0 && (
-                    <p className="drawn-mistakes">
-                      {p.drawnFrom}.yaml has {count(p.drawnMistakes, "mistake", "mistakes")}, drawn in red.{" "}
+                  {p.drawnErrors > 0 && (
+                    <p className="drawn-errors">
+                      {p.drawnFrom}.yaml has {count(p.drawnErrors, "error", "errors")}, drawn in red.{" "}
                       <a href={`${p.address}/checks`}>See Checks.</a>
                     </p>
                   )}
@@ -379,7 +367,8 @@ function Implementations({ implementations }: { implementations: VersionViewProp
   );
 }
 
-// In place of a drawing of a file that has mistakes, which AWML will not draw.
+// In place of a drawing of a file that has mistakes that make it invalid,
+// which AWML will not draw.
 function CannotDraw({ file, checks }: { file: CheckedFile; checks: string }) {
   return (
     <p className="cannot-draw">

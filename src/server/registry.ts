@@ -54,7 +54,7 @@ async function readable(db: Db, viewer: Viewer, ownerSlug: string, slug: string)
   return { owner, workflow: w };
 }
 
-// The one file a push sends: an AWML 0.8 workflow, as `workflow`, or alone
+// The one file a push sends: an AWML 0.9 workflow, as `workflow`, or alone
 // as `security`, as awml push 0.4.0 sent it. Anything marked as an older
 // AWML is refused with a 400 that says how to convert it, whichever field it
 // came in.
@@ -67,29 +67,35 @@ function fileFrom(body: PushBody): Result<{ file: string }> {
     sent.push(text);
   }
   if (sent.some(isOlderAwml)) return refuse(400, WORKFLOW_IS_TOO_OLD);
-  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.8 file as workflow.");
+  if (sent.length === 0) return refuse(422, "Send the workflow's AWML 0.9 file as workflow.");
   if (sent.length > 1)
-    return refuse(422, "Send one file, as workflow: an AWML 0.8 workflow holds its design and its implementations.");
+    return refuse(422, "Send one file, as workflow: an AWML 0.9 workflow holds its design and its implementations.");
   return { ok: true, file: sent[0] };
 }
 
-// The mistakes `awml check` finds in the file, each with "workflow: " in
-// front, and the title it gives.
+// What `awml check` finds in the file (AWML 0.9, #100): the mistakes that
+// make it invalid, each with "workflow: " in front, which refuse a push; its
+// errors, the lines that break a rule, which a drawing with errors is stored
+// with and drawn with, red; what the version's check result records, its
+// errors, since it is valid; and the title it gives.
 async function checkFile(file: string) {
-  const found = await engine.check(file);
-  const errors = found.map((e) => `workflow: ${e}`);
-  const doc = found.length ? null : readYaml(file);
+  const invalid = await engine.unsound(file);
+  const mistakes = invalid.map((e) => `workflow: ${e}`);
+  const doc = invalid.length ? null : readYaml(file);
   if (doc?.platform !== undefined && doc?.parts === undefined)
-    errors.push("workflow: this is a platform description, not a workflow. Push it as a platform.");
-  return { errors, check: { workflow: found }, title: doc?.title === undefined ? undefined : String(doc.title) };
+    mistakes.push("workflow: this is a platform description, not a workflow. Push it as a platform.");
+  const errors = await engine.errors(file);
+  return { mistakes, errors, check: { workflow: errors }, title: doc?.title === undefined ? undefined : String(doc.title) };
 }
 
-// The mistakes in a workflow's file, the same a push is refused for. It needs
-// no account and saves nothing.
-export async function checkWorkflow(body: PushBody): Promise<Result<{ mistakes: string[] }>> {
+// What a push of a workflow's file would find: the mistakes that make it
+// invalid, which a push is refused for, and its errors, which a push keeps,
+// each with "workflow: " in front. It needs no account and saves nothing.
+export async function checkWorkflow(body: PushBody): Promise<Result<{ mistakes: string[]; errors: string[] }>> {
   const read = fileFrom(body);
   if (!read.ok) return read;
-  return { ok: true, mistakes: (await checkFile(read.file)).errors };
+  const { mistakes, errors } = await checkFile(read.file);
+  return { ok: true, mistakes, errors: errors.map((e) => `workflow: ${e}`) };
 }
 
 async function notePrivateView(db: Db, viewer: Viewer, owner: Owner, w: Workflow, target: string) {
@@ -114,12 +120,21 @@ async function roomForPrivate(db: Db, owner: Owner & { type: "user" }): Promise<
 }
 
 // A warning AWML gave the file pushed, by the id of the check that gave it,
-// such as warn.several-workflows. A warning never refuses a push.
+// such as warn.several-workflows. A warning never refuses a push. An error,
+// a line that breaks a rule, such as untrusted.outside, is given the same way
+// and never refuses one either (AWML 0.9, #100).
 export type PushWarning = { check: string; message: string };
 
 // A version saved, each path ref its push rewrote as owner/slug#id, and the
-// warnings its checks gave.
-type Pushed = Result<{ owner: string; slug: string; number: number; rewrites: Rewrite[]; warnings: PushWarning[] }>;
+// warnings and errors its checks gave.
+type Pushed = Result<{
+  owner: string;
+  slug: string;
+  number: number;
+  rewrites: Rewrite[];
+  warnings: PushWarning[];
+  errors: PushWarning[];
+}>;
 
 export async function pushVersion(
   db: Db,
@@ -169,16 +184,17 @@ async function saveVersion(
     if (!room.ok) return room;
   }
 
-  const { errors, check, title } = await checkFile(file);
-  if (errors.length) return refuse(422, ...errors);
+  // Only an invalid file is refused: a drawing with errors is valid, and kept.
+  const { mistakes, check, title } = await checkFile(file);
+  if (mistakes.length) return refuse(422, ...mistakes);
   let given: Named[] = [];
   if (refs.length) {
     const named = await namedAtPush(db, owner, slug, visibility, refs);
     if (!named.ok) return named;
     given = named.given;
     const listed = await engine.checksWith({ file: refPath(owner.slug, slug), source: file }, named.given);
-    const mistakes = listed.filter((c) => c.result === "fail").flatMap((c) => c.mistakes);
-    if (mistakes.length) return refuse(422, ...mistakes.map((m) => `workflow: ${m}`));
+    const invalid = listed.filter((c) => c.result === "fail").flatMap((c) => c.mistakes);
+    if (invalid.length) return refuse(422, ...invalid.map((m) => `workflow: ${m}`));
   }
 
   // Whether each ref starts the workflow it names (AWML 0.7): its part is an
@@ -258,8 +274,9 @@ async function saveVersion(
   }
   await db.update(workflow).set({ title: title!, updatedAt: new Date() }).where(eq(workflow.id, w.id));
   if (owner.type === "organisation") await record(db, owner.id, viewer.id, "push", `${owner.slug}/${slug} v${number}`);
-  const warnings = checks.checks.flatMap((c) => (c.result === "warn" ? c.mistakes.map((message) => ({ check: c.id, message })) : []));
-  return { ok: true, owner: owner.slug, slug, number, rewrites, warnings };
+  const found = (result: "warn" | "error") =>
+    checks.checks.flatMap((c) => (c.result === result ? c.mistakes.map((message) => ({ check: c.id, message })) : []));
+  return { ok: true, owner: owner.slug, slug, number, rewrites, warnings: found("warn"), errors: found("error") };
 }
 
 export type ForkBody = { owner?: unknown; slug?: unknown; visibility?: unknown; version?: unknown };

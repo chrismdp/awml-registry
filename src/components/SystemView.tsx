@@ -5,7 +5,7 @@ import type { SystemTab } from "@/server/page";
 import type { PartLink } from "@/server/part-links";
 import type { Visibility } from "@/server/push";
 import { names } from "@/server/summary";
-import { Checks, mistakesIn, Tick, type CheckedFile } from "./Checks";
+import { Checks, ChecksMark, type CheckedFile } from "./Checks";
 import { Drawing } from "./Drawing";
 import { undrawnText, type Drawings, type Undrawn } from "./flow/drawing";
 import { Versions, type ListedVersion } from "./VersionList";
@@ -63,7 +63,6 @@ const markdown = new MarkdownIt("default", { html: false });
 export function SystemView(p: SystemViewProps) {
   const base = `/${p.owner}/systems/${p.slug}`;
   const latest = p.versions[0]?.number ?? p.number;
-  const mistakes = mistakesIn(p.checks);
   const tabs = Object.keys(TAB) as SystemTab[];
   return (
     <article>
@@ -99,18 +98,7 @@ export function SystemView(p: SystemViewProps) {
             {tabs.map((tab) => (
               <a key={tab} role="tab" href={tab === "map" ? p.address : `${p.address}/${tab}`} aria-selected={tab === p.tab}>
                 {TAB[tab]}
-                {tab === "checks" &&
-                  (mistakes === 0 ? (
-                    <>
-                      <Tick />
-                      <span className="hidden-label">No mistakes</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="tab-count">{mistakes}</span>
-                      <span className="hidden-label">{mistakes === 1 ? "mistake" : "mistakes"}</span>
-                    </>
-                  ))}
+                {tab === "checks" && <ChecksMark files={p.checks} />}
               </a>
             ))}
           </div>
@@ -144,8 +132,8 @@ export function SystemView(p: SystemViewProps) {
             </ul>
             {p.members.some((m) => m.state === "found" && !m.drawn) && (
               <p className="after">
-                A workflow that doesn&apos;t pass check is not drawn, and is left out of the map, who waits and where it
-                runs. <a href={`${p.address}/checks`}>See Checks.</a>
+                A workflow that is invalid is not drawn, and is left out of the map, who waits and where it runs. A
+                drawing with errors is drawn, its errors red. <a href={`${p.address}/checks`}>See Checks.</a>
               </p>
             )}
           </section>

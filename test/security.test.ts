@@ -426,7 +426,7 @@ describe("The edition hook", () => {
 // Private platforms follow the private workflow rules. Org "acme" keeps a
 // private platform, its back office, and org "beta" keeps one of its own,
 // which every workflow here would fit, so a fit that used it would show it.
-const backOffice = `awml: "0.8"
+const backOffice = `awml: "0.9"
 platform: { id: back-office, label: "Acme's back office" }
 off_for_up_to: PT0S
 steps: code
@@ -514,6 +514,12 @@ describe("Private platforms", () => {
       expect(results.map((r: { platform: string }) => r.platform).sort()).toEqual(["acme/back-office", "beta/open-box"]);
       expect(results.find((r: { platform: string }) => r.platform === "acme/back-office")).toMatchObject({ fits: true });
       expect(await auditRows("private_view")).toEqual(["platforms/acme/back-office v1"]);
+      // Each part, too, is judged against them (#100).
+      const parts = await request("POST", "/api/v1/fit", { as: { token: mo.token }, json: { file: clientEmail, parts: true } });
+      const judged = (await parts.json()).parts as { parts: { platforms: string[] }[]; options: { platforms: string[] }[] };
+      expect(judged.options).toContainEqual(expect.objectContaining({ platforms: ["acme/back-office"] }));
+      expect(judged.parts.every((p) => p.platforms.includes("acme/back-office"))).toBe(true);
+      expect(await auditRows("private_view")).toEqual(["platforms/acme/back-office v1", "platforms/acme/back-office v1"]);
     });
   });
 
@@ -647,26 +653,47 @@ describe("Private platforms", () => {
         [mo, ["acme/back-office", "beta/open-box"]],
         [nell, ["beta/open-box"]],
       ] as const) {
-        for (const body of [{ file: clientEmail }, { workflow: `${ana.username}/client-email` }]) {
+        for (const body of [
+          { file: clientEmail },
+          { workflow: `${ana.username}/client-email` },
+          { file: clientEmail, parts: true },
+          { workflow: `${ana.username}/client-email`, parts: true },
+        ]) {
           const res = await request("POST", "/api/v1/fit", { as: { token: who.token }, json: body });
           const text = await res.text();
           expect(res.status).toBe(200);
-          const results = JSON.parse(text).results as { platform: string }[];
+          const answer = JSON.parse(text);
+          const results = answer.results as { platform: string }[];
           expect(results.map((r) => r.platform).sort()).toEqual(seen);
+          // Each part's fit names only the platforms the fit judged (#100).
+          if ("parts" in body) {
+            const parts = answer.parts as {
+              parts: { platforms: string[]; reasons: { platform: string }[]; models: Record<string, string[]> }[];
+              options: { platforms: string[]; placement: { platforms: string[] }[] }[];
+            };
+            const named = [
+              ...parts.parts.flatMap((p) => [...p.platforms, ...p.reasons.map((r) => r.platform), ...Object.keys(p.models)]),
+              ...parts.options.flatMap((o) => [...o.platforms, ...o.placement.flatMap((p) => p.platforms)]),
+            ];
+            expect(named.length).toBeGreaterThan(0);
+            expect([...new Set(named)].sort()).toEqual(seen);
+          }
           for (const secret of ["beta/vault", "beta-vault", "Beta's vault server"]) expect(text).not.toContain(secret);
         }
       }
-      const named = await request("POST", "/api/v1/fit", {
-        as: { token: mo.token },
-        json: { file: clientEmail, platforms: ["beta/vault"] },
-      });
-      const missing = await request("POST", "/api/v1/fit", {
-        as: { token: mo.token },
-        json: { file: clientEmail, platforms: ["beta/nothing-here"] },
-      });
-      expect(named.status).toBe(404);
-      expect((await named.text()).replace("vault", "nothing-here")).toBe(await missing.text());
-      expect(await auditRows("private_view")).toEqual(["platforms/acme/back-office v1", "platforms/acme/back-office v1"]);
+      for (const parts of [undefined, true]) {
+        const named = await request("POST", "/api/v1/fit", {
+          as: { token: mo.token },
+          json: { file: clientEmail, platforms: ["beta/vault"], parts },
+        });
+        const missing = await request("POST", "/api/v1/fit", {
+          as: { token: mo.token },
+          json: { file: clientEmail, platforms: ["beta/nothing-here"], parts },
+        });
+        expect(named.status).toBe(404);
+        expect((await named.text()).replace("vault", "nothing-here")).toBe(await missing.text());
+      }
+      expect(await auditRows("private_view")).toEqual(Array(4).fill("platforms/acme/back-office v1"));
     });
   });
 

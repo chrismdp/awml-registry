@@ -8,9 +8,14 @@ export type NamedSource = { file: string; source: string };
 export type Sources = string | NamedSource | (string | NamedSource)[];
 
 export interface AWML {
+  // What awml check reports of a file, warnings aside: its errors, then the
+  // mistakes that make it invalid.
   check(source: string): string[];
-  // The mistakes that stop a file being drawn: every one check gives, except a
-  // line that breaks a rule, which draw draws red.
+  // A file's errors: the lines that break a rule, which draw draws red. A
+  // drawing with errors is valid.
+  errors(source: string): string[];
+  // The mistakes that make a file invalid, so that it can't be read or drawn:
+  // every one check gives, except an error.
   unsound(source: string): string[];
   warnings(source: string): string[];
   // Every check, as awml check --json lists them, for files given as { file, source }.
@@ -25,6 +30,11 @@ export interface AWML {
   // implementation's placement, block by block.
   fitJSON(sources: Sources, implementation?: string): string;
   fit(sources: Sources, implementation?: string): unknown;
+  // Workflows first, then platform descriptions, as awml fit --parts --json:
+  // each part judged alone against each platform, and each option of
+  // platforms that between them hold every part with none to spare.
+  fitPartsJSON(sources: Sources): string;
+  fitParts(sources: Sources): unknown;
   // The design's security view, or with an implementation its platform view.
   // Given several workflows, the map: one box per workflow, the parts they
   // share drawn once.
@@ -39,13 +49,16 @@ export interface AWML {
   // its platform view joined, into one file of the current version, as awml
   // convert does; a current file comes back unchanged. Throws what stops it.
   // When it notes something it couldn't carry over, or the current rules find
-  // mistakes in the result, it throws them too, and the error's `notes` and
+  // the result invalid, it throws them too, and the error's `notes` and
   // `mistakes` hold each and its `converted` the whole file, which awml
-  // convert still writes.
+  // convert still writes. A result with errors is valid, so they are left to
+  // check. A workflow with no description takes the comment block its file
+  // starts with as its description.
   convert(sources: string | string[], implementation?: string): string;
 }
 
-// What convert throws when it converted the file but has notes or mistakes.
+// What convert throws when it converted the file but has notes, or mistakes
+// that make it invalid.
 export type ConvertError = Error & { notes?: string[]; mistakes?: string[]; converted?: string };
 
 export function createAWML(source: WebAssembly.Module | BufferSource | Response): Promise<AWML>;

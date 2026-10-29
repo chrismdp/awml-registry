@@ -1,0 +1,2 @@
+red-line.yaml: error: part "write" leads to outside action "send", but its op is draft: only a do step leads to an outside action
+red-line.yaml: error: outside action "send" is Ask, but part "write" leads to it with no person in between: put a review or a standing approval in front of it, or have a person's own do step take it

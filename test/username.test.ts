@@ -534,6 +534,7 @@ describe("old names on /mcp", () => {
       url: `${BASE}/ana-cooks/dinners`,
       rewrites: [],
       warnings: [],
+      errors: [],
     });
     const added = await call("add_platform", { owner: "ana", slug: "worker", description: worker }, ana.token);
     expect(added.data).toEqual({

@@ -38,7 +38,7 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 // the build writes, which engine:update records only once it has built them.
 function problems(pin, outputs = true) {
   const found = [];
-  if (!/^v\d+\.\d+\.\d+$/.test(pin.tag ?? "")) found.push(`tag "${pin.tag}" isn't a release such as v0.8.0`);
+  if (!/^v\d+\.\d+\.\d+$/.test(pin.tag ?? "")) found.push(`tag "${pin.tag}" isn't a release such as v0.9.0`);
   if (!/^[0-9a-f]{40}$/.test(pin.commit ?? "")) found.push(`commit "${pin.commit}" isn't a full commit`);
   if (!/^go\d+\.\d+\.\d+$/.test(pin.go?.version ?? "")) found.push(`go.version "${pin.go?.version}" isn't a Go release such as go1.22.12`);
   for (const m of MACHINES) if (!SHA256.test(pin.go?.sha256?.[m] ?? "")) found.push(`go.sha256 has no SHA-256 for ${m}`);

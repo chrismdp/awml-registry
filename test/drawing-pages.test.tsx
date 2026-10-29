@@ -22,7 +22,7 @@ async function push(owner: string, slug: string, as: Who, file: string) {
 }
 
 // A workflow of n steps, one after another, each labelled with `words`.
-const steps = (title: string, words: string, n: number) => `awml: "0.8"
+const steps = (title: string, words: string, n: number) => `awml: "0.9"
 title: ${title}
 scopes:
   - { id: home, label: "home: the family" }

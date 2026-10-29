@@ -6,7 +6,7 @@ import { createAWML, type AWML, type ConvertError } from "../../vendor/awml/awml
 import pin from "../../vendor/awml/version.json";
 import { loadAwmlModule } from "@/engine/module";
 import { memoise } from "./memo";
-import type { Engine, Files, FitReport, ListedCheck, Named, Summary } from "./types";
+import type { Engine, Files, FitReport, ListedCheck, Named, PartsReport, Summary } from "./types";
 
 // One Go runtime per process or Worker isolate, started on first use. A start
 // that fails, such as before `npm run engine:build`, isn't kept, so the next
@@ -26,30 +26,37 @@ function awml() {
 type Listed = {
   checks: (Omit<ListedCheck, "skippedBecause" | "mistakes"> & {
     skipped_because?: string;
-    mistakes: { file?: string; message: string }[];
+    mistakes: { file?: string; message: string; severity?: "invalid" | "error" | "warning" }[];
   })[];
 };
 
-// Every check AWML runs on the files given together, with the mistakes and
-// warnings it finds in the first. A check that found some only in the others
-// passes for the first.
+// Every check AWML runs on the files given together, with the mistakes,
+// errors and warnings it finds in the first. A check that found some only in
+// the others passes for the first.
 async function listChecks(files: Named[]): Promise<ListedCheck[]> {
   return checksFor(JSON.parse((await awml()).checksJSON(files)) as Listed, files[0].file, true);
 }
 
 // The checks listed for files given together, as they fall to one of them: a
-// mistake that names no file falls to the first.
+// mistake that names no file falls to the first. A check fails a file only
+// for a mistake that makes that file invalid, and is an error where all it
+// found in that file are errors, as AWML 0.9 says of each finding by its
+// severity.
 function checksFor(listed: Listed, file: string, first: boolean): ListedCheck[] {
   return listed.checks.map((c) => {
-    const mistakes = c.mistakes.filter((m) => (m.file === undefined ? first : m.file === file)).map((m) => m.message);
-    const result = (c.result === "fail" || c.result === "warn") && mistakes.length === 0 ? "pass" : c.result;
+    const found = c.mistakes.filter((m) => (m.file === undefined ? first : m.file === file));
+    let result = c.result;
+    if (result === "fail" || result === "error" || result === "warn") {
+      if (found.length === 0) result = "pass";
+      else if (result !== "warn") result = found.some((m) => m.severity !== "error") ? "fail" : "error";
+    }
     return {
       id: c.id,
       name: c.name,
       about: c.about,
       result,
       ...(c.skipped_because === undefined ? {} : { skippedBecause: c.skipped_because }),
-      mistakes,
+      mistakes: found.map((m) => m.message),
     };
   });
 }
@@ -73,6 +80,7 @@ export const wasmEngine: Engine = {
     }
   }),
   check: memoise(async (yaml: string) => (await awml()).check(yaml)),
+  errors: memoise(async (yaml: string) => (await awml()).errors(yaml)),
   unsound: memoise(async (yaml: string) => (await awml()).unsound(yaml)),
   warnings: memoise(async (yaml: string) => (await awml()).warnings(yaml)),
   checks: memoise(async (yaml: string) => listChecks([{ file: "workflow.yaml", source: yaml }])),
@@ -85,6 +93,10 @@ export const wasmEngine: Engine = {
   fit: memoise(
     async (workflow: string, descriptions: string[], implementation = "") =>
       JSON.parse((await awml()).fitJSON([workflow, ...descriptions], implementation)) as FitReport,
+  ),
+  fitParts: memoise(
+    async (workflow: string, descriptions: string[]) =>
+      JSON.parse((await awml()).fitPartsJSON([workflow, ...descriptions])) as PartsReport,
   ),
   checksAcross: memoise(async (files: Named[]) => {
     const listed = JSON.parse((await awml()).checksJSON(files)) as Listed;

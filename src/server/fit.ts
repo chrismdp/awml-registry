@@ -2,7 +2,7 @@
 // judged by the AWML engine against the platforms the caller may see, and
 // never against any other.
 import type { Db } from "@/db/client";
-import { engine, type FitResult } from "@/engine";
+import { engine, type FitResult, type PartsReport } from "@/engine";
 import { asRead, descriptionAsRead } from "./as-read";
 import {
   blockPlatforms,
@@ -21,7 +21,14 @@ import { readVersion } from "./registry";
 import { refuse, type Result } from "./result";
 import type { Viewer } from "./viewer";
 
-export type FitBody = { workflow?: unknown; file?: unknown; security?: unknown; implementation?: unknown; platforms?: unknown };
+export type FitBody = {
+  workflow?: unknown;
+  file?: unknown;
+  security?: unknown;
+  implementation?: unknown;
+  platforms?: unknown;
+  parts?: unknown;
+};
 
 // One platform's answer, under its registry address and version, with the id
 // and label its description gives.
@@ -37,11 +44,24 @@ export type BlockFit = Omit<FitResult, "platform"> & {
   label: string | null;
 };
 
+// Said beside each option of more than one platform. A platform description
+// doesn't say what its parts can reach on another platform, so the engine
+// judges each part on its own (awml#107).
+export const NOT_JUDGED_ACROSS =
+  "Judged part by part only: whether the parts on these platforms can reach each other isn't judged yet (chrismdp/awml#107).";
+
+// Each part's fit, with `parts` (#100): the engine's answer, as
+// `awml fit --parts --json` gives it, with each platform named as the fit's
+// results name it, owner/slug, and the note beside each option of more than
+// one platform.
+export type PartsFit = Omit<PartsReport, "options"> & { options: (PartsReport["options"][number] & { note?: string })[] };
+
 export type Fit = {
   workflow: { owner: string; slug: string; number: number } | null;
   implementation: string | null;
   results: PlatformFit[] | BlockFit[];
   gaps: string[];
+  parts?: PartsFit;
 };
 
 const REF = /^([^/@\s]+)\/([^/@\s]+)(?:@([1-9]\d{0,8}))?$/;
@@ -54,7 +74,7 @@ function reference(text: string) {
 
 // The workflow the fit judges: a stored version's file, or the security view
 // of one stored before 0.4, as the engine reads it, converted when it is in
-// an older AWML; or a 0.8 file sent as YAML, as `file`, or as `security` as
+// an older AWML; or a 0.9 file sent as YAML, as `file`, or as `security` as
 // clients of the 0.3 API send it. With an implementation, it must be one the
 // workflow has.
 async function design(
@@ -82,8 +102,9 @@ async function design(
     const named = `${v.owner}/${v.slug} v${v.number}`;
     const stored = v.files.workflow !== undefined ? "workflow" : v.files.security !== undefined ? "security" : null;
     if (stored === null) return refuse(422, `${named} has no security view, which the fit needs.`);
+    // Only an invalid file isn't fitted: a drawing with errors is valid.
     const read = await asRead(v.files, stored);
-    const mistakes = "error" in read ? read.error : await engine.check(read.file);
+    const mistakes = "error" in read ? read.error : await engine.unsound(read.file);
     if ("error" in read || mistakes.length) return refuse(422, ...mistakes.map((e) => `${named}: ${e}`));
     const source = read.file;
     const missing = has(source, named);
@@ -97,7 +118,7 @@ async function design(
   }
   if (typeof yaml === "string") {
     if (isOlderAwml(yaml)) return refuse(400, WORKFLOW_IS_TOO_OLD);
-    const found = await engine.check(yaml);
+    const found = await engine.unsound(yaml);
     if (found.length) return refuse(422, ...found.map((e) => `file: ${e}`));
     if (readYaml(yaml)?.parts === undefined)
       return refuse(422, "file: this is a platform description; the fit needs a workflow.");
@@ -106,7 +127,7 @@ async function design(
     return { ok: true, source: yaml, workflow: null, implementation: implementation ?? null };
   }
   if (workflow !== undefined) return refuse(422, "Name the workflow as owner/slug or owner/slug@version.");
-  return refuse(422, "Send a workflow as owner/slug, or its AWML 0.8 file as file.");
+  return refuse(422, "Send a workflow as owner/slug, or its AWML 0.9 file as file.");
 }
 
 type Candidate = {
@@ -157,22 +178,30 @@ async function candidates(db: Db, viewer: Viewer, named: unknown): Promise<Resul
   return { ok: true, platforms };
 }
 
-// Fits a workflow, named as owner/slug[@version] or sent as its 0.8 file,
+// Fits a workflow, named as owner/slug[@version] or sent as its 0.9 file,
 // against the platforms named, or every platform the viewer may see.
 //
 // The design is judged against each platform on its own, so one platform's
 // description never touches another's answer. An implementation is judged
 // block by block, each against the platform whose description its block
 // names, found among those platforms: by its address when the block names
-// owner/platforms/slug, and otherwise by the description's id. Each private
-// platform judged is recorded as viewed in its organisation's audit log.
+// owner/platforms/slug, and otherwise by the description's id. With `parts`,
+// each part of the design is judged on its own against the same platforms
+// as well (see partsOf). Each private platform judged is recorded as viewed
+// in its organisation's audit log.
 export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promise<Result<{ fit: Fit }>> {
+  if (body.parts !== undefined && typeof body.parts !== "boolean") return refuse(422, "parts is true or false.");
+  if (body.parts && body.implementation !== undefined)
+    return refuse(422, "parts judges the design, so it isn't given with implementation.");
   const judged = await design(db, viewer, body);
   if (!judged.ok) return judged;
   const { source, workflow, implementation } = judged;
   const found = await candidates(db, viewer, body.platforms);
   if (!found.ok) return found;
-  const answer = (results: Fit["results"], gaps: string[] = []) => ({ ok: true as const, fit: { workflow, implementation, results, gaps } });
+  const answer = (results: Fit["results"], gaps: string[] = [], parts?: PartsFit) => ({
+    ok: true as const,
+    fit: { workflow, implementation, results, gaps, ...(parts ? { parts } : {}) },
+  });
 
   if (implementation !== null) {
     const named = blockPlatforms(source, implementation);
@@ -204,22 +233,56 @@ export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promis
     return answer(results);
   }
 
+  const parts = body.parts ? await partsOf(source, found.platforms) : undefined;
   const results: PlatformFit[] = [];
   for (const p of found.platforms) {
     const report = await engine.fit(source, [p.description]);
-    if (report.gaps.length) return answer([], report.gaps);
+    if (report.gaps.length) return answer([], report.gaps, parts);
     for (const { platform: id, ...rest } of report.results)
       results.push({ platform: `${p.owner.slug}/${p.slug}`, number: p.number, id, label: p.label, ...rest });
   }
   for (const p of found.platforms) await notePrivatePlatformView(db, viewer, p.owner, p, p.number);
-  return answer(results);
+  return answer(results, [], parts);
+}
+
+// Each part of the design judged on its own against the platforms, all
+// given to the engine together, as `awml fit --parts` judges them, and every
+// option of them that holds every part with none to spare. Each description
+// is given under its registry address, owner/platforms/slug, as its id, so
+// two platforms whose descriptions share an id are both judged, and each is
+// named in the answer as the fit's results name it, owner/slug. Nothing else
+// in the engine's answer changes, but that each option of more than one
+// platform says that whether its parts can reach each other isn't judged.
+// With no platform to judge against, nothing is judged.
+async function partsOf(source: string, platforms: Candidate[]): Promise<PartsFit> {
+  if (platforms.length === 0) return { parts: [], options: [], gaps: [] };
+  const named = new Map(platforms.map((p) => [platformAddress(p.owner.slug, p.slug), `${p.owner.slug}/${p.slug}`]));
+  const report = await engine.fitParts(
+    source,
+    platforms.map((p) => withDescriptionId(p.description, platformAddress(p.owner.slug, p.slug))),
+  );
+  const as = (id: string) => named.get(id) ?? id;
+  return {
+    parts: report.parts.map((p) => ({
+      part: p.part,
+      platforms: p.platforms.map(as),
+      reasons: p.reasons.map((r) => ({ platform: as(r.platform), reasons: r.reasons })),
+      models: Object.fromEntries(Object.entries(p.models).map(([id, companies]) => [as(id), companies])),
+    })),
+    options: report.options.map((o) => ({
+      platforms: o.platforms.map(as),
+      placement: o.placement.map((p) => ({ part: p.part, platforms: p.platforms.map(as) })),
+      ...(o.platforms.length > 1 ? { note: NOT_JUDGED_ACROSS } : {}),
+    })),
+    gaps: report.gaps,
+  };
 }
 
 // AWML's engine takes at least one description, even for an implementation
 // whose blocks name none the caller may see. This one stands in: no block
 // names it, so it judges nothing, and the engine still reports each block
 // that names no platform, and each whose description wasn't given.
-const NO_DESCRIPTION = `awml: "0.8"
+const NO_DESCRIPTION = `awml: "0.9"
 platform: { id: registry-gave-no-description, label: "No description" }
 off_for_up_to: PT0S
 steps: code

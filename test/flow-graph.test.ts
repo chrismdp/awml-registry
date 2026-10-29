@@ -5,7 +5,7 @@ import { parse } from "yaml";
 import { flowOnly, graphOf, readGraph, type EngineGraph, type Graph } from "@/components/flow/graph";
 import { engine } from "@/engine";
 
-// The graph AWML 0.8.0's native `awml graph` prints, as the registry gets it from the engine
+// The graph AWML 0.9.0's native `awml graph` prints, as the registry gets it from the engine
 // (npm run engine:update writes them): the security view of the registry's own factory,
 // chrismdp/issue-to-pull-request, the map of the factory system it is in, the dinners example's
 // security view and its home implementation, and the bakery's map, where one workflow starts

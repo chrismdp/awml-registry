@@ -5,13 +5,16 @@ import type { FileName } from "@/server/registry";
 import { CURRENT_AWML } from "@/server/awml-file";
 import { count } from "./words";
 
-// One check AWML ran on a file, the mistakes it found, none when it passed,
-// and its warnings, which fail nothing. A check AWML listed at push also has
-// its id, what it guards and its result; the one row of a file checked again
-// with `awml check` has none of those.
+// One check AWML ran on a file: the mistakes it found that make the file
+// invalid, none when it passed; its errors, the lines that break a rule in a
+// valid drawing, which the drawing draws red (AWML 0.9, #100); and its
+// warnings, which fail nothing. A check AWML listed at push also has its id,
+// what it guards and its result; the one row of a file checked again with
+// `awml check` has none of those.
 export type CheckRow = {
   name: string;
   mistakes: string[];
+  errors: string[];
   warnings: string[];
   listed?: Pick<ListedCheck, "id" | "about" | "result" | "skippedBecause">;
 };
@@ -32,12 +35,22 @@ export type CheckedFile = {
   notes?: string[];
 };
 
-// The mistakes a row found; a listed check that failed found at least one.
+// The mistakes a row found that make the file invalid; a listed check that
+// failed found at least one.
 const mistakesOf = (row: CheckRow) => Math.max(row.mistakes.length, row.listed?.result === "fail" ? 1 : 0);
 
-// How many mistakes the files' checks found. None means no check failed.
+// The errors a row found; a listed check whose result is error found at least one.
+const errorsOf = (row: CheckRow) => Math.max(row.errors.length, row.listed?.result === "error" ? 1 : 0);
+
+// How many mistakes the files' checks found that make a file invalid. None
+// means no check failed.
 export const mistakesIn = (files: CheckedFile[]) =>
   files.reduce((sum, f) => sum + f.rows.reduce((n, row) => n + mistakesOf(row), 0), 0);
+
+// How many errors the files' checks found: lines that break a rule, which
+// leave a file valid and are drawn red.
+export const errorsIn = (files: CheckedFile[]) =>
+  files.reduce((sum, f) => sum + f.rows.reduce((n, row) => n + errorsOf(row), 0), 0);
 
 export function Tick() {
   return (
@@ -47,10 +60,60 @@ export function Tick() {
   );
 }
 
+// The warning mark beside the checks of a drawing with errors: an amber
+// triangle, as a gap in a drawing is marked, never an emoji.
+export function WarningMark() {
+  return (
+    <svg className="warning-mark" width="15" height="14" viewBox="0 0 15 14" aria-hidden="true">
+      <path d="M7.5 1.5 L13.8 12.5 H1.2 Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M7.5 5.4 V8.6 M7.5 10.6 V10.7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// What a workflow's or a system's Checks tab says beside its name: a tick when
+// no check found anything, how many mistakes make a file invalid, and beside
+// a warning mark, how many errors its drawing draws red.
+export function ChecksMark({ files }: { files: CheckedFile[] }) {
+  const mistakes = mistakesIn(files);
+  const errors = errorsIn(files);
+  if (mistakes === 0 && errors === 0)
+    return (
+      <>
+        <Tick />
+        <span className="hidden-label">No mistakes</span>
+      </>
+    );
+  return (
+    <>
+      {mistakes > 0 && (
+        <>
+          <span className="tab-count">{mistakes}</span>
+          <span className="hidden-label">{mistakes === 1 ? "mistake" : "mistakes"}</span>
+        </>
+      )}
+      {errors > 0 && (
+        <>
+          <WarningMark />
+          <span className="tab-count error">{errors}</span>
+          <span className="hidden-label">{errors === 1 ? "error" : "errors"}</span>
+        </>
+      )}
+    </>
+  );
+}
+
 // What a check's result says beside its name.
 function Result({ row }: { row: CheckRow }) {
   if (row.listed?.result === "skipped") return <span className="badge skipped">Skipped</span>;
   if (mistakesOf(row) > 0) return <span className="badge bad">{count(mistakesOf(row), "mistake", "mistakes")}</span>;
+  if (errorsOf(row) > 0)
+    return (
+      <span className="badge error">
+        <WarningMark />
+        {count(errorsOf(row), "error", "errors")}
+      </span>
+    );
   if (row.listed?.result === "warn") return null;
   return (
     <span className="badge good">
@@ -106,6 +169,9 @@ export function ConvertNotes({ notes }: { notes?: string[] }) {
   );
 }
 
+// What the registry keeps (AWML 0.9, #100).
+const KEPT = "The registry refuses an invalid file, and keeps a drawing with errors, its errors drawn in red.";
+
 // What checking a version's files found, file by file, and the AWML that
 // checked them. A system's page says itself how they were checked, as `intro`.
 export function Checks({
@@ -128,14 +194,14 @@ export function Checks({
         {intro ??
           (listed ? (
             <>
-              AWML checked this file when it was pushed, and the registry refuses a push with any mistake.{" "}
+              AWML checked this file when it was pushed. {KEPT}{" "}
               {now && "It is checked again here, by the AWML this registry runs. "}Here is each check it ran, in the
               order its spec gives them.
             </>
           ) : (
             <>
-              AWML checked each file when it was pushed, and the registry refuses a push with any mistake. Each file is
-              checked again here, by the AWML this registry runs.
+              AWML checked each file when it was pushed. {KEPT} Each file is checked again here, by the AWML this
+              registry runs.
             </>
           ))}
       </p>
@@ -173,6 +239,16 @@ export function Checks({
                       <li key={m}>{m}</li>
                     ))}
                   </ul>
+                )}
+                {row.errors.length > 0 && (
+                  <div className="check-errors">
+                    <p>Errors are lines that break a rule, drawn in red. They don&apos;t make the file invalid.</p>
+                    <ul>
+                      {row.errors.map((e) => (
+                        <li key={e}>{e}</li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
                 {row.warnings.length > 0 && (
                   <div className="check-warnings">

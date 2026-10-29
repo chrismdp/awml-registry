@@ -15,7 +15,7 @@ import * as z from "zod";
 import { getDb, type Db } from "@/db/client";
 import { getAuth } from "./auth";
 import { mcpUrl, ownUrl } from "./http";
-import { fitWorkflow, type Fit } from "./fit";
+import { fitWorkflow, type Fit, type PartsFit } from "./fit";
 import { organisationsOf } from "./organisations";
 import { pushPlatformVersion, readPlatformVersion, searchPlatforms } from "./platforms";
 import { checkWorkflow, explore, forkWorkflow, ownerWorkflows, pushVersion, readVersion } from "./registry";
@@ -98,14 +98,14 @@ const page = (owner: string, slug: string) => ownUrl(`/${owner}/${slug}`);
 const workflowFile = z
   .string()
   .optional()
-  .describe('The workflow\'s one AWML 0.8 file (awml: "0.8"), as YAML text: its design and any implementations');
+  .describe('The workflow\'s one AWML 0.9 file (awml: "0.9"), as YAML text: its design and any implementations');
 // The fields of AWML 0.3's pair, kept so a client that still sends them hears
-// how to convert. A 0.8 file sent alone as security is taken as the workflow.
+// how to convert. A 0.9 file sent alone as security is taken as the workflow.
 const legacyFile = (view: string) =>
   z
     .string()
     .optional()
-    .describe(`Not used: AWML 0.3's ${view} view, which the registry no longer takes. Send the 0.8 file as workflow.`);
+    .describe(`Not used: AWML 0.3's ${view} view, which the registry no longer takes. Send the 0.9 file as workflow.`);
 const owner = z
   .string()
   .describe(
@@ -140,6 +140,9 @@ const listing = (rows: Listed[]) => {
 const platformPage = (owner: string, slug: string, number?: number) =>
   ownUrl(`/${owner}/platforms/${slug}${number === undefined ? "" : `/v/${number}`}`);
 
+// "a", "a and b", "a, b and c".
+const naturalList = (items: string[]) => (items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0]);
+
 // The AI steps that may use the same companies, as `awml fit` says it:
 // "choose, draft and learn may use anthropic".
 function mayUse(models: Record<string, string[]>) {
@@ -148,8 +151,28 @@ function mayUse(models: Record<string, string[]>) {
     const key = companies.join(" and ");
     byCompanies.set(key, [...(byCompanies.get(key) ?? []), step]);
   }
-  const list = (items: string[]) => (items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0]);
-  return [...byCompanies].map(([companies, steps]) => `${list(steps)} may use ${companies}`).join("; ");
+  return [...byCompanies].map(([companies, steps]) => `${naturalList(steps)} may use ${companies}`).join("; ");
+}
+
+// Each part's fit, as `awml fit --parts` says it: the platforms that hold
+// each part and why each other doesn't, then each option with where each
+// part may go in it, and beside an option of several platforms, that whether
+// its parts can reach each other isn't judged.
+function partsText(parts: PartsFit) {
+  const lines = ["Each part alone:"];
+  for (const p of parts.parts)
+    lines.push(
+      `${p.part}: held by ${p.platforms.length ? naturalList(p.platforms) : "none"}` +
+        p.reasons.map((r) => `; not by ${r.platform}: ${r.reasons.join("; ")}`).join(""),
+    );
+  const unheld = parts.parts.filter((p) => p.platforms.length === 0).map((p) => p.part);
+  if (unheld.length) lines.push(`No option: ${naturalList(unheld)} ${unheld.length === 1 ? "is" : "are"} held by no platform.`);
+  for (const o of parts.options)
+    lines.push(
+      `Option: ${naturalList(o.platforms)}: ${o.placement.map((p) => `${p.part} on ${p.platforms.join(" or ")}`).join(", ")}` +
+        (o.note ? `. ${o.note}` : ""),
+    );
+  return lines;
 }
 
 function fitText(fit: Fit) {
@@ -164,6 +187,7 @@ function fitText(fit: Fit) {
     else if (r.fits) lines.push(`${where} fits${Object.keys(r.models).length ? `: ${mayUse(r.models)}` : ""}`);
     else lines.push(`${where} doesn't fit: ${r.reasons.join("; ")}`);
   }
+  if (fit.parts && fit.results.length) lines.push(...partsText(fit.parts));
   return lines.join("\n");
 }
 
@@ -172,8 +196,9 @@ function server(person: Person) {
     { name: "awml-registry", version: "1.0.0" },
     {
       instructions:
-        "The AWML registry stores and draws AWML 0.8 workflows, each one file holding its design and any " +
-        "implementations, and the platforms they can run on. Use check to find mistakes in a workflow's file, " +
+        "The AWML registry stores and draws AWML 0.9 workflows, each one file holding its design and any " +
+        "implementations, and the platforms they can run on. It refuses an invalid file, and keeps a drawing with " +
+        "errors, drawing its errors, the lines that break a rule, in red. Use check to find mistakes and errors in a workflow's file, " +
         "publish to save a new version of owner/slug, fork_workflow to copy a public one into an owner of yours, " +
         "get to read one, list for an " +
         "owner's workflows and search for public ones. Use search_platforms and get_platform to find platforms and " +
@@ -188,18 +213,27 @@ function server(person: Person) {
     {
       title: "Check a workflow",
       description:
-        "Check an AWML 0.8 workflow's file with the registry's AWML engine, the same check `awml check` runs. Gives the mistakes, or none. Saves nothing. The registry takes only AWML 0.8: upgrade an older file with `awml convert workflow.yaml > upgraded.yaml` first.",
+        "Check an AWML 0.9 workflow's file with the registry's AWML engine, the same check `awml check` runs. Gives its mistakes, which make the file invalid, so that publish refuses it, and its errors, the lines that break a rule, which its drawing draws red and publish saves all the same; or none of either. Saves nothing. The registry takes only AWML 0.9: upgrade an older file with `awml convert workflow.yaml > upgraded.yaml` first.",
       inputSchema: z.object({ workflow: workflowFile, security: legacyFile("security"), platform: legacyFile("platform") }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ workflow, security, platform }) => {
       const checked = await checkWorkflow({ workflow, security, platform });
       if (!checked.ok) return refused(checked.errors);
-      const { mistakes } = checked;
-      const text = mistakes.length
-        ? `${mistakes.length} ${mistakes.length === 1 ? "mistake" : "mistakes"}:\n${mistakes.join("\n")}`
-        : "No mistakes.";
-      return answer(text, { mistakes });
+      const { mistakes, errors } = checked;
+      const said: string[] = [];
+      if (mistakes.length)
+        said.push(
+          `${mistakes.length} ${mistakes.length === 1 ? "mistake" : "mistakes"}, so the file is invalid and the registry refuses it:\n${mistakes.join("\n")}`,
+        );
+      else said.push("No mistakes.");
+      if (errors.length)
+        said.push(
+          `${errors.length} ${errors.length === 1 ? "error" : "errors"}, lines that break a rule, which its drawing draws red` +
+            (mistakes.length ? ":" : "; the registry saves it all the same:") +
+            `\n${errors.join("\n")}`,
+        );
+      return answer(said.join(mistakes.length ? "\n" : " "), { mistakes, errors });
     },
   );
 
@@ -208,7 +242,7 @@ function server(person: Person) {
     {
       title: "Publish a workflow",
       description:
-        "Save a new version of the workflow owner/slug from its one AWML 0.8 file. The file is checked first and refused if it has mistakes, and an older AWML is refused: upgrade it with `awml convert workflow.yaml > upgraded.yaml` first. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private. A private one on your own account is seen by you alone; one on an organisation's, by its members. A part's ref to a file alongside, such as shopping.yaml#list, is saved as owner/shopping#list, so publish each file under its name without .yaml; a public workflow may refer only to public ones. Gives the workflow's page, the new version number, each ref rewritten and each warning AWML gave, by its check's id; a warning never refuses a push.",
+        "Save a new version of the workflow owner/slug from its one AWML 0.9 file. The file is checked first and refused if it is invalid, with the mistakes that make it so, and an older AWML is refused: upgrade it with `awml convert workflow.yaml > upgraded.yaml` first. A drawing with errors, lines that break a rule such as untrusted text reaching an outside action with nothing to stop it, is valid: it is saved, and its page draws the errors red. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private. A private one on your own account is seen by you alone; one on an organisation's, by its members. A part's ref to a file alongside, such as shopping.yaml#list, is saved as owner/shopping#list, so publish each file under its name without .yaml; a public workflow may refer only to public ones. Gives the workflow's page, the new version number, each ref rewritten, and each warning and each error AWML gave, by its check's id; neither ever refuses a push.",
       inputSchema: z.object({
         owner,
         slug,
@@ -229,14 +263,19 @@ function server(person: Person) {
       const url = page(pushed.owner, pushed.slug);
       const rewrote = pushed.rewrites.map((r) => `\nRewrote the ref of part ${r.part} from ${r.from} to ${r.to}.`);
       const warned = pushed.warnings.map((w) => `\nWarning, ${w.check}: ${w.message}`);
-      return answer(`Saved version ${pushed.number} of ${pushed.owner}/${pushed.slug}: ${url}${rewrote.join("")}${warned.join("")}`, {
-        owner: pushed.owner,
-        slug: pushed.slug,
-        number: pushed.number,
-        url,
-        rewrites: pushed.rewrites,
-        warnings: pushed.warnings,
-      });
+      const erred = pushed.errors.map((e) => `\nError, ${e.check}: ${e.message}`);
+      return answer(
+        `Saved version ${pushed.number} of ${pushed.owner}/${pushed.slug}: ${url}${rewrote.join("")}${warned.join("")}${erred.join("")}`,
+        {
+          owner: pushed.owner,
+          slug: pushed.slug,
+          number: pushed.number,
+          url,
+          rewrites: pushed.rewrites,
+          warnings: pushed.warnings,
+          errors: pushed.errors,
+        },
+      );
     },
   );
 
@@ -427,7 +466,7 @@ function server(person: Person) {
         description: z
           .string()
           .describe(
-            'The platform description, as YAML: awml (which must be "0.8"), platform, off_for_up_to, steps, agents, calls, holds. The platform id may be owner/platforms/slug, this platform\'s own address, so that blocks can name it',
+            'The platform description, as YAML: awml (which must be "0.9"), platform, off_for_up_to, steps, agents, calls, holds. The platform id may be owner/platforms/slug, this platform\'s own address, so that blocks can name it',
           ),
         recipe: z.string().optional().describe("The install recipe, as Markdown. Never a secret."),
         visibility: z
@@ -489,17 +528,21 @@ function server(person: Person) {
     {
       title: "Find where a workflow can run",
       description:
-        "Judge a workflow against platforms with the AWML engine, as `awml fit` does: for each platform, whether the workflow's design fits, every reason it doesn't, and the companies each AI step may use there. With an implementation, as `awml fit --implementation` does, judges that implementation's placement instead, each block against the platform whose description it names: by the description's id, or by the platform's address, owner/platforms/slug. Name the workflow as owner/slug or owner/slug@version, or send its AWML 0.8 file as YAML. Name the platforms as owner/slug or owner/slug@version, or leave them out to fit against every platform you may see. When the workflow doesn't say all the fit needs, gives the gaps instead.",
+        "Judge a workflow against platforms with the AWML engine, as `awml fit` does: for each platform, whether the workflow's design fits, every reason it doesn't, and the companies each AI step may use there. With an implementation, as `awml fit --implementation` does, judges that implementation's placement instead, each block against the platform whose description it names: by the description's id, or by the platform's address, owner/platforms/slug. With parts, as `awml fit --parts` does, also judges each trigger, step that runs on a platform, context and connector of the design on its own, giving the platforms that can hold it and why each other can't, and every option: each set of the platforms that between them hold every part with none to spare, smallest first, with where each part may go in it. Parts are judged one by one, so whether the parts of an option on several platforms can reach each other isn't judged yet (awml#107), and each such option says so in its note. Name the workflow as owner/slug or owner/slug@version, or send its AWML 0.9 file as YAML. A drawing with errors is fitted, and an invalid file refused. Name the platforms as owner/slug or owner/slug@version, or leave them out to fit against every platform you may see. When the workflow doesn't say all the fit needs, gives the gaps instead.",
       inputSchema: z.object({
         workflow: z.string().optional().describe("owner/slug or owner/slug@version"),
-        file: z.string().optional().describe("The workflow's AWML 0.8 file, as YAML, in place of a workflow"),
+        file: z.string().optional().describe("The workflow's AWML 0.9 file, as YAML, in place of a workflow"),
         security: legacyFile("security"),
         implementation: z.string().optional().describe("The id of one of the workflow's implementations, to judge its placement"),
         platforms: z.array(z.string()).optional().describe("Platforms as owner/slug or owner/slug@version. Default: every one you may see."),
+        parts: z
+          .boolean()
+          .optional()
+          .describe("Also judge each part of the design on its own, and give every option of platforms that holds them all. Not with implementation."),
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ workflow, file, security, implementation, platforms }) => {
+    async ({ workflow, file, security, implementation, platforms, parts }) => {
       const db = await getDb();
       const fitted = await fitWorkflow(db, person, {
         workflow: workflow === undefined ? undefined : await currentRef(db, workflow),
@@ -507,6 +550,7 @@ function server(person: Person) {
         security,
         implementation,
         platforms: platforms && (await Promise.all(platforms.map((p) => currentRef(db, p)))),
+        parts,
       });
       if (!fitted.ok) return refused(fitted.errors);
       return answer(fitText(fitted.fit), fitted.fit);
