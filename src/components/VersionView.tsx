@@ -9,7 +9,7 @@ import type { ListedSystem } from "@/server/systems";
 import { fork } from "@/app/[owner]/[slug]/actions";
 import { names, stepCount } from "@/server/summary";
 import { CURRENT_AWML } from "@/server/awml-file";
-import { Checks, ChecksMark, ConvertNotes, mistakesIn, type CheckedFile } from "./Checks";
+import { Checks, ChecksMark, ConvertNotes, mistakeMessages, mistakesIn, type CheckedFile } from "./Checks";
 import { ConvertedNote } from "./ConvertedNote";
 import { CopyButton } from "./CopyButton";
 import { ForkForm } from "./ForkForm";
@@ -368,13 +368,25 @@ function Implementations({ implementations }: { implementations: VersionViewProp
 }
 
 // In place of a drawing of a file that has mistakes that make it invalid,
-// which AWML will not draw.
+// which AWML will not draw: how many, and each in the words of its check, so
+// its author can redraw it, such as a version stored in an older AWML that a
+// newer one finds invalid (#102).
 function CannotDraw({ file, checks }: { file: CheckedFile; checks: string }) {
+  const messages = mistakeMessages(file);
   return (
-    <p className="cannot-draw">
-      {file.name}.yaml has {count(mistakesIn([file]), "mistake", "mistakes")}, so it cannot be drawn.{" "}
-      <a href={checks}>See Checks.</a>
-    </p>
+    <>
+      <p className="cannot-draw">
+        {file.name}.yaml has {count(mistakesIn([file]), "mistake", "mistakes")}, so it cannot be drawn.{" "}
+        <a href={checks}>See Checks.</a>
+      </p>
+      {messages.length > 0 && (
+        <ul className="check-mistakes">
+          {messages.map((m, i) => (
+            <li key={i}>{m}</li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }
 

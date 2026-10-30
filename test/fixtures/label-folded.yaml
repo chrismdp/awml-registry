@@ -1,4 +1,4 @@
-awml: "0.9"
+awml: "0.10"
 title: Folded
 scopes:
   - { id: home, label: "home: the family" }

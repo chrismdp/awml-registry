@@ -1,4 +1,4 @@
-awml: "0.9"
+awml: "0.10"
 title: Hostile <script>alert('title')</script>
 description: |
   A workflow whose every label is markup, a javascript: address or

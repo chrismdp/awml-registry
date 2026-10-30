@@ -98,14 +98,14 @@ const page = (owner: string, slug: string) => ownUrl(`/${owner}/${slug}`);
 const workflowFile = z
   .string()
   .optional()
-  .describe('The workflow\'s one AWML 0.9 file (awml: "0.9"), as YAML text: its design and any implementations');
+  .describe('The workflow\'s one AWML 0.10 file (awml: "0.10"), as YAML text: its design and any implementations');
 // The fields of AWML 0.3's pair, kept so a client that still sends them hears
-// how to convert. A 0.9 file sent alone as security is taken as the workflow.
+// how to convert. A 0.10 file sent alone as security is taken as the workflow.
 const legacyFile = (view: string) =>
   z
     .string()
     .optional()
-    .describe(`Not used: AWML 0.3's ${view} view, which the registry no longer takes. Send the 0.9 file as workflow.`);
+    .describe(`Not used: AWML 0.3's ${view} view, which the registry no longer takes. Send the 0.10 file as workflow.`);
 const owner = z
   .string()
   .describe(
@@ -196,7 +196,7 @@ function server(person: Person) {
     { name: "awml-registry", version: "1.0.0" },
     {
       instructions:
-        "The AWML registry stores and draws AWML 0.9 workflows, each one file holding its design and any " +
+        "The AWML registry stores and draws AWML 0.10 workflows, each one file holding its design and any " +
         "implementations, and the platforms they can run on. It refuses an invalid file, and keeps a drawing with " +
         "errors, drawing its errors, the lines that break a rule, in red. Use check to find mistakes and errors in a workflow's file, " +
         "publish to save a new version of owner/slug, fork_workflow to copy a public one into an owner of yours, " +
@@ -213,7 +213,7 @@ function server(person: Person) {
     {
       title: "Check a workflow",
       description:
-        "Check an AWML 0.9 workflow's file with the registry's AWML engine, the same check `awml check` runs. Gives its mistakes, which make the file invalid, so that publish refuses it, and its errors, the lines that break a rule, which its drawing draws red and publish saves all the same; or none of either. Saves nothing. The registry takes only AWML 0.9: upgrade an older file with `awml convert workflow.yaml > upgraded.yaml` first.",
+        "Check an AWML 0.10 workflow's file with the registry's AWML engine, the same check `awml check` runs. Gives its mistakes, which make the file invalid, so that publish refuses it, and its errors, the lines that break a rule, which its drawing draws red and publish saves all the same; or none of either. Saves nothing. The registry takes only AWML 0.10: upgrade an older file with `awml convert workflow.yaml > upgraded.yaml` first.",
       inputSchema: z.object({ workflow: workflowFile, security: legacyFile("security"), platform: legacyFile("platform") }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -242,7 +242,7 @@ function server(person: Person) {
     {
       title: "Publish a workflow",
       description:
-        "Save a new version of the workflow owner/slug from its one AWML 0.9 file. The file is checked first and refused if it is invalid, with the mistakes that make it so, and an older AWML is refused: upgrade it with `awml convert workflow.yaml > upgraded.yaml` first. A drawing with errors, lines that break a rule such as untrusted text reaching an outside action with nothing to stop it, is valid: it is saved, and its page draws the errors red. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private. A private one on your own account is seen by you alone; one on an organisation's, by its members. A part's ref to a file alongside, such as shopping.yaml#list, is saved as owner/shopping#list, so publish each file under its name without .yaml; a public workflow may refer only to public ones. Gives the workflow's page, the new version number, each ref rewritten, and each warning and each error AWML gave, by its check's id; neither ever refuses a push.",
+        "Save a new version of the workflow owner/slug from its one AWML 0.10 file. The file is checked first and refused if it is invalid, with the mistakes that make it so, and an older AWML is refused: upgrade it with `awml convert workflow.yaml > upgraded.yaml` first. A drawing with errors, lines that break a rule such as untrusted text reaching an outside action with nothing to stop it, is valid: it is saved, and its page draws the errors red. The owner is your own username or an organisation you belong to. The first version sets whether the workflow is public or private. A private one on your own account is seen by you alone; one on an organisation's, by its members. A part's ref to a file alongside, such as shopping.yaml#list, is saved as owner/shopping#list, so publish each file under its name without .yaml; a public workflow may refer only to public ones. Gives the workflow's page, the new version number, each ref rewritten, and each warning and each error AWML gave, by its check's id; neither ever refuses a push.",
       inputSchema: z.object({
         owner,
         slug,
@@ -466,7 +466,7 @@ function server(person: Person) {
         description: z
           .string()
           .describe(
-            'The platform description, as YAML: awml (which must be "0.9"), platform, off_for_up_to, steps, agents, calls, holds. The platform id may be owner/platforms/slug, this platform\'s own address, so that blocks can name it',
+            'The platform description, as YAML: awml (which must be "0.10"), platform, off_for_up_to, steps, agents, calls, holds. The platform id may be owner/platforms/slug, this platform\'s own address, so that blocks can name it',
           ),
         recipe: z.string().optional().describe("The install recipe, as Markdown. Never a secret."),
         visibility: z
@@ -528,10 +528,10 @@ function server(person: Person) {
     {
       title: "Find where a workflow can run",
       description:
-        "Judge a workflow against platforms with the AWML engine, as `awml fit` does: for each platform, whether the workflow's design fits, every reason it doesn't, and the companies each AI step may use there. With an implementation, as `awml fit --implementation` does, judges that implementation's placement instead, each block against the platform whose description it names: by the description's id, or by the platform's address, owner/platforms/slug. With parts, as `awml fit --parts` does, also judges each trigger, step that runs on a platform, context and connector of the design on its own, giving the platforms that can hold it and why each other can't, and every option: each set of the platforms that between them hold every part with none to spare, smallest first, with where each part may go in it. Parts are judged one by one, so whether the parts of an option on several platforms can reach each other isn't judged yet (awml#107), and each such option says so in its note. Name the workflow as owner/slug or owner/slug@version, or send its AWML 0.9 file as YAML. A drawing with errors is fitted, and an invalid file refused. Name the platforms as owner/slug or owner/slug@version, or leave them out to fit against every platform you may see. When the workflow doesn't say all the fit needs, gives the gaps instead.",
+        "Judge a workflow against platforms with the AWML engine, as `awml fit` does: for each platform, whether the workflow's design fits, every reason it doesn't, and the companies each AI step may use there. With an implementation, as `awml fit --implementation` does, judges that implementation's placement instead, each block against the platform whose description it names: by the description's id, or by the platform's address, owner/platforms/slug. With parts, as `awml fit --parts` does, also judges each trigger, step that runs on a platform, context and connector of the design on its own, giving the platforms that can hold it and why each other can't, and every option: each set of the platforms that between them hold every part with none to spare, smallest first, with where each part may go in it. Parts are judged one by one, so whether the parts of an option on several platforms can reach each other isn't judged yet (awml#107), and each such option says so in its note. Name the workflow as owner/slug or owner/slug@version, or send its AWML 0.10 file as YAML. A drawing with errors is fitted, and an invalid file refused. Name the platforms as owner/slug or owner/slug@version, or leave them out to fit against every platform you may see. When the workflow doesn't say all the fit needs, gives the gaps instead.",
       inputSchema: z.object({
         workflow: z.string().optional().describe("owner/slug or owner/slug@version"),
-        file: z.string().optional().describe("The workflow's AWML 0.9 file, as YAML, in place of a workflow"),
+        file: z.string().optional().describe("The workflow's AWML 0.10 file, as YAML, in place of a workflow"),
         security: legacyFile("security"),
         implementation: z.string().optional().describe("The id of one of the workflow's implementations, to judge its placement"),
         platforms: z.array(z.string()).optional().describe("Platforms as owner/slug or owner/slug@version. Default: every one you may see."),

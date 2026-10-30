@@ -91,10 +91,10 @@ describe("the MCP server at /mcp", () => {
 
   it("checks files with the engine and gives the mistakes `awml check` prints, saving nothing", async () => {
     const ana = await person("ana");
-    const printed = example("bad-09.check.txt").trim().split("\n");
-    const bad = await call("check", { workflow: example("bad-09.yaml") }, ana.token);
+    const printed = example("bad-010.check.txt").trim().split("\n");
+    const bad = await call("check", { workflow: example("bad-010.yaml") }, ana.token);
     expect(bad.isError).toBe(false);
-    expect(bad.data.mistakes).toEqual(printed.map((line) => line.replace(/^bad-09\.yaml: /, "workflow: ")));
+    expect(bad.data.mistakes).toEqual(printed.map((line) => line.replace(/^bad-010\.yaml: /, "workflow: ")));
     expect(bad.data.errors).toEqual([]);
 
     const good = await call("check", { workflow }, ana.token);
@@ -127,7 +127,7 @@ describe("the MCP server at /mcp", () => {
 
   it("refuses to publish files with mistakes, giving the messages, and saves nothing", async () => {
     const ana = await person("ana");
-    const res = await publish(ana.token, { owner: ana.username, slug: "broken", workflow: example("bad-09.yaml") });
+    const res = await publish(ana.token, { owner: ana.username, slug: "broken", workflow: example("bad-010.yaml") });
     expect(res.isError).toBe(true);
     expect(res.text).toContain("workflow: ");
     expect((await request("GET", `/api/v1/${ana.username}/broken`)).status).toBe(404);
@@ -407,7 +407,7 @@ describe("Token and OAuth give the same access", () => {
 // organisation's own, which the client email workflow would fit.
 const worker = example("platforms/worker.yaml");
 const clientEmail = example("client-email.yaml");
-const machine = (id: string, label: string) => `awml: "0.9"
+const machine = (id: string, label: string) => `awml: "0.10"
 platform: { id: ${id}, label: "${label}" }
 off_for_up_to: PT0S
 steps: code
@@ -473,7 +473,7 @@ describe("platforms through /mcp", () => {
 
   it("refuses a description with mistakes, giving the messages `awml check` gives, and saves nothing", async () => {
     const ana = await person("ana");
-    const res = await call("add_platform", { owner: ana.username, slug: "box", description: "awml: \"0.9\"\nplatform: { id: x }\n" }, ana.token);
+    const res = await call("add_platform", { owner: ana.username, slug: "box", description: "awml: \"0.10\"\nplatform: { id: x }\n" }, ana.token);
     expect(res.isError).toBe(true);
     expect(res.text).toContain("description: platform has no label");
     expect((await call("get_platform", { owner: ana.username, slug: "box" }, ana.token)).text).toBe("Not found.");

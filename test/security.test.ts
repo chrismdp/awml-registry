@@ -426,7 +426,7 @@ describe("The edition hook", () => {
 // Private platforms follow the private workflow rules. Org "acme" keeps a
 // private platform, its back office, and org "beta" keeps one of its own,
 // which every workflow here would fit, so a fit that used it would show it.
-const backOffice = `awml: "0.9"
+const backOffice = `awml: "0.10"
 platform: { id: back-office, label: "Acme's back office" }
 off_for_up_to: PT0S
 steps: code

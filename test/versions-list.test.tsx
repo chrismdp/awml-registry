@@ -1,6 +1,6 @@
 // The Versions list on a workflow's page and a platform's page, which the
 // header's "Version n of m" opens: each version on one line, as
-// "#8 · chrismdp · Today 4:43pm · 0.9".
+// "#8 · chrismdp · Today 4:43pm · 0.10".
 import { eq } from "drizzle-orm";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -92,7 +92,7 @@ describe("a workflow's Versions list", () => {
 
     const latest = versionsOf((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html);
     // Newest first; the one shown is marked Showing, and the newest Latest.
-    expect(latest.lines[0]).toMatch(new RegExp(`^#3 · ${o} · Today \\d{1,2}:\\d{2}(am|pm) · 0\\.9 Showing Latest$`));
+    expect(latest.lines[0]).toMatch(new RegExp(`^#3 · ${o} · Today \\d{1,2}:\\d{2}(am|pm) · 0\\.10 Showing Latest$`));
     expect(latest.lines[1]).toMatch(new RegExp(`^#2 · ${o} · (Today|Yesterday|\\d+ \\w{3} \\d{4},) .* · 0\\.3$`));
     expect(latest.lines[2]).toBe(`#1 · ${o} · 18 Oct 2026, 9:12am · 0.2`);
     // The version shown is bold, not a link; the others link to their pages,
@@ -105,7 +105,7 @@ describe("a workflow's Versions list", () => {
     const old = versionsOf((await renderPage(VersionPage, { owner: o, slug: "dinners", n: "1" })).html);
     expect(old.html).toContain(`<a href="/${o}/dinners">#3</a>`);
     expect(old.html).toContain("<strong>#1</strong>");
-    expect(old.lines[0]).toMatch(/ · 0\.9 Latest$/);
+    expect(old.lines[0]).toMatch(/ · 0\.10 Latest$/);
     expect(old.lines[2]).toBe(`#1 · ${o} · 18 Oct 2026, 9:12am · 0.2 Showing`);
   });
 });
@@ -225,7 +225,7 @@ describe("the Versions dialog, once the page's script runs", () => {
 });
 
 describe("a platform's Versions list", () => {
-  // A 0.5 description stored before the registry took only 0.9, then a 0.9 one pushed.
+  // A 0.5 description stored before the registry took only 0.10, then a 0.10 one pushed.
   async function laptop() {
     const ana = await person("ana");
     const o = ana.username;
@@ -248,7 +248,7 @@ describe("a platform's Versions list", () => {
     expect(asideOf(page)).not.toContain("Versions");
     expect(headOf(page)).toMatch(/<details class="version-pick"><summary>Version 2 of 2<svg/);
     const latest = versionsOf(page);
-    expect(latest.lines[0]).toMatch(new RegExp(`^#2 · ${o} · Today \\d{1,2}:\\d{2}(am|pm) · 0\\.9 Showing Latest$`));
+    expect(latest.lines[0]).toMatch(new RegExp(`^#2 · ${o} · Today \\d{1,2}:\\d{2}(am|pm) · 0\\.10 Showing Latest$`));
     expect(latest.lines[1]).toBe(`#1 · ${o} · 18 Oct 2026, 9:12am · 0.5`);
     expect(latest.html).toContain("<strong>#2</strong>");
     expect(latest.html).toContain(`<a href="/${o}/platforms/laptop/v/1">#1</a>`);

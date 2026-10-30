@@ -47,6 +47,10 @@ const errorsOf = (row: CheckRow) => Math.max(row.errors.length, row.listed?.resu
 export const mistakesIn = (files: CheckedFile[]) =>
   files.reduce((sum, f) => sum + f.rows.reduce((n, row) => n + mistakesOf(row), 0), 0);
 
+// What each of a file's checks found that makes it invalid, in the words of the
+// check, so its author can see what to redraw where it isn't drawn.
+export const mistakeMessages = (file: CheckedFile) => file.rows.flatMap((row) => row.mistakes);
+
 // How many errors the files' checks found: lines that break a rule, which
 // leave a file valid and are drawn red.
 export const errorsIn = (files: CheckedFile[]) =>

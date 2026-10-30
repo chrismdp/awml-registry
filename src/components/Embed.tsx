@@ -17,7 +17,14 @@ export function EmbeddedDrawing(p: EmbedProps) {
       {p.drawing ? (
         <Drawing drawings={p.drawing} links={p.links} hrefs={p.hrefs} startFlowOnly={p.flow} newTab compact />
       ) : (
-        <p className="embed-message">{p.message}</p>
+        <p className="embed-message">
+          {p.message}
+          {p.mistakes?.map((m, i) => (
+            <span key={i} className="embed-mistake">
+              {m}
+            </span>
+          ))}
+        </p>
       )}
       <div className="embed-corner">
         {p.hidden > 0 && <p className="embed-hidden">{count(p.hidden, "private workflow", "private workflows")} left out</p>}

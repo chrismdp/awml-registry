@@ -4,7 +4,7 @@
 # hands the build nothing but the issue's number, and the build reads why the last try failed from
 # CI itself. After three builds, or if the issue was edited since the label went on, a new comment
 # on the issue says a person must act.
-awml: "0.9"
+awml: "0.10"
 title: A failed build tries again
 description: |
   The factory's retry: CI's failed tests on a build's pull request start the build again, up to

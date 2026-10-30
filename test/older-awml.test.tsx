@@ -1,6 +1,6 @@
-// From AWML 0.9 the registry takes only 0.9 files, workflows and platform
+// From AWML 0.10 the registry takes only 0.10 files, workflows and platform
 // descriptions both, and refuses an older push with a 400 naming
-// `awml convert`, as it refused older ones from 0.6, 0.7 and 0.8. Versions stored in an
+// `awml convert`, as it refused older ones from 0.6, 0.7, 0.8 and 0.9. Versions stored in an
 // older AWML are never rewritten: each is converted with the engine's
 // `convert` whenever it is read, so it still shows, checks, draws and fits,
 // while its YAML and raw file are the bytes that were pushed. Checks stored at
@@ -19,6 +19,9 @@ import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
 import WorkflowYamlPage from "@/app/[owner]/[slug]/yaml/page";
 import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
 import WorkflowEmbed from "@/app/[owner]/[slug]/embed/page";
+import VersionPage from "@/app/[owner]/[slug]/v/[n]/page";
+import VersionChecksPage from "@/app/[owner]/[slug]/v/[n]/checks/page";
+import VersionEmbed from "@/app/[owner]/[slug]/v/[n]/embed/page";
 import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
 import GalleryPage from "@/app/gallery/page";
 import PlatformPage from "@/app/[owner]/platforms/[slug]/page";
@@ -26,7 +29,7 @@ import PlatformYamlPage from "@/app/[owner]/platforms/[slug]/yaml/page";
 import { drawing, expectedOf } from "./drawn";
 import { example, person, request, storePlatformVersion, storeVersion, type Who } from "./helpers";
 import { call } from "./mcp-client";
-import { renderPage } from "./pages";
+import { renderPage, sealed } from "./pages";
 
 // As they were pushed: a 0.4 workflow, a 0.5 one, and a 0.5 platform
 // description that the 0.5 workflow's office implementation names; a 0.6
@@ -34,9 +37,10 @@ import { renderPage } from "./pages";
 // makes an outside action that starts that workflow; two 0.7 workflows: the
 // family's dinners, and the bakery's enquiries, whose untrusted text reaches
 // an outside action with nothing to stop it, which 0.7 warned of, 0.8 found a
-// mistake and 0.9 finds an error; and two 0.8 workflows: the family's dinners
+// mistake and 0.9 finds an error; two 0.8 workflows: the family's dinners
 // again, and a newsletter whose outside action writes to a context, which 0.9
-// finds invalid.
+// finds invalid; and a 0.9 workflow, the club's minutes, whose review writes to
+// a context, which 0.10 finds invalid.
 const dinners04 = example("older/dinners-04.yaml");
 const clientEmail05 = example("older/client-email-05.yaml");
 const macMini05 = example("older/scripts-mac-mini-05.yaml");
@@ -45,17 +49,19 @@ const dinners07 = example("older/dinners-07.yaml");
 const enquiries07 = example("older/enquiries-07.yaml");
 const dinners08 = example("older/dinners-08.yaml");
 const signOff08 = example("older/sign-off-08.yaml");
+const minutes09 = example("older/minutes-09.yaml");
 // What the native `awml convert` noted converting it, after its first line.
 const stock06Notes = example("older/bakery-stock-06.convert.txt").trim().split("\n").slice(1).map((l) => l.trim());
 // What the AWML of the day worked out for each workflow at push: 0.5.1 for the 0.5 one, the
-// registry's 0.7.1 engine for the 0.7 ones and its 0.8.0 engine for the 0.8 ones.
+// registry's 0.7.1 engine for the 0.7 ones, its 0.8.0 engine for the 0.8 ones and its 0.9.0
+// engine for the 0.9 one.
 const stored = (name: string) => ({
   summary: JSON.parse(example(`older/${name}.summary.json`)),
   checks: JSON.parse(example(`older/${name}.checks.json`)),
 });
-const dinners = example("dinners.yaml"); // 0.9
-const worker = example("platforms/worker.yaml"); // 0.9
-const signOff = example("sign-off.yaml"); // 0.9, invalid
+const dinners = example("dinners.yaml"); // 0.10
+const worker = example("platforms/worker.yaml"); // 0.10
+const signOff = example("sign-off.yaml"); // 0.10, invalid
 
 const unescape = (html: string) =>
   html.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
@@ -88,13 +94,13 @@ async function storedBytes() {
 }
 
 describe("pushing", () => {
-  it("takes a 0.9 workflow and a 0.9 platform description", async () => {
+  it("takes a 0.10 workflow and a 0.10 platform description", async () => {
     const ana = await person("ana");
-    expect(dinners).toMatch(/^awml: "0\.9"$/m);
+    expect(dinners).toMatch(/^awml: "0\.10"$/m);
     expect(await push(ana.username, "dinners", { token: ana.token }, { workflow: dinners })).toMatchObject({ status: 201 });
     const published = await call("publish", { owner: ana.username, slug: "dinners", workflow: dinners }, ana.token);
     expect(published).toMatchObject({ isError: false, data: { number: 2 } });
-    expect(worker).toMatch(/^awml: "0\.9"$/m);
+    expect(worker).toMatch(/^awml: "0\.10"$/m);
     const res = await request("POST", `/api/v1/platforms/${ana.username}/worker/versions`, {
       as: { token: ana.token },
       json: { description: worker },
@@ -102,24 +108,26 @@ describe("pushing", () => {
     expect(res.status).toBe(201);
   });
 
-  it("refuses a 0.4, 0.5, 0.6, 0.7 or 0.8 workflow with a 400 naming awml convert, through the API, MCP and the fit", async () => {
+  it("refuses a 0.4, 0.5, 0.6, 0.7, 0.8 or 0.9 workflow with a 400 naming awml convert, through the API, MCP and the fit", async () => {
     const ana = await person("ana");
     expect(WORKFLOW_IS_TOO_OLD).toBe(
-      "This registry takes AWML 0.9 files. Upgrade yours with `awml convert workflow.yaml > upgraded.yaml`, " +
+      "This registry takes AWML 0.10 files. Upgrade yours with `awml convert workflow.yaml > upgraded.yaml`, " +
         "or join a 0.3 pair with `awml convert security.yaml platform.yaml > upgraded.yaml`, and push that.",
     );
-    // A 0.7 or 0.8 file that 0.9 reads by its version alone is refused all the same.
-    expect(dinners07.replace('awml: "0.7"', 'awml: "0.9"')).toBe(dinners);
-    expect(dinners08.replace('awml: "0.8"', 'awml: "0.9"')).toBe(dinners);
+    // A 0.7, 0.8 or 0.9 file that 0.10 reads by its version alone is refused all the same.
+    expect(dinners07.replace('awml: "0.7"', 'awml: "0.10"')).toBe(dinners);
+    expect(dinners08.replace('awml: "0.8"', 'awml: "0.10"')).toBe(dinners);
     for (const file of [
       dinners04,
       clientEmail05,
       stock06,
-      dinners.replace('awml: "0.9"', 'awml: "0.6"'),
+      dinners.replace('awml: "0.10"', 'awml: "0.6"'),
       dinners07,
       enquiries07,
       dinners08,
       signOff08,
+      dinners.replace('awml: "0.10"', 'awml: "0.9"'),
+      minutes09,
     ]) {
       expect(await push(ana.username, "dinners", { token: ana.token }, { workflow: file })).toEqual({
         status: 400,
@@ -134,17 +142,18 @@ describe("pushing", () => {
     expect((await request("GET", `/api/v1/${ana.username}/dinners`)).status).toBe(404);
   });
 
-  it("refuses a 0.4, 0.5, 0.6, 0.7 or 0.8 platform description with a 400 naming awml convert, through the API and MCP", async () => {
+  it("refuses a 0.4, 0.5, 0.6, 0.7, 0.8 or 0.9 platform description with a 400 naming awml convert, through the API and MCP", async () => {
     const ana = await person("ana");
     expect(PLATFORM_IS_TOO_OLD).toBe(
-      "This registry takes AWML 0.9 platform descriptions. Upgrade yours with `awml convert description.yaml > upgraded.yaml` and push that.",
+      "This registry takes AWML 0.10 platform descriptions. Upgrade yours with `awml convert description.yaml > upgraded.yaml` and push that.",
     );
     for (const description of [
       macMini05,
       macMini05.replace('awml: "0.5"', 'awml: "0.4"'),
-      worker.replace('awml: "0.9"', 'awml: "0.6"'),
-      worker.replace('awml: "0.9"', 'awml: "0.7"'),
-      worker.replace('awml: "0.9"', 'awml: "0.8"'),
+      worker.replace('awml: "0.10"', 'awml: "0.6"'),
+      worker.replace('awml: "0.10"', 'awml: "0.7"'),
+      worker.replace('awml: "0.10"', 'awml: "0.8"'),
+      worker.replace('awml: "0.10"', 'awml: "0.9"'),
     ]) {
       const res = await request("POST", `/api/v1/platforms/${ana.username}/mac-mini/versions`, {
         as: { token: ana.token },
@@ -159,6 +168,26 @@ describe("pushing", () => {
     }
     expect((await request("GET", `/api/v1/platforms/${ana.username}/mac-mini`)).status).toBe(404);
   });
+
+  // YAML reads an unquoted 0.10 as the number 0.1, so the registry reads the version as it is
+  // written: such a file is 0.10, and awml check says to quote it, as for an unquoted 0.9 before.
+  it("leaves a workflow or platform description marked with an unquoted 0.10 to awml check, which says to quote it", async () => {
+    const ana = await person("ana");
+    const workflow = dinners.replace('awml: "0.10"', "awml: 0.10");
+    const mistakes = await engine.check(workflow);
+    expect(mistakes).toContain("awml: YAML read it as 0.1, not text: put it in quotes");
+    expect(await push(ana.username, "dinners", { token: ana.token }, { workflow })).toEqual({
+      status: 422,
+      body: { errors: mistakes.map((m) => `workflow: ${m}`) },
+    });
+    const description = worker.replace('awml: "0.10"', "awml: 0.10");
+    const res = await request("POST", `/api/v1/platforms/${ana.username}/worker/versions`, {
+      as: { token: ana.token },
+      json: { description },
+    });
+    expect(res.status).toBe(422);
+    expect((await res.json()).errors).toContain("description: awml: YAML read it as 0.1, not text: put it in quotes");
+  });
 });
 
 describe("a stored 0.4 version, with no checks stored", () => {
@@ -168,7 +197,7 @@ describe("a stored 0.4 version, with no checks stored", () => {
     return ana.username;
   }
 
-  it("draws its design and its implementation converted to 0.8, as the native awml draws the converted file", async () => {
+  it("draws its design and its implementation converted to 0.10, as the native awml draws the converted file", async () => {
     const o = await stored04();
     expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html)).toEqual(await expectedOf([dinners04]));
     expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" })).html)).toEqual(await expectedOf([dinners04], "home"));
@@ -183,7 +212,7 @@ describe("a stored 0.4 version, with no checks stored", () => {
     expect((await storedBytes()).workflows).toEqual([dinners04]);
   });
 
-  it("shows its stored bytes on the YAML tab, saying it is AWML 0.4 shown converted to 0.8, and serves them as the raw file", async () => {
+  it("shows its stored bytes on the YAML tab, saying it is AWML 0.4 shown converted to 0.10, and serves them as the raw file", async () => {
     const o = await stored04();
     for (const page of [
       await renderPage(WorkflowYamlPage, { owner: o, slug: "dinners" }),
@@ -191,7 +220,7 @@ describe("a stored 0.4 version, with no checks stored", () => {
     ]) {
       expect(files(page.html)).toEqual({ "workflow-yaml": dinners04 });
       expect(text(page.html)).toContain(
-        "workflow.yaml is AWML 0.4, as it was pushed. The registry draws, checks and fits it converted to AWML 0.9.",
+        "workflow.yaml is AWML 0.4, as it was pushed. The registry draws, checks and fits it converted to AWML 0.10.",
       );
     }
     expect(await (await request("GET", `/${o}/dinners/v/1/workflow.yaml`)).text()).toBe(dinners04);
@@ -213,13 +242,13 @@ describe("a stored 0.4 version, with no checks stored", () => {
     expect(drawing((await renderPage(GalleryPage, {})).html)).toEqual(await expectedOf([dinners04]));
   });
 
-  it("is forked as the converted 0.9 file, since a fork is a push, its top comment now its description", async () => {
+  it("is forked as the converted 0.10 file, since a fork is a push, its top comment now its description", async () => {
     const o = await stored04();
     const bea = await person("bea");
     const res = await request("POST", `/api/v1/${o}/dinners/fork`, { as: { token: bea.token }, json: { owner: bea.username } });
     expect(res.status).toBe(201);
     const fork = (await (await request("GET", `/api/v1/${bea.username}/dinners/v/1`)).json()).files.workflow;
-    expect(fork).toMatch(/^awml: "0\.9"$/m);
+    expect(fork).toMatch(/^awml: "0\.10"$/m);
     expect(fork).not.toContain("kind: publish");
     // AWML 0.9's convert makes the comment an older file starts with its description.
     expect(dinners04).toMatch(/^# This workflow plans a family's dinners/);
@@ -236,7 +265,7 @@ describe("a stored 0.5 version, with the checks stored at push, and a stored 0.5
     return ana.username;
   }
 
-  it("draws its design and its office implementation converted to 0.8, as the native awml draws the converted file", async () => {
+  it("draws its design and its office implementation converted to 0.10, as the native awml draws the converted file", async () => {
     const o = await stored05();
     expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "client-email" })).html)).toEqual(await expectedOf([clientEmail05]));
     expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "client-email" })).html)).toEqual(await expectedOf([clientEmail05], "office"));
@@ -251,12 +280,12 @@ describe("a stored 0.5 version, with the checks stored at push, and a stored 0.5
     expect(text(page)).toContain("workflow.yaml Checked by AWML v0.5.1 ");
   });
 
-  it("shows its stored bytes on the YAML tab, saying it is AWML 0.5 shown converted to 0.8", async () => {
+  it("shows its stored bytes on the YAML tab, saying it is AWML 0.5 shown converted to 0.10", async () => {
     const o = await stored05();
     const page = (await renderPage(WorkflowYamlPage, { owner: o, slug: "client-email" })).html;
     expect(files(page)).toEqual({ "workflow-yaml": clientEmail05 });
     expect(text(page)).toContain(
-      "workflow.yaml is AWML 0.5, as it was pushed. The registry draws, checks and fits it converted to AWML 0.9.",
+      "workflow.yaml is AWML 0.5, as it was pushed. The registry draws, checks and fits it converted to AWML 0.10.",
     );
   });
 
@@ -289,11 +318,11 @@ describe("a stored 0.5 version, with the checks stored at push, and a stored 0.5
     expect(await storedBytes()).toEqual({ workflows: [clientEmail05], descriptions: [macMini05] });
   });
 
-  it("shows the description's stored bytes on its YAML tab, saying it is AWML 0.5 read converted to 0.8, and what it offers", async () => {
+  it("shows the description's stored bytes on its YAML tab, saying it is AWML 0.5 read converted to 0.10, and what it offers", async () => {
     const o = await stored05();
     const yaml = (await renderPage(PlatformYamlPage, { owner: o, slug: "scripts-mac-mini" })).html;
     expect(files(yaml)).toEqual({ "description-yaml": macMini05 });
-    expect(text(yaml)).toContain("description.yaml is AWML 0.5, as it was pushed. The fit reads it converted to AWML 0.9.");
+    expect(text(yaml)).toContain("description.yaml is AWML 0.5, as it was pushed. The fit reads it converted to AWML 0.10.");
     expect(await (await request("GET", `/${o}/platforms/scripts-mac-mini/v/1/description.yaml`)).text()).toBe(macMini05);
     expect((await (await request("GET", `/api/v1/platforms/${o}/scripts-mac-mini`)).json()).description).toBe(macMini05);
     expect(text((await renderPage(PlatformPage, { owner: o, slug: "scripts-mac-mini" })).html)).toContain("Can call anthropic");
@@ -316,12 +345,12 @@ describe("a stored 0.6 version whose do step leads into another workflow's trigg
     if ("error" in converted) throw new Error(converted.error);
     expect(converted.notes).toEqual(stock06Notes);
     expect(converted.mistakes).toEqual([]);
-    expect(converted.file).toMatch(/^awml: "0\.9"$/m);
+    expect(converted.file).toMatch(/^awml: "0\.10"$/m);
     expect(converted.file).toContain('{ id: order, kind: outside, label: "Start the supplier order: Allow", ref: acme/order#low, in: bakery }');
     expect(JSON.parse(await engine.graph(converted.file))).toEqual(JSON.parse(example("older/bakery-stock-06.graph.json")));
   });
 
-  it("draws it converted to 0.8, the trigger now the outside action that starts the other workflow", async () => {
+  it("draws it converted to 0.10, the trigger now the outside action that starts the other workflow", async () => {
     const o = await stored06();
     const drawn = drawing((await renderPage(WorkflowPage, { owner: o, slug: "bakery-stock" })).html);
     expect(drawn).toEqual(await expectedOf([stock06]));
@@ -333,14 +362,14 @@ describe("a stored 0.6 version whose do step leads into another workflow's trigg
     const checks = (await renderPage(WorkflowChecksPage, { owner: o, slug: "bakery-stock" })).html;
     expect(checkIds(checks)).toEqual(listedNow("bakery-stock-06"));
     expect(text(checks)).toContain(
-      `workflow.yaml Checked by AWML ${engine.version.tag} Converting it to AWML 0.9, awml convert noted what to do by hand. Notes don't fail the check. ${stock06Notes.join(" ")} `,
+      `workflow.yaml Checked by AWML ${engine.version.tag} Converting it to AWML 0.10, awml convert noted what to do by hand. Notes don't fail the check. ${stock06Notes.join(" ")} `,
     );
     expect(text(checks)).toContain("Checks No mistakes");
     const yaml = (await renderPage(WorkflowYamlPage, { owner: o, slug: "bakery-stock" })).html;
     expect(files(yaml)).toEqual({ "workflow-yaml": stock06 });
     expect(text(yaml)).toContain(
-      "workflow.yaml is AWML 0.6, as it was pushed. The registry draws, checks and fits it converted to AWML 0.9. " +
-        `Converting it to AWML 0.9, awml convert noted what to do by hand. Notes don't fail the check. ${stock06Notes.join(" ")}`,
+      "workflow.yaml is AWML 0.6, as it was pushed. The registry draws, checks and fits it converted to AWML 0.10. " +
+        `Converting it to AWML 0.10, awml convert noted what to do by hand. Notes don't fail the check. ${stock06Notes.join(" ")}`,
     );
     expect(await (await request("GET", `/${o}/bakery-stock/v/1/workflow.yaml`)).text()).toBe(stock06);
     expect((await storedBytes()).workflows).toEqual([stock06]);
@@ -348,7 +377,7 @@ describe("a stored 0.6 version whose do step leads into another workflow's trigg
 });
 
 describe("a stored 0.7 version, with the checks stored at push", () => {
-  // AWML 0.9 reads a 0.7 file once its version says 0.9, unless it has a fork, which 0.8
+  // AWML 0.10 reads a 0.7 file once its version says 0.10, unless it has a fork, which 0.8
   // dropped; the dinners have none.
   async function stored07() {
     const ana = await person("ana");
@@ -361,7 +390,7 @@ describe("a stored 0.7 version, with the checks stored at push", () => {
     expect(await engine.convert([dinners07])).toEqual({ file: dinners, notes: [], mistakes: [] });
   });
 
-  it("draws its design and its implementation converted to 0.9, as the native awml draws the converted file", async () => {
+  it("draws its design and its implementation converted to 0.10, as the native awml draws the converted file", async () => {
     const o = await stored07();
     expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html)).toEqual(await expectedOf([dinners07]));
     expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" })).html)).toEqual(await expectedOf([dinners07], "home"));
@@ -378,13 +407,13 @@ describe("a stored 0.7 version, with the checks stored at push", () => {
     expect(text(checks)).toContain("Checks No mistakes");
     const yaml = (await renderPage(WorkflowYamlPage, { owner: o, slug: "dinners" })).html;
     expect(files(yaml)).toEqual({ "workflow-yaml": dinners07 });
-    expect(text(yaml)).toContain("workflow.yaml is AWML 0.7, as it was pushed. The registry draws, checks and fits it converted to AWML 0.9.");
+    expect(text(yaml)).toContain("workflow.yaml is AWML 0.7, as it was pushed. The registry draws, checks and fits it converted to AWML 0.10.");
     expect((await storedBytes()).workflows).toEqual([dinners07]);
   });
 
-  it("fits against a stored 0.7 platform description through convert, as the native fit judges its 0.9 form", async () => {
+  it("fits against a stored 0.7 platform description through convert, as the native fit judges its 0.10 form", async () => {
     const ana = await person("ana");
-    const worker07 = worker.replace('awml: "0.9"', 'awml: "0.7"');
+    const worker07 = worker.replace('awml: "0.10"', 'awml: "0.7"');
     await storePlatformVersion(ana.username, "worker", ana, worker07);
     const res = await fit({ file: example("client-email.yaml"), platforms: [`${ana.username}/worker`] });
     expect(res.status).toBe(200);
@@ -422,7 +451,7 @@ describe("a stored 0.7 version whose untrusted text reaches an outside action th
     expect(await engine.unsound(converted.file)).toEqual([]);
     const now = JSON.parse(example("older/enquiries-07.checks-now.json")).checks;
     expect(now.filter((c: { result: string }) => c.result === "error").map((c: { id: string }) => c.id)).toEqual(["untrusted.outside"]);
-    // Untrusted text nobody accepted is an error, so a push of the file in 0.9 is taken, and says so.
+    // Untrusted text nobody accepted is an error, so a push of the file in 0.10 is taken, and says so.
     const bea = await person("bea");
     expect(await push(bea.username, "enquiries", { token: bea.token }, { workflow: converted.file })).toMatchObject({
       status: 201,
@@ -479,7 +508,7 @@ describe("a stored 0.8 version, with the checks stored at push", () => {
     expect(await engine.convert([dinners08])).toEqual({ file: dinners, notes: [], mistakes: [] });
   });
 
-  it("draws its design and its implementation converted to 0.9, as the native awml draws the converted file", async () => {
+  it("draws its design and its implementation converted to 0.10, as the native awml draws the converted file", async () => {
     const o = await stored08();
     expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html)).toEqual(await expectedOf([dinners08]));
     expect(drawing((await renderPage(WorkflowPlatformPage, { owner: o, slug: "dinners" })).html)).toEqual(await expectedOf([dinners08], "home"));
@@ -496,14 +525,14 @@ describe("a stored 0.8 version, with the checks stored at push", () => {
     expect(text(checks)).toContain("Checks No mistakes");
     const yaml = (await renderPage(WorkflowYamlPage, { owner: o, slug: "dinners" })).html;
     expect(files(yaml)).toEqual({ "workflow-yaml": dinners08 });
-    expect(text(yaml)).toContain("workflow.yaml is AWML 0.8, as it was pushed. The registry draws, checks and fits it converted to AWML 0.9.");
+    expect(text(yaml)).toContain("workflow.yaml is AWML 0.8, as it was pushed. The registry draws, checks and fits it converted to AWML 0.10.");
     expect((await storedBytes()).workflows).toEqual([dinners08]);
   });
 
-  it("fits through convert, as the native fit judges its 0.9 form, against a stored 0.8 platform description", async () => {
+  it("fits through convert, as the native fit judges its 0.10 form, against a stored 0.8 platform description", async () => {
     const ana = await person("ana");
-    await storeVersion(ana.username, "client-email", ana, { workflow: example("client-email.yaml").replace('awml: "0.9"', 'awml: "0.8"') });
-    const worker08 = worker.replace('awml: "0.9"', 'awml: "0.8"');
+    await storeVersion(ana.username, "client-email", ana, { workflow: example("client-email.yaml").replace('awml: "0.10"', 'awml: "0.8"') });
+    const worker08 = worker.replace('awml: "0.10"', 'awml: "0.8"');
     await storePlatformVersion(ana.username, "worker", ana, worker08);
     const res = await fit({ workflow: `${ana.username}/client-email`, platforms: [`${ana.username}/worker`] });
     expect(res.status).toBe(200);
@@ -546,7 +575,7 @@ describe("a stored 0.8 version that 0.9 finds invalid", () => {
     expect(text(page)).toContain(`It is checked again here, by the AWML this registry runs.`);
     expect(text(page)).toContain(`workflow.yaml Checked by AWML ${engine.version.tag} `);
     expect(text(page)).toContain("Checks 1 mistake");
-    expect(text(page)).toContain(`No line goes from an outside action into a context contexts.written-by-steps 1 mistake`);
+    expect(text(page)).toContain(`Only a step writes to a context contexts.written-by-steps 1 mistake`);
     expect(text(page)).toContain(mistake);
     expect(page).not.toContain('<svg class="warning-mark"');
   });
@@ -568,5 +597,79 @@ describe("a stored 0.8 version that 0.9 finds invalid", () => {
     expect(res.status).toBe(422);
     expect(await res.json()).toEqual({ errors: [`workflow: ${mistake}`] });
     expect((await storedBytes()).workflows).toEqual([signOff08]);
+  });
+});
+
+// AWML 0.9 let a line go into a context from a review; AWML 0.10 lets only a step write to a
+// context, under the same `contexts.written-by-steps` (awml#191). So a 0.9 version stored with such
+// a line, which passed then, converts by its version alone to an invalid file. It is not drawn, and
+// wherever its drawing would be, on its page and in an embed, the check's message says what to
+// redraw, as its Checks tab does.
+describe("a stored 0.9 version that 0.10 finds invalid", () => {
+  const minutes = minutes09.replace('awml: "0.9"', 'awml: "0.10"');
+  const [mistake] = (
+    JSON.parse(example("older/minutes-09.checks-now.json")) as { checks: { mistakes: { message: string }[] }[] }
+  ).checks.flatMap((c) => c.mistakes.map((m) => m.message));
+
+  async function storedMinutes() {
+    const ana = await person("ana");
+    await storeVersion(ana.username, "minutes", ana, { workflow: minutes09 }, stored("minutes-09"));
+    return ana.username;
+  }
+
+  it("passed when it was pushed, and converts by its version alone to a file the native awml finds invalid", async () => {
+    expect(stored("minutes-09").checks.awml.tag).toBe("v0.9.0");
+    const atPush = stored("minutes-09").checks.checks.filter((c: { result: string }) => c.result !== "pass" && c.result !== "skipped");
+    expect(atPush).toEqual([]);
+    expect(mistake).toMatch(/^the line from "approve" to "book" goes from review "approve" into context "book": only a step writes to a context, /);
+    expect(await engine.convert([minutes09])).toEqual({ file: minutes, notes: [], mistakes: [mistake] });
+    expect(await engine.unsound(minutes)).toEqual([mistake]);
+    const now = JSON.parse(example("older/minutes-09.checks-now.json")).checks;
+    expect(now.filter((c: { result: string }) => c.result === "fail").map((c: { id: string }) => c.id)).toEqual(["contexts.written-by-steps"]);
+  });
+
+  it("lists its checks now, by the AWML the registry runs, with contexts.written-by-steps failing and its message", async () => {
+    const o = await storedMinutes();
+    for (const page of [
+      await renderPage(WorkflowChecksPage, { owner: o, slug: "minutes" }),
+      await renderPage(VersionChecksPage, { owner: o, slug: "minutes", n: "1" }),
+    ]) {
+      expect(page.status).toBe(200);
+      expect(checkIds(page.html)).toEqual(listedNow("minutes-09"));
+      expect(text(page.html)).toContain(`workflow.yaml Checked by AWML ${engine.version.tag} `);
+      expect(text(page.html)).toContain("Checks 1 mistake");
+      expect(text(page.html)).toContain("Only a step writes to a context contexts.written-by-steps 1 mistake");
+      expect(text(page.html)).toContain(mistake);
+    }
+  });
+
+  it("is not drawn, and its page and its embeds give the check's message where the drawing would be", async () => {
+    const o = await storedMinutes();
+    for (const page of [
+      await renderPage(WorkflowPage, { owner: o, slug: "minutes" }),
+      await renderPage(VersionPage, { owner: o, slug: "minutes", n: "1" }),
+    ]) {
+      expect(page.status).toBe(200);
+      expect(drawing(page.html)).toBeNull();
+      expect(text(page.html)).toContain(`workflow.yaml has 1 mistake, so it cannot be drawn. See Checks. ${mistake}`);
+    }
+    for (const page of [
+      await renderPage(WorkflowEmbed, { owner: o, slug: "minutes" }, { headers: sealed }),
+      await renderPage(VersionEmbed, { owner: o, slug: "minutes", n: "1" }, { headers: sealed }),
+    ]) {
+      expect(page.status).toBe(200);
+      expect(drawing(page.html)).toBeNull();
+      expect(text(page.html)).toContain(`workflow.yaml has 1 mistake, so it cannot be drawn. ${mistake}`);
+    }
+    expect(drawing((await renderPage(GalleryPage, {})).html)).toBeNull();
+    expect(await fit({ workflow: `${o}/minutes` })).toEqual({ status: 422, body: { errors: [`${o}/minutes v1: ${mistake}`] } });
+  });
+
+  it("shows its stored bytes on the YAML tab, saying it is AWML 0.9 read converted to 0.10", async () => {
+    const o = await storedMinutes();
+    const yaml = (await renderPage(WorkflowYamlPage, { owner: o, slug: "minutes" })).html;
+    expect(files(yaml)).toEqual({ "workflow-yaml": minutes09 });
+    expect(text(yaml)).toContain("workflow.yaml is AWML 0.9, as it was pushed. The registry draws, checks and fits it converted to AWML 0.10.");
+    expect((await storedBytes()).workflows).toEqual([minutes09]);
   });
 });

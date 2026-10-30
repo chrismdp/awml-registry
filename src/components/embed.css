@@ -22,4 +22,10 @@
 /* A long title gives way first, so the registry's name always shows. */
 .embed-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .embed-hidden { margin: 0; padding: 2px 10px; border-radius: 999px; background: var(--paper); color: var(--ink-faint); font-size: 12px; }
-.embed-message { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; margin: 0; padding: 24px 24px 56px; text-align: center; color: var(--ink-soft); }
+.embed-message {
+  position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px; align-items: center;
+  justify-content: center; justify-content: safe center; overflow-y: auto; margin: 0; padding: 24px 24px 56px;
+  text-align: center; color: var(--ink-soft);
+}
+/* What makes an invalid file so, in the words of each check. */
+.embed-mistake { max-width: 60ch; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
