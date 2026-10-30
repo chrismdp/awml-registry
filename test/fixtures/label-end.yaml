@@ -1,4 +1,4 @@
-awml: "0.8"
+awml: "0.9"
 title: End in a label
 scopes:
   - { id: home, label: "home: the\nend\nfamily" }

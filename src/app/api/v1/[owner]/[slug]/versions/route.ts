@@ -23,6 +23,7 @@ export async function POST(req: Request, { params }: Params<"owner" | "slug">) {
       url: siteUrl(req, `/${pushed.owner}/${pushed.slug}/v/${pushed.number}`),
       rewrites: pushed.rewrites,
       warnings: pushed.warnings,
+      errors: pushed.errors,
     },
     201,
   );

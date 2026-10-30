@@ -19,9 +19,10 @@ import type { Viewer } from "@/server/viewer";
 // version, as the engine reads it (converted, when stored in an older AWML),
 // at a path ending owner/slug.yaml, so the refs between members are
 // followed. A member the viewer may not see is given to nothing. The Checks
-// tab checks every member together; a member that doesn't pass check on its
-// own is listed as not drawn and left out of the map, who waits and where it
-// runs, as a workflow with mistakes is not drawn.
+// tab checks every member together; a member that is invalid on its own is
+// listed as not drawn and left out of the map, who waits and where it runs,
+// as an invalid workflow is not drawn. A member with errors is valid, and
+// drawn, its errors red (AWML 0.9, #100).
 export async function loadSystem(owner: string, slug: string, n: string, tab: SystemTab): Promise<SystemViewProps> {
   const context = await pageContext();
   const s = await readSystemVersion(context.db, context.viewer, owner, slug, n === "latest" ? "latest" : n);
@@ -48,7 +49,7 @@ export async function systemProps(
       const r = name ? await asRead(m.files, name) : { error: ["It has no workflow file the registry can read."] };
       if ("error" in r) return { member: m, file: null, error: r.error };
       const named: Named = { file: refPath(m.owner, m.slug), source: r.file };
-      return { member: m, file: named, error: null, notes: r.notes, drawn: (await engine.check(r.file)).length === 0 };
+      return { member: m, file: named, error: null, notes: r.notes, drawn: (await engine.unsound(r.file)).length === 0 };
     }),
   );
   const given = read.flatMap((r) => (r.file ? [r.file] : []));
@@ -58,7 +59,9 @@ export async function systemProps(
     if (r.member.state !== "found") return [];
     const name = `${r.member.owner}/${r.member.slug}` as const;
     if (r.error)
-      return [{ name, checkedBy: engine.version, listed: false, rows: [{ name: "awml convert", mistakes: r.error, warnings: [] }] }];
+      return [
+        { name, checkedBy: engine.version, listed: false, rows: [{ name: "awml convert", mistakes: r.error, errors: [], warnings: [] }] },
+      ];
     const found = listed.find((l) => l.file === r.file!.file)!;
     const notes = r.notes?.length ? { notes: r.notes } : {};
     return [{ name, checkedBy: engine.version, listed: "now", rows: rowsOf(found.checks), ...notes }];

@@ -104,7 +104,7 @@ export async function orgWith(
 }
 
 // A version as an older registry stored it, written straight to the database,
-// since a push now takes only AWML 0.8: an older workflow file, or from before
+// since a push now takes only AWML 0.9: an older workflow file, or from before
 // the registry took only 0.4 files, a security file, a platform file or both.
 // Its summary and any list of checks are what the AWML of the day worked out
 // at push, so the test gives them; with none, the summary is this AWML's of

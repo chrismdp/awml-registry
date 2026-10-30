@@ -84,17 +84,21 @@ describe("the MCP server at /mcp", () => {
       "search_platforms",
       "set_username",
     ]);
+    // The fit's tool says what its parts don't judge (#100, awml#107).
+    const described = (tools.tools as { name: string; description: string }[]).find((t) => t.name === "fit_workflow")!.description;
+    expect(described).toContain("whether the parts of an option on several platforms can reach each other isn't judged yet");
   });
 
   it("checks files with the engine and gives the mistakes `awml check` prints, saving nothing", async () => {
     const ana = await person("ana");
-    const printed = example("bad-08.check.txt").trim().split("\n");
-    const bad = await call("check", { workflow: example("bad-08.yaml") }, ana.token);
+    const printed = example("bad-09.check.txt").trim().split("\n");
+    const bad = await call("check", { workflow: example("bad-09.yaml") }, ana.token);
     expect(bad.isError).toBe(false);
-    expect(bad.data.mistakes).toEqual(printed.map((line) => line.replace(/^bad-08\.yaml: /, "workflow: ")));
+    expect(bad.data.mistakes).toEqual(printed.map((line) => line.replace(/^bad-09\.yaml: /, "workflow: ")));
+    expect(bad.data.errors).toEqual([]);
 
     const good = await call("check", { workflow }, ana.token);
-    expect(good.data.mistakes).toEqual([]);
+    expect(good.data).toEqual({ mistakes: [], errors: [] });
     expect(good.text).toBe("No mistakes.");
 
     expect((await call("check", {}, ana.token)).isError).toBe(true);
@@ -112,6 +116,7 @@ describe("the MCP server at /mcp", () => {
       url: `${BASE}/${ana.username}/dinners`,
       rewrites: [],
       warnings: [],
+      errors: [],
     });
     expect(first.text).toContain(`${BASE}/${ana.username}/dinners`);
     const second = await publish(ana.token, { owner: ana.username, slug: "dinners", workflow });
@@ -122,7 +127,7 @@ describe("the MCP server at /mcp", () => {
 
   it("refuses to publish files with mistakes, giving the messages, and saves nothing", async () => {
     const ana = await person("ana");
-    const res = await publish(ana.token, { owner: ana.username, slug: "broken", workflow: example("bad-08.yaml") });
+    const res = await publish(ana.token, { owner: ana.username, slug: "broken", workflow: example("bad-09.yaml") });
     expect(res.isError).toBe(true);
     expect(res.text).toContain("workflow: ");
     expect((await request("GET", `/api/v1/${ana.username}/broken`)).status).toBe(404);
@@ -402,7 +407,7 @@ describe("Token and OAuth give the same access", () => {
 // organisation's own, which the client email workflow would fit.
 const worker = example("platforms/worker.yaml");
 const clientEmail = example("client-email.yaml");
-const machine = (id: string, label: string) => `awml: "0.8"
+const machine = (id: string, label: string) => `awml: "0.9"
 platform: { id: ${id}, label: "${label}" }
 off_for_up_to: PT0S
 steps: code
@@ -468,7 +473,7 @@ describe("platforms through /mcp", () => {
 
   it("refuses a description with mistakes, giving the messages `awml check` gives, and saves nothing", async () => {
     const ana = await person("ana");
-    const res = await call("add_platform", { owner: ana.username, slug: "box", description: "awml: \"0.8\"\nplatform: { id: x }\n" }, ana.token);
+    const res = await call("add_platform", { owner: ana.username, slug: "box", description: "awml: \"0.9\"\nplatform: { id: x }\n" }, ana.token);
     expect(res.isError).toBe(true);
     expect(res.text).toContain("description: platform has no label");
     expect((await call("get_platform", { owner: ana.username, slug: "box" }, ana.token)).text).toBe("Not found.");
@@ -512,6 +517,38 @@ describe("platforms through /mcp", () => {
     const gaps = await call("fit_workflow", { file: workflow, platforms: ["beta/open-box"] }, mo.token);
     expect(gaps.text.split("\n")[0]).toBe("The workflow doesn't say all the fit needs:");
     expect((await call("fit_workflow", { workflow: "acme/nothing-here" }, mo.token)).text).toBe("Not found: acme/nothing-here.");
+  });
+
+  it("fits each part, with parts, as the API does, saying beside an option of several platforms that whether its parts reach each other isn't judged", async () => {
+    const ana = await person("ana");
+    const ids = ["codex-laptop", "cowork-mac-mini", "scripts-mac-mini", "worker"];
+    for (const id of ids)
+      expect((await call("add_platform", { owner: ana.username, slug: id, description: example(`platforms/${id}.yaml`) }, ana.token)).isError).toBe(false);
+    const args = { file: clientEmail, platforms: ids.map((id) => `${ana.username}/${id}`), parts: true };
+    const fitted = await call("fit_workflow", args, ana.token);
+    const api = await request("POST", "/api/v1/fit", { as: { token: ana.token }, json: args });
+    expect(fitted.data).toEqual(await api.json());
+    expect(fitted.data.parts.options.map((o: { platforms: string[] }) => o.platforms)).toEqual([
+      [`${ana.username}/scripts-mac-mini`],
+      [`${ana.username}/cowork-mac-mini`, `${ana.username}/worker`],
+    ]);
+    const lines = fitted.text.split("\n");
+    expect(lines).toContain("Each part alone:");
+    expect(lines).toContain(
+      `weekdays: held by ${ana.username}/cowork-mac-mini, ${ana.username}/scripts-mac-mini and ${ana.username}/worker; ` +
+        `not by ${ana.username}/codex-laptop: weekdays may wait PT2H, but the platform may be off for P14D`,
+    );
+    const options = lines.filter((l: string) => l.startsWith("Option: "));
+    expect(options).toHaveLength(2);
+    expect(options[0]).toMatch(new RegExp(`^Option: ${ana.username}/scripts-mac-mini: mailbox on ${ana.username}/scripts-mac-mini, `));
+    expect(options[0]).not.toContain("isn't judged");
+    expect(options[1]).toMatch(new RegExp(`^Option: ${ana.username}/cowork-mac-mini and ${ana.username}/worker: `));
+    expect(options[1]).toContain(`bring on ${ana.username}/worker`);
+    expect(options[1]).toMatch(/\. Judged part by part only: whether the parts on these platforms can reach each other isn't judged yet \(chrismdp\/awml#107\)\.$/);
+    // Without parts, the answer has none.
+    const plain = await call("fit_workflow", { ...args, parts: undefined }, ana.token);
+    expect(plain.data).not.toHaveProperty("parts");
+    expect(plain.text).not.toContain("Each part alone:");
   });
 
   it("a member adds and reads their organisation's private platform, and the audit log records both", async () => {

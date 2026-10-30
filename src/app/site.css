@@ -126,6 +126,10 @@ pre, code { font-family: var(--mono); }
 .badge.bad { box-shadow: inset 0 0 0 1.5px var(--ink); }
 .badge.warn { box-shadow: inset 0 0 0 1.5px var(--ink-faint); color: var(--ink-soft); }
 .badge.skipped { color: var(--ink-faint); }
+/* A drawing with errors (#100): an amber warning mark beside its checks, as a
+   gap in a drawing is marked; its errors are its red lines, and leave it valid. */
+.warning-mark { color: var(--person-line); flex-shrink: 0; }
+.badge.error { box-shadow: inset 0 0 0 1.5px var(--person-line); }
 .wf-body { display: flex; flex-wrap: wrap; gap: 28px; padding-bottom: 80px; align-items: start; }
 .wf-body > main { flex: 999 1 640px; min-width: 0; }
 .wf-body > aside { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
@@ -138,6 +142,8 @@ pre, code { font-family: var(--mono); }
 .tabs a[aria-selected="true"] { background: var(--paper); box-shadow: 0 0 0 1.5px var(--ink); color: var(--ink); font-weight: 700; }
 .tabs a svg { margin-left: 6px; color: var(--code-line); }
 .tabs .tab-count { margin-left: 6px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--ink); color: var(--paper); font-size: 13px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.tabs a svg.warning-mark { color: var(--person-line); }
+.tabs .tab-count.error { margin-left: 4px; background: var(--person-line); }
 .figure { margin: 0; background: var(--wash); border-radius: 28px; padding: 40px; overflow-x: auto; }
 .figure pre { white-space: pre-wrap; font-size: 13px; }
 /* A drawing (Drawing.tsx): the server's SVG, which React Flow takes over, in a
@@ -187,9 +193,14 @@ pre, code { font-family: var(--mono); }
 .check-warnings p { margin: 0 0 6px; }
 .check-warnings ul { margin: 0; padding-left: 20px; }
 .check-warnings li + li { margin-top: 6px; }
+/* Errors: the lines that break a rule, which the drawing draws red. */
+.check-errors { margin: 12px 0 4px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.check-errors p { margin: 0 0 6px; color: var(--ink-soft); }
+.check-errors ul { margin: 0; padding-left: 20px; }
+.check-errors li + li { margin-top: 6px; }
 @media (max-width: 600px) { .checks section { padding: 16px; border-radius: 22px; } }
 .cannot-draw { margin: 0; font-size: 15px; }
-.drawn-mistakes { margin: 0 0 16px; font-size: 15px; }
+.drawn-errors { margin: 0; padding: 20px 28px 0; font-size: 15px; }
 /* A 0.4 workflow's platform view: which implementation is drawn. */
 .implementations { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; font-size: 15px; font-weight: 600; color: var(--ink-soft); }
 .implementations a { color: var(--ink-soft); padding: 8px 14px; min-height: 40px; display: inline-flex; align-items: center; border-radius: 999px; box-shadow: inset 0 0 0 1.5px var(--wash); text-decoration: none; }

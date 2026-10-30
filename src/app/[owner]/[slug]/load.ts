@@ -1,5 +1,5 @@
 import { notFound, permanentRedirect } from "next/navigation";
-import { mistakesIn, type CheckedFile, type CheckRow } from "@/components/Checks";
+import { errorsIn, mistakesIn, type CheckedFile, type CheckRow } from "@/components/Checks";
 import type { VersionViewProps } from "@/components/VersionView";
 import type { Db } from "@/db/client";
 import { engine, type ListedCheck } from "@/engine";
@@ -27,14 +27,16 @@ import type { Viewer } from "@/server/viewer";
 // Every file is shown as text as it was pushed, and drawn and checked as the
 // engine reads it: converted, when it is in an older AWML (see
 // src/server/as-read.ts). What converting it noted for its author to do by
-// hand is shown on its YAML and Checks tabs. A file that can't be converted
-// is not drawn, and its Checks say why.
+// hand is shown on its YAML and Checks tabs. A file that can't be converted,
+// or converts to an invalid file, is not drawn, and its Checks say why; one
+// that converts to a drawing with errors is drawn, its errors red.
 //
 // A workflow file pushed since AWML listed its checks shows the list stored
 // at push, one row per check, named by the AWML that ran them. A workflow
 // file pushed before has its checks listed now, the same way, by the AWML
-// the registry runs, and so has a listed file the AWML here finds mistakes
-// in: a push with a mistake is refused, so only a newer AWML can find some,
+// the registry runs, and so has a listed file the AWML here finds a mistake
+// or an error in that the list doesn't have: a push of an invalid file is
+// refused, and a push stores its errors, so only a newer AWML can find more,
 // and then the page shows them. A list made now is never stored. A file
 // stored before 0.4 is checked again here with `awml check`, which lists no
 // checks, so the page can name that AWML truly.
@@ -99,11 +101,14 @@ export async function versionProps(
           name: f.name,
           checkedBy: engine.version,
           listed: false,
-          rows: [{ name: "awml convert", mistakes: r.error, warnings: [] }],
+          rows: [{ name: "awml convert", mistakes: r.error, errors: [], warnings: [] }],
         };
       const notes = r.notes.length ? { notes: r.notes } : {};
       if (f.name === "workflow") {
-        const stored = v.checks && (await engine.check(r.file)).length === 0 ? v.checks : null;
+        // The list stored at push is shown unless the AWML here finds a
+        // mistake or an error in the file that the list doesn't have.
+        const storedFound = new Set(v.checks?.checks.flatMap((c) => (c.result === "fail" || c.result === "error" ? c.mistakes : [])));
+        const stored = v.checks && (await engine.check(r.file)).every((m) => storedFound.has(m)) ? v.checks : null;
         const list = stored ?? { awml: engine.version, checks: await engine.checks(r.file) };
         return { name: f.name, checkedBy: list.awml, listed: stored ? "stored" : "now", rows: rowsOf(list.checks), ...notes };
       }
@@ -111,7 +116,14 @@ export async function versionProps(
         name: f.name,
         checkedBy: engine.version,
         listed: false,
-        rows: [{ name: "awml check", mistakes: await engine.check(r.file), warnings: await engine.warnings(r.file) }],
+        rows: [
+          {
+            name: "awml check",
+            mistakes: await engine.unsound(r.file),
+            errors: await engine.errors(r.file),
+            warnings: await engine.warnings(r.file),
+          },
+        ],
         ...notes,
       };
     }),
@@ -155,10 +167,11 @@ export async function versionProps(
   const source: FileName | undefined = workflow ? "workflow" : views.find((view) => view === shown);
   const nowhere = Boolean(workflow) && shown === "platform" && !placed;
   // Only the security and platform views show a drawing, so only they draw.
-  // A file is drawn when nothing stops AWML drawing it: it may have mistakes
-  // only where a line breaks a rule, such as untrusted text reaching an
-  // outside action that nothing stops, which the drawing draws red (#83). A
-  // list of checks stored at push with a check failed is never drawn.
+  // A file is drawn unless it is invalid (AWML 0.9, #100): a drawing with
+  // errors is valid, its errors the lines that break a rule, such as
+  // untrusted text reaching an outside action that nothing stops, which the
+  // drawing draws red (#83). A list of checks stored at push with a check
+  // failed is never drawn.
   const drawnFile = source && !nowhere && (shown === "security" || shown === "platform") ? readFile(source) : undefined;
   const storedFailed = checks.some((c) => c.name === source && c.listed === "stored" && mistakesIn([c]) > 0);
   const drawable = drawnFile !== undefined && !storedFailed && (await engine.unsound(drawnFile)).length === 0;
@@ -204,17 +217,19 @@ export async function versionProps(
     // The drawing, laid out here from the engine's graph (src/server/drawing.ts),
     // so the page draws it with no layout of its own.
     drawing: drawable ? await layOut(await engine.graph(drawnFile, drawnImplementation(source!, placed, drawnFile))) : null,
-    drawnMistakes: drawable ? mistakesIn(checks.filter((c) => c.name === source)) : 0,
+    drawnErrors: drawable ? errorsIn(checks.filter((c) => c.name === source)) : 0,
     summary: v.summary,
     versions: v.versions,
   };
 }
 
-// Each check AWML listed, as a row of the Checks tab.
+// Each check AWML listed, as a row of the Checks tab: what a failed check
+// found makes the file invalid, and what an error check found are its errors.
 export function rowsOf(checks: ListedCheck[]): CheckRow[] {
   return checks.map(({ name, mistakes, ...listed }) => ({
     name,
     mistakes: listed.result === "fail" ? mistakes : [],
+    errors: listed.result === "error" ? mistakes : [],
     warnings: listed.result === "warn" ? mistakes : [],
     listed,
   }));

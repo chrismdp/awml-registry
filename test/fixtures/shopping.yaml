@@ -1,4 +1,4 @@
-awml: "0.8"
+awml: "0.9"
 title: The family's shopping
 description: |
   This workflow keeps the family's shopping list topped up. The list is the dinners workflow's,

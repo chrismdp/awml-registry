@@ -9,13 +9,13 @@
 # tests compare the registry with the CLI. A person reviews the new pin in the
 # pull request; every other run checks against it. The WebAssembly itself is
 # never kept in git: every machine builds it from the pin.
-# Usage: npm run engine:update -- <tag>, such as v0.8.0
+# Usage: npm run engine:update -- <tag>, such as v0.9.0
 # AWML_SOURCE names another place to fetch AWML from, such as a local clone.
 set -euo pipefail
 
-tag="${1:?usage: npm run engine:update -- <tag>, such as v0.8.0}"
+tag="${1:?usage: npm run engine:update -- <tag>, such as v0.9.0}"
 if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "usage: npm run engine:update -- <tag>, such as v0.8.0" >&2
+  echo "usage: npm run engine:update -- <tag>, such as v0.9.0" >&2
   exit 1
 fi
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -38,26 +38,35 @@ AWML_SOURCE_DIR="$src" bash "$root/scripts/engine-build.sh" --record
 go=$(pin go)
 (cd "$src" && GOTOOLCHAIN=local "$go" build -trimpath -ldflags="-X main.version=${tag#v}" -o "$tmp/awml" ./cmd/awml)
 
-# What the native CLI says, for the tests to compare against: a 0.8 workflow,
-# its graph as its design and as its home implementation; AWML's own file with
-# mistakes, the registry's, fixtures/bad-08.yaml, its file with a warning,
-# fixtures/warning-08.yaml, and every check of its file with the four
+# What the native CLI says, for the tests to compare against: a 0.9 workflow,
+# its graph as its design and as its home implementation; AWML's own invalid
+# file, the registry's, fixtures/bad-09.yaml, its file with a warning,
+# fixtures/warning-09.yaml, and every check of its file with the four
 # warnings AWML 0.7 added, fixtures/loose-ends.yaml. Then the bakery's two
 # workflows, one of which starts the other with an outside action, and the
 # graph of their map. Then untrusted text as AWML 0.8 draws it in the main
 # view (registry issue #83): a cake order whose text a cleaning step and a
 # person's yes stop, and thank-yous to reviews whose risk a standing approval
-# accepts, each with its graph.
+# accepts, each with its graph. Then the two things AWML 0.9 tells apart
+# (registry issue #100): AWML's drawing with errors, the club's Friday message
+# sent without Ella's yes, whose lines break rules and which check passes,
+# with its checks and its graph; and the registry's invalid file, a newsletter
+# whose outside action writes to a context, which check fails.
 cp "$src/examples/dinners.yaml" "$src/examples/bakery-stock.yaml" "$src/examples/bakery-order.yaml" "$src/wasm/testdata/bad.yaml" "$fixtures/"
 cp "$src/examples/tour/14-untrusted-text.yaml" "$fixtures/untrusted-text.yaml"
 cp "$src/examples/tour/17-untrusted-risk-accepted.yaml" "$fixtures/untrusted-risk-accepted.yaml"
+cp "$src/examples/live/red-line.yaml" "$fixtures/red-line.yaml"
 (cd "$fixtures" && "$tmp/awml" graph untrusted-text.yaml > untrusted-text.graph.json)
 (cd "$fixtures" && "$tmp/awml" graph untrusted-risk-accepted.yaml > untrusted-risk-accepted.graph.json)
 (cd "$fixtures" && "$tmp/awml" summary --json dinners.yaml > dinners.summary.json)
 (cd "$fixtures" && { "$tmp/awml" check bad.yaml || true; } > bad.check.txt)
-(cd "$fixtures" && { "$tmp/awml" check bad-08.yaml || true; } > bad-08.check.txt)
-(cd "$fixtures" && "$tmp/awml" check warning-08.yaml > warning-08.check.txt)
+(cd "$fixtures" && { "$tmp/awml" check bad-09.yaml || true; } > bad-09.check.txt)
+(cd "$fixtures" && "$tmp/awml" check warning-09.yaml > warning-09.check.txt)
 (cd "$fixtures" && "$tmp/awml" check --json loose-ends.yaml > loose-ends.checks.json)
+(cd "$fixtures" && "$tmp/awml" check red-line.yaml > red-line.check.txt)
+(cd "$fixtures" && "$tmp/awml" check --json red-line.yaml > red-line.checks.json)
+(cd "$fixtures" && "$tmp/awml" graph red-line.yaml > red-line.graph.json)
+(cd "$fixtures" && { "$tmp/awml" check sign-off.yaml || true; } > sign-off.check.txt)
 (cd "$fixtures" && "$tmp/awml" graph dinners.yaml > dinners.graph.json)
 (cd "$fixtures" && "$tmp/awml" graph --implementation home dinners.yaml > dinners-home.graph.json)
 (cd "$fixtures" && "$tmp/awml" graph bakery-stock.yaml bakery-order.yaml > bakery-map.graph.json)
@@ -72,22 +81,26 @@ cp "$src/examples/tour/17-untrusted-risk-accepted.yaml" "$fixtures/untrusted-ris
 # Versions stored in an AWML the registry no longer takes, kept in
 # fixtures/older as they were pushed: a 0.4 workflow, a 0.5 one, a 0.5
 # platform description, a 0.6 workflow whose do step leads into another
-# workflow's trigger, which 0.7 makes an outside action, and two 0.7
-# workflows: the family's dinners, and enquiries whose untrusted text reaches
-# an outside action with nothing to stop it, which 0.7 warned of and 0.8
-# finds a mistake. The registry converts each when it reads it, so this is
-# what the native CLI says of each file once `awml convert` has upgraded it.
-# Converting the 0.6 one notes what to do by hand, and the enquiries have a
-# mistake, so convert exits 1 for each and still writes the whole file; the
-# 0.6 one's notes are kept.
+# workflow's trigger, which 0.7 makes an outside action; two 0.7 workflows:
+# the family's dinners, and enquiries whose untrusted text reaches an outside
+# action with nothing to stop it, which 0.7 warned of and 0.8 made a mistake,
+# and 0.9 an error, which the drawing draws red; and two 0.8 workflows: the
+# family's dinners again, and a newsletter whose outside action writes to a
+# context, which 0.9 finds invalid. The registry converts each when it reads
+# it, so this is what the native CLI says of each file once `awml convert`
+# has upgraded it. Converting the 0.6 one notes what to do by hand, and the
+# newsletter is invalid, so convert exits 1 for each and still writes the whole
+# file; the 0.6 one's notes are kept.
 older="$fixtures/older"
 mkdir -p "$tmp/older"
-for file in dinners-04 client-email-05 scripts-mac-mini-05 dinners-07; do
+for file in dinners-04 client-email-05 scripts-mac-mini-05 dinners-07 enquiries-07 dinners-08; do
   "$tmp/awml" convert "$older/$file.yaml" > "$tmp/older/$file.yaml"
 done
 { "$tmp/awml" convert "$older/bakery-stock-06.yaml" 2> "$older/bakery-stock-06.convert.txt" || true; } > "$tmp/older/bakery-stock-06.yaml"
-{ "$tmp/awml" convert "$older/enquiries-07.yaml" 2> /dev/null || true; } > "$tmp/older/enquiries-07.yaml"
+{ "$tmp/awml" convert "$older/sign-off-08.yaml" 2> /dev/null || true; } > "$tmp/older/sign-off-08.yaml"
 (cd "$tmp/older" && "$tmp/awml" graph dinners-07.yaml > "$older/dinners-07.graph.json")
+(cd "$tmp/older" && "$tmp/awml" graph dinners-08.yaml > "$older/dinners-08.graph.json")
+(cd "$tmp/older" && { "$tmp/awml" check --json sign-off-08.yaml || true; } > "$older/sign-off-08.checks-now.json")
 (cd "$tmp/older" && { "$tmp/awml" check --json enquiries-07.yaml || true; } > "$older/enquiries-07.checks-now.json")
 (cd "$tmp/older" && "$tmp/awml" graph enquiries-07.yaml > "$older/enquiries-07.graph.json")
 (cd "$tmp/older" && "$tmp/awml" check --json bakery-stock-06.yaml > "$older/bakery-stock-06.checks-now.json")
@@ -117,13 +130,15 @@ mkdir -p "$tmp/legacy"
 
 # The fit: a workflow that says what it needs, AWML's example platforms, and
 # what `awml fit --json` says of them, for the design and for its office
-# implementation; and the gaps it finds in a workflow that doesn't say.
+# implementation, and what `awml fit --parts --json` says of each part
+# (registry issue #100); and the gaps it finds in a workflow that doesn't say.
 rm -rf "$fixtures/platforms"
 mkdir -p "$fixtures/platforms"
 cp "$src/examples/client-email.yaml" "$fixtures/"
 cp "$src/examples/platforms/"*.yaml "$fixtures/platforms/"
 (cd "$fixtures" && "$tmp/awml" fit --json client-email.yaml platforms/*.yaml > client-email.fit.json)
 (cd "$fixtures" && "$tmp/awml" fit --json --implementation office client-email.yaml platforms/*.yaml > client-email-office.fit.json)
+(cd "$fixtures" && "$tmp/awml" fit --parts --json client-email.yaml platforms/*.yaml > client-email.fit-parts.json)
 (cd "$fixtures" && { "$tmp/awml" fit --json dinners.yaml platforms/worker.yaml || true; } > dinners.fit.json)
 
 echo "vendor/awml now pins awml $tag ($commit)"

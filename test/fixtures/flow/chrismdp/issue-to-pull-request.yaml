@@ -1,14 +1,15 @@
-# An issue the maintainer labels build becomes a pull request. The repository is public, so
-# everything here sits in one scope: what matters is who may act. Only people with write access,
-# and the repository's own app, can add a label, so the label is the decision. Claude drafts with a
-# read-only token, and as part of its draft redraws the examples the change alters and pictures
-# those that look different. The checks run where Claude can't reach. Two fresh Claude sessions
-# that didn't write the change review it, one for bugs and one for security, and a third classifies
-# its risk. The app then pushes the branch and the pictures and opens the pull request, which
-# lands by land-a-pull-request once CI has run. A failed check, or an Important finding before the
-# third try, goes to retry-a-build.
-awml: "0.8"
+awml: "0.9"
 title: An issue becomes a pull request
+description: |
+  An issue the maintainer labels build becomes a pull request. The repository is public, so
+  everything here sits in one scope: what matters is who may act. Only people with write access,
+  and the repository's own app, can add a label, so the label is the decision. Claude drafts with a
+  read-only token, and as part of its draft redraws the examples the change alters and pictures
+  those that look different. The checks run where Claude can't reach. Two fresh Claude sessions
+  that didn't write the change review it, one for bugs and one for security, and a third classifies
+  its risk. The app then pushes the branch and the pictures and opens the pull request, which
+  lands by land-a-pull-request once CI has run. A failed check, or an Important finding before the
+  third try, goes to retry-a-build.
 scopes:
   - { id: public, label: "public: anyone who reads the repository", processing: any }
 parts:
