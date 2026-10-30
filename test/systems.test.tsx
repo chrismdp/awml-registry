@@ -34,7 +34,7 @@ import { laidOut } from "./drawn";
 // A workflow that the fit can judge: one scope any company may process, a
 // trigger that waits up to an hour, a note kept in the scope and a step a
 // person takes, each labelled so a test can find it on a page.
-const workflow = (title: string, words: string) => `awml: "0.9"
+const workflow = (title: string, words: string) => `awml: "0.10"
 title: ${title}
 scopes:
   - { id: home, label: "home: the family", processing: any }
@@ -430,7 +430,7 @@ describe("a system's page", () => {
 
   it("draws a part two members share once, by the ref between them, and says who shares it", async () => {
     const { ana } = await world();
-    const meals = `awml: "0.9"
+    const meals = `awml: "0.10"
 title: Meals
 scopes:
   - { id: home, label: "home: the family", processing: any }

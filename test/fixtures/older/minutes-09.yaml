@@ -1,0 +1,17 @@
+awml: "0.9"
+title: Keeping the club's minutes
+description: |
+  The minutes of each club meeting are drafted, and Sam's yes puts them straight into the club's
+  minutes book. AWML 0.9 let a line go from a review into a context; AWML 0.10 finds the file
+  invalid, since only a step writes to a context. Sam is fictional.
+scopes:
+  - { id: club, label: "club: Sam", processing: any }
+parts:
+  - { id: meeting, kind: trigger, label: "After each meeting", wait: P1D }
+  - { id: draft, kind: ai, op: draft, label: "Draft the minutes", in: club }
+  - { id: approve, kind: review, label: "Sam's yes to the minutes", in: club }
+  - { id: book, kind: context, label: "The minutes book", in: club }
+lines:
+  - { from: meeting, to: draft, kind: start }
+  - { from: draft, to: approve, kind: start, label: the draft }
+  - { from: approve, to: book, kind: data, label: "[yes]" }

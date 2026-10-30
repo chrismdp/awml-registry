@@ -1,4 +1,4 @@
-awml: "0.9"
+awml: "0.10"
 title: Fill the basket
 description: |
   A workflow with no mistakes and one warning: AI decides a do step.

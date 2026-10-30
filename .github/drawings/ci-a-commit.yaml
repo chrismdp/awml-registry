@@ -7,7 +7,7 @@
 # None of them runs any of the change's code. Each job's result is its check on the commit, so the
 # commit as pushed has one judge, and every other workflow reads that judge's verdict from GitHub.
 # A fork's pull request, or one a stranger opened, gets the tests only.
-awml: "0.9"
+awml: "0.10"
 title: A commit is checked
 description: |
   CI for the factory: the tests, Bug review and Security review side by side, then Classify on a

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { versionProps } from "@/app/[owner]/[slug]/load";
 import { systemProps } from "@/app/[owner]/systems/[slug]/load";
-import { mistakesIn } from "@/components/Checks";
+import { mistakeMessages, mistakesIn } from "@/components/Checks";
 import { undrawnText, type Drawings, type Undrawn } from "@/components/flow/drawing";
 import { NONE_DRAWN, notTogether } from "@/components/SystemView";
 import { count } from "@/components/words";
@@ -34,8 +34,10 @@ export type EmbedProps = {
   // The registry's address, as the corner names it: awml.io on awml.io.
   host: string;
   drawing: Drawings | null;
-  // Why nothing is drawn, said in the frame instead.
+  // Why nothing is drawn, said in the frame instead, and for a file that is
+  // invalid, what makes it so, in the words of each check (#102).
   message?: string;
+  mistakes?: string[];
   links: PartLink[];
   hrefs: Record<string, string>;
   // How many of a system's members are private, so left out.
@@ -84,6 +86,7 @@ export async function workflowEmbed(owner: string, slug: string, n: string, opti
     href: p.address + p.tab,
     host: host(),
     ...drawn(p.nowhere ? null : p.drawing, "workflow", none),
+    ...(!p.nowhere && !p.drawing && file && { mistakes: mistakeMessages(file) }),
     links: p.links,
     hrefs: {},
     hidden: 0,

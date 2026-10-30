@@ -1,4 +1,4 @@
-awml: "0.9"
+awml: "0.10"
 title: A pull request lands once CI has run
 description: |
   A pull request the app opened lands once CI has run on it. If CI fails, it goes to

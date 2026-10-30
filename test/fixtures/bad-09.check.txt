@@ -1,2 +1,0 @@
-bad-09.yaml: the line from "plan" to "missing" ends at unknown part "missing"
-bad-09.yaml: part "notes" is not placed in implementation "home"

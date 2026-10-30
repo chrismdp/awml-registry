@@ -1,4 +1,4 @@
-// The registry takes AWML 0.9 files only: one file per workflow version,
+// The registry takes AWML 0.10 files only: one file per workflow version,
 // holding the design and any implementations. Older files are refused at
 // push, and versions stored before stay readable as history, converted when
 // read (test/older-awml.test.tsx shows that for 0.4 and 0.5 files).
@@ -27,7 +27,7 @@ import { example, orgWith, person, request, storePlatformVersion, storeVersion, 
 import { call } from "./mcp-client";
 import { renderPage } from "./pages";
 
-const dinners = example("dinners.yaml"); // 0.9
+const dinners = example("dinners.yaml"); // 0.10
 const clientEmail = example("client-email.yaml");
 const legacySecurity = example("legacy/dinners-security.yaml"); // 0.2
 const legacyPlatform = example("legacy/dinners-platform.yaml"); // 0.2
@@ -118,10 +118,10 @@ describe("pushing a workflow", () => {
     expect((await call("get", { owner: ana.username, slug: "dinners" }, ana.token)).text).toBe("Not found.");
   });
 
-  it("takes one 0.9 file as workflow, or alone as security, as awml push 0.4.0 sent it", async () => {
+  it("takes one 0.10 file as workflow, or alone as security, as awml push 0.4.0 sent it", async () => {
     const ana = await person("ana");
     const as = { token: ana.token };
-    expect(dinners).toMatch(/^awml: "0\.9"$/m);
+    expect(dinners).toMatch(/^awml: "0\.10"$/m);
     expect(await push(ana.username, "dinners", as, { workflow: dinners })).toMatchObject({ status: 201, body: { number: 1 } });
     expect(await push(ana.username, "dinners", as, { security: dinners })).toMatchObject({ status: 201, body: { number: 2 } });
     const stored = await (await request("GET", `/api/v1/${ana.username}/dinners/v/2`)).json();
@@ -130,7 +130,7 @@ describe("pushing a workflow", () => {
     expect(stored.check).toEqual({ workflow: [] });
   });
 
-  it("publishes and checks one 0.9 file through MCP", async () => {
+  it("publishes and checks one 0.10 file through MCP", async () => {
     const ana = await person("ana");
     expect(await call("check", { workflow: twoPlaces }, ana.token)).toMatchObject({ isError: false, text: "No mistakes." });
     const published = await call("publish", { owner: ana.username, slug: "dinners", workflow: twoPlaces }, ana.token);
@@ -140,11 +140,11 @@ describe("pushing a workflow", () => {
     expect(got.text).toContain(`workflow.yaml:\n${twoPlaces}`);
   });
 
-  it("refuses a 0.9 file with mistakes with 422 and the messages `awml check` prints for it", async () => {
+  it("refuses a 0.10 file with mistakes with 422 and the messages `awml check` prints for it", async () => {
     const ana = await person("ana");
-    const printed = example("bad-09.check.txt").trim().split("\n");
-    const res = await push(ana.username, "broken", { token: ana.token }, { workflow: example("bad-09.yaml") });
-    expect(res).toEqual({ status: 422, body: { errors: printed.map((l) => l.replace(/^bad-09\.yaml: /, "workflow: ")) } });
+    const printed = example("bad-010.check.txt").trim().split("\n");
+    const res = await push(ana.username, "broken", { token: ana.token }, { workflow: example("bad-010.yaml") });
+    expect(res).toEqual({ status: 422, body: { errors: printed.map((l) => l.replace(/^bad-010\.yaml: /, "workflow: ")) } });
   });
 
   it("refuses more than one file, and a platform description sent as a workflow", async () => {
@@ -152,7 +152,7 @@ describe("pushing a workflow", () => {
     const as = { token: ana.token };
     expect(await push(ana.username, "two", as, { workflow: dinners, security: dinners })).toEqual({
       status: 422,
-      body: { errors: ["Send one file, as workflow: an AWML 0.9 workflow holds its design and its implementations."] },
+      body: { errors: ["Send one file, as workflow: an AWML 0.10 workflow holds its design and its implementations."] },
     });
     expect(await push(ana.username, "box", as, { workflow: descriptions.worker })).toEqual({
       status: 422,
@@ -160,7 +160,7 @@ describe("pushing a workflow", () => {
     });
     expect(await push(ana.username, "none", as, {})).toEqual({
       status: 422,
-      body: { errors: ["Send the workflow's AWML 0.9 file as workflow."] },
+      body: { errors: ["Send the workflow's AWML 0.10 file as workflow."] },
     });
   });
 });
@@ -300,7 +300,7 @@ describe("an invalid file and a drawing with errors", () => {
 
   it("warns, never refusing, when untrusted text reaches a surface with nothing to stop it", async () => {
     const ana = await person("ana");
-    const board = `awml: "0.9"
+    const board = `awml: "0.10"
 title: The notice board
 scopes:
   - { id: club, label: "club: members", processing: any }
@@ -323,7 +323,7 @@ lines:
 });
 
 describe("pushing a platform description", () => {
-  const old = descriptions.worker.replace('awml: "0.9"', 'awml: "0.3"');
+  const old = descriptions.worker.replace('awml: "0.10"', 'awml: "0.3"');
 
   it("refuses an older one with a 400 through the API and the MCP tool", async () => {
     const ana = await person("ana");
@@ -340,7 +340,7 @@ describe("pushing a platform description", () => {
     expect((await request("GET", `/api/v1/platforms/${ana.username}/worker`)).status).toBe(404);
   });
 
-  it("takes a 0.9 one, and refuses a workflow sent as one", async () => {
+  it("takes a 0.10 one, and refuses a workflow sent as one", async () => {
     const ana = await person("ana");
     const pushTo = (slug: string, description: string) =>
       request("POST", `/api/v1/platforms/${ana.username}/${slug}/versions`, { as: { token: ana.token }, json: { description } });
@@ -486,7 +486,7 @@ describe("a workflow's page", () => {
     expect(files((await renderPage(VersionYamlPage, { owner: o, slug: "dinners", n: "1" })).html)).toEqual({ "workflow-yaml": dinners });
   });
 
-  it("checks the one file with AWML 0.9 on the Checks tab", async () => {
+  it("checks the one file with AWML 0.10 on the Checks tab", async () => {
     const ana = await person("ana");
     const o = ana.username;
     await push(o, "dinners", { token: ana.token }, { workflow: dinners });
@@ -498,26 +498,26 @@ describe("a workflow's page", () => {
       expect(text(page.html)).toContain(`workflow.yaml Checked by AWML ${engine.version.tag} The file is YAML file.yaml Passed`);
       expect(text(page.html)).not.toContain("security.yaml");
     }
-    expect(engine.version.tag).toMatch(/^v0\.9\./);
+    expect(engine.version.tag).toMatch(/^v0\.10\./);
   });
 });
 
 describe("warnings on the Checks tab", () => {
-  // What `awml check` printed for test/fixtures/warning-09.yaml: its warnings, then ok.
-  const printed = example("warning-09.check.txt").trim().split("\n");
-  const warnings = printed.filter((l) => l.includes(": warning: ")).map((l) => l.replace(/^warning-09\.yaml: warning: /, ""));
+  // What `awml check` printed for test/fixtures/warning-010.yaml: its warnings, then ok.
+  const printed = example("warning-010.check.txt").trim().split("\n");
+  const warnings = printed.filter((l) => l.includes(": warning: ")).map((l) => l.replace(/^warning-010\.yaml: warning: /, ""));
 
   it("gives the warnings the native awml gives", async () => {
-    expect(printed.at(-1)).toBe("warning-09.yaml: ok");
+    expect(printed.at(-1)).toBe("warning-010.yaml: ok");
     expect(warnings).toHaveLength(1);
-    expect(await engine.warnings(example("warning-09.yaml"))).toEqual(warnings);
+    expect(await engine.warnings(example("warning-010.yaml"))).toEqual(warnings);
     expect(await engine.warnings(dinners)).toEqual([]);
   });
 
   it("lists them apart from the mistakes, and they neither refuse a push nor fail the check", async () => {
     const ana = await person("ana");
     const o = ana.username;
-    expect((await push(o, "basket", { token: ana.token }, { workflow: example("warning-09.yaml") })).status).toBe(201);
+    expect((await push(o, "basket", { token: ana.token }, { workflow: example("warning-010.yaml") })).status).toBe(201);
     const page = await renderPage(WorkflowChecksPage, { owner: o, slug: "basket" });
     expect(tabs(page.html).at(-1)).toEqual({ href: `/${o}/basket/checks`, label: "Checks No mistakes", selected: true });
     expect(text(page.html)).toContain(
@@ -526,7 +526,7 @@ describe("warnings on the Checks tab", () => {
         `Warnings don't fail the check. ${warnings[0]}`,
     );
     // The design is still drawn.
-    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "basket" })).html)).toEqual(expected(example("warning-09.yaml")));
+    expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "basket" })).html)).toEqual(expected(example("warning-010.yaml")));
     // A file without warnings says nothing of them.
     await push(o, "dinners", { token: ana.token }, { workflow: dinners });
     expect(text((await renderPage(WorkflowChecksPage, { owner: o, slug: "dinners" })).html)).not.toContain("warning");
@@ -536,11 +536,11 @@ describe("warnings on the Checks tab", () => {
 describe("every check on the Checks tab", () => {
   // The list stored with the only version there is.
   const stored = async () => (await (await getDb()).select({ checks: version.checks }).from(version))[0].checks;
-  const bad = example("bad-09.yaml");
-  const badMessages = example("bad-09.check.txt")
+  const bad = example("bad-010.yaml");
+  const badMessages = example("bad-010.check.txt")
     .trim()
     .split("\n")
-    .map((l) => l.replace(/^bad-09\.yaml: /, ""));
+    .map((l) => l.replace(/^bad-010\.yaml: /, ""));
 
   it("gets each check from AWML in its spec's order, with a stable id, a name, what it guards and its result", async () => {
     const list = await engine.checks(dinners);
@@ -562,9 +562,9 @@ describe("every check on the Checks tab", () => {
     const failed = (await engine.checks(bad)).filter((c) => c.result === "fail");
     expect(failed.map((c) => c.id)).toEqual(["references.known", "placement.complete"]);
     expect(failed.flatMap((c) => c.mistakes)).toEqual(badMessages);
-    const warned = (await engine.checks(example("warning-09.yaml"))).filter((c) => c.result === "warn");
+    const warned = (await engine.checks(example("warning-010.yaml"))).filter((c) => c.result === "warn");
     expect(warned.map((c) => [c.id, c.mistakes])).toEqual([
-      ["warn.do-by-code", [await engine.warnings(example("warning-09.yaml")).then((w) => w[0])]],
+      ["warn.do-by-code", [await engine.warnings(example("warning-010.yaml")).then((w) => w[0])]],
     ]);
   });
 
@@ -619,7 +619,7 @@ describe("every check on the Checks tab", () => {
   it("marks a warning as a warning, which keeps the tick", async () => {
     const ana = await person("ana");
     const o = ana.username;
-    await push(o, "basket", { token: ana.token }, { workflow: example("warning-09.yaml") });
+    await push(o, "basket", { token: ana.token }, { workflow: example("warning-010.yaml") });
     const page = await renderPage(WorkflowChecksPage, { owner: o, slug: "basket" });
     expect(tabs(page.html).at(-1)?.label).toBe("Checks No mistakes");
     expect(page.html).toContain('<span class="badge warn">1 warning</span>');
@@ -903,7 +903,7 @@ describe("fitting a workflow", () => {
     it("fits a workflow's block named acme/platforms/ops-runner against acme's stored ops-runner, with no network", async () => {
       const olive = await acme();
       const file = placedAt("acme/platforms/ops-runner");
-      expect(file).toMatch(/^awml: "0\.9"$/m);
+      expect(file).toMatch(/^awml: "0\.10"$/m);
       expect(await engine.check(file)).toEqual([]);
       const expected = {
         block: "cowork",
@@ -1010,7 +1010,7 @@ describe("fitting a workflow", () => {
 });
 
 describe("versions stored before the registry took only 0.4 files", () => {
-  it("stay readable, converted when read: their pages, each tab, their YAML, Checks and raw files, beside a 0.9 version", async () => {
+  it("stay readable, converted when read: their pages, each tab, their YAML, Checks and raw files, beside a 0.10 version", async () => {
     const ana = await person("ana");
     const o = ana.username;
     await storeVersion(o, "dinners", ana, { security: legacySecurity, platform: legacyPlatform }, { summary: JSON.parse(example("legacy/dinners.summary.json")) });
@@ -1027,7 +1027,7 @@ describe("versions stored before the registry took only 0.4 files", () => {
       `/${o}/dinners/v/1/yaml`,
       `/${o}/dinners/v/1/checks`,
     ]);
-    // This pair's views differ, so AWML 0.9 can't join them, and its platform
+    // This pair's views differ, so AWML 0.10 can't join them, and its platform
     // view can't be converted: the tab says so, and Checks gives convert's reasons.
     const platform = await renderPage(VersionPlatformPage, v1);
     const reasons = await engine.convert([legacySecurity, legacyPlatform]);
@@ -1042,7 +1042,7 @@ describe("versions stored before the registry took only 0.4 files", () => {
       "security-yaml": legacySecurity,
       "platform-yaml": legacyPlatform,
     });
-    expect(text(yaml)).toContain("security.yaml is AWML 0.2, as it was pushed. The registry draws, checks and fits it converted to AWML 0.9.");
+    expect(text(yaml)).toContain("security.yaml is AWML 0.2, as it was pushed. The registry draws, checks and fits it converted to AWML 0.10.");
     // AWML 0.7 warns of what the converted security view starts with no trigger, which fails nothing.
     const converted = await engine.convert([legacySecurity]);
     const warned = "file" in converted ? await engine.warnings(converted.file) : [];
@@ -1064,7 +1064,7 @@ describe("versions stored before the registry took only 0.4 files", () => {
     expect(tabs(v2.html).map((t) => t.label)).toEqual(["Who may see each part", "YAML", "Checks No mistakes"]);
     expect((await renderPage(VersionPlatformPage, { ...v1, n: "2" })).status).toBe(404);
 
-    // The latest, 0.9, sits beside them.
+    // The latest, 0.10, sits beside them.
     const latest = await renderPage(WorkflowPage, { owner: o, slug: "dinners" });
     expect(text(latest.html)).toContain("Version 3 of 3");
     expect(drawing(latest.html)).toEqual(expected(dinners));

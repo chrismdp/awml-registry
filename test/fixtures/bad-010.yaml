@@ -1,4 +1,4 @@
-awml: "0.9"
+awml: "0.10"
 title: Broken bread
 description: |
   A workflow with mistakes that make it invalid, and no warnings: a line to a part that isn't there, and

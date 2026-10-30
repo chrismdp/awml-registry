@@ -85,7 +85,7 @@ function reference(text: string) {
 
 // The workflow the fit judges: a stored version's file, or the security view
 // of one stored before 0.4, as the engine reads it, converted when it is in
-// an older AWML; or a 0.9 file sent as YAML, as `file`, or as `security` as
+// an older AWML; or a 0.10 file sent as YAML, as `file`, or as `security` as
 // clients of the 0.3 API send it. With an implementation, it must be one the
 // workflow has.
 async function design(
@@ -138,7 +138,7 @@ async function design(
     return { ok: true, source: yaml, workflow: null, implementation: implementation ?? null };
   }
   if (workflow !== undefined) return refuse(422, "Name the workflow as owner/slug or owner/slug@version.");
-  return refuse(422, "Send a workflow as owner/slug, or its AWML 0.9 file as file.");
+  return refuse(422, "Send a workflow as owner/slug, or its AWML 0.10 file as file.");
 }
 
 type Candidate = {
@@ -189,7 +189,7 @@ async function candidates(db: Db, viewer: Viewer, named: unknown): Promise<Resul
   return { ok: true, platforms };
 }
 
-// Fits a workflow, named as owner/slug[@version] or sent as its 0.9 file,
+// Fits a workflow, named as owner/slug[@version] or sent as its 0.10 file,
 // against the platforms named, or every platform the viewer may see.
 //
 // The design is judged against each platform on its own, so one platform's
@@ -308,7 +308,7 @@ async function partsOf(source: string, platforms: Candidate[]): Promise<PartsFit
 // whose blocks name none the caller may see. This one stands in: no block
 // names it, so it judges nothing, and the engine still reports each block
 // that names no platform, and each whose description wasn't given.
-const NO_DESCRIPTION = `awml: "0.9"
+const NO_DESCRIPTION = `awml: "0.10"
 platform: { id: registry-gave-no-description, label: "No description" }
 off_for_up_to: PT0S
 steps: code

@@ -1,4 +1,4 @@
-awml: "0.9"
+awml: "0.10"
 title: A failed build tries again
 description: |
   A try that failed, by a check, by CI or by a review's Important finding, starts the build again,
