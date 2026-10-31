@@ -770,7 +770,7 @@ describe("the tokens page", () => {
 describe("the engine", () => {
   it("names the AWML it was built from: the release and commit vendor/awml/version.json pins, which the build matches", () => {
     const pinned = JSON.parse(fs.readFileSync(path.join("vendor", "awml", "version.json"), "utf8"));
-    expect(engine.version).toEqual({ tag: "v0.10.0", commit: pinned.commit });
+    expect(engine.version).toEqual({ tag: "v0.10.1", commit: pinned.commit });
     const built = JSON.parse(fs.readFileSync(path.join("vendor", "awml", "build.json"), "utf8"));
     expect(built).toEqual({ tag: pinned.tag, commit: pinned.commit, go: pinned.go.version });
   });
