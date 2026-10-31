@@ -1987,13 +1987,14 @@ describe("build.yml", () => {
       { event: "labeled", label: { name: "bug" }, actor: { login: "maintainer", type: "User" } },
       { event: "labeled", label: { name: "build" }, actor: { login, type } },
     ]);
-  const startAnswers = (labels: string[], edited: string | null, labelled = "2026-10-01T10:00:00Z", renamed?: string, labeller = "maintainer", labellerType = "User") => `
+  const startAnswers = (labels: string[], edited: string | null, labelled = "2026-10-01T10:00:00Z", renamed?: string, labeller = "maintainer", labellerType = "User", title = "Update the engine to AWML v0.10.1") => `
 ${permissionStub}
   *"issues/7/events"*) answer <<< '${labelEvents(labeller, labellerType)}' ;;
   *"api graphql"*) answer <<< '${JSON.stringify({
     data: {
       repository: {
         issue: {
+          title,
           lastEditedAt: edited,
           labels: { nodes: labels.map((name) => ({ name })) },
           timelineItems: {
@@ -2020,6 +2021,73 @@ ${permissionStub}
     expect(run.outputs.go).toBe("true");
     expect(run.calls).toContain("issue comment 7 --repo owner/repo --body-file");
     expect(run.calls).toContain("https://github.com/owner/repo/actions/runs/1000");
+  });
+
+  it.runIf(canRehearse).each([
+    [[], "Update the engine to AWML v0.10.1", ""],
+    [["engine-like"], "Update the engine to AWML v0.10.1", ""],
+    [["engine"], "Update the engine to AWML v0.10.1", "v0.10.1"],
+    [["engine"], "Use AWML (`v0.10.1`)", "v0.10.1"],
+    [["engine"], "Update to v0.10.1.", "v0.10.1"],
+    [[], "Update the engine", ""],
+  ] as const)("passes an engine tag only with the engine label: %s, %s", (labels, title, tag) => {
+    const run = rehearse(stepWithId(jobs.start, "start").run ?? "", {
+      root: scratch(), env: { ISSUE: "7" },
+      answers: startAnswers(["build", ...labels], null, undefined, undefined, undefined, undefined, title),
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.go).toBe("true");
+    expect(run.outputs.engine_tag).toBe(tag);
+  });
+
+  it.runIf(canRehearse).each([
+    "Update the engine", "Use v0.10.0 then v0.10.1", "Use v0.10.1 twice: v0.10.1",
+    "Use 0.10.1", "Use v0.10", "Use v0.10.1-rc1", "Use v0.10.1+build", "Use v0.10.1.2", "Use av0.10.1",
+  ])("stops an engine issue with an explanatory comment for %s", (title) => {
+    const run = rehearse(stepWithId(jobs.start, "start").run ?? "", {
+      root: scratch(), env: { ISSUE: "7" },
+      answers: startAnswers(["build", "engine"], null, undefined, undefined, undefined, undefined, title),
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.go).toBe("false");
+    expect(run.outputs.engine_tag).toBeUndefined();
+    expect(run.calls).toContain("exactly one AWML release tag");
+    expect(run.calls).toContain("v0.10.1");
+    expect(run.calls.match(/issue comment /g)).toHaveLength(1);
+    expect(run.calls).not.toContain("**Building this issue.");
+  });
+
+  it.runIf(canRehearse)("treats shell syntax and workflow commands in the title as text", () => {
+    const root = scratch();
+    const title = `AWML v0.10.1 $(touch ${join(root, "pwned")}) \`touch ${join(root, "pwned")}\`\n::error::forged`;
+    const run = rehearse(stepWithId(jobs.start, "start").run ?? "", {
+      root, env: { ISSUE: "7" },
+      answers: startAnswers(["build", "engine"], null, undefined, undefined, undefined, undefined, title),
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.engine_tag).toBe("v0.10.1");
+    expect(existsSync(join(root, "pwned"))).toBe(false);
+    expect(commandsIn(run.printed)).toEqual([]);
+  });
+
+  it("updates with main's scripts before building the pin and starting the sandbox, with the tag only in env", () => {
+    const all = steps(jobs.draft);
+    const update = stepWithId(jobs.draft, "engine-update");
+    expect(update.if).toBe("needs.start.outputs.engine_tag != ''");
+    expect(update.env?.ENGINE_TAG).toBe("${{ needs.start.outputs.engine_tag }}");
+    expect(update.run).toContain('bash "$HOST_DIR/main/engine-update-for.sh" . "$HOST_DIR/engine-update"');
+    expect(update.run).not.toContain("${{");
+    expect(update.run).toContain('"$RUNNER_TEMP/input/engine-update.txt"');
+    expect(jobs.start.outputs?.engine_tag).toBe("${{ steps.start.outputs.engine_tag }}");
+    const copy = all.findIndex(each => each.name?.startsWith("Copy main's prompt"));
+    expect(all[copy].run).toContain(".github/engine-update-for.sh");
+    expect(all[copy].run).toContain('cp scripts/engine-update.sh "$HOST_DIR/engine/scripts/"');
+    expect(all.indexOf(update)).toBeGreaterThan(copy);
+    expect(all.indexOf(update)).toBeLessThan(all.indexOf(step(jobs.draft, "Build the AWML engine from the tree's pin")));
+    expect(all.indexOf(update)).toBeLessThan(all.indexOf(step(jobs.draft, "Install Claude Code and bubblewrap")));
+    expect(readFileSync(join(github, "build-prompt.md"), "utf8")).toContain("INPUT_DIR/engine-update.txt");
+    expect(runs(readJobs("retry.yml").retry)).toContain("gh workflow run build.yml");
+    expect(runs(readJobs("fix.yml").fix)).not.toContain("engine-update");
   });
 
   // A try drafts from the issue as it reads now, so an issue edited since the label was last added
@@ -2096,7 +2164,8 @@ ${permissionStub}
     expect(drawing).toMatch(/- \{ id: refused, kind: code, op: do, cleans: true, label: "[^"]*fixed text[^"]*"/);
     expect(drawing).toMatch(/\{ from: writer, to: refused, kind: start, label: "\[added without write access\]" \}/);
     expect(drawing).toContain("{ from: refused, to: startnote, kind: data }");
-    expect(drawing).toContain("{ from: writer, to: started, kind: start");
+    expect(drawing).toContain("{ from: writer, to: enginerequest, kind: start");
+    expect(drawing).toContain("{ from: enginerequest, to: started, kind: start");
     expect(drawing).not.toContain("{ from: approve, to: started");
     expect(drawing).not.toContain("{ from: still, to: started");
     expect(drawing).not.toMatch(/Only people with write access(,| and)/);
@@ -5158,6 +5227,120 @@ for file in awml.wasm wasm_exec.js build.json; do echo "built $file" > "$root/ve
   });
 });
 
+describe("engine-update-for.sh", () => {
+  const stubUpdate = `#!/bin/bash
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+source "$root/scripts/engine-lib.sh"
+printf '%s\\t%s\\t%s\\n' "$1" "$AWML_SOURCE" "\${AWML_SOURCE_DIR:-unset}" >> "$UPDATE_LOG"
+for file in version.json awml.js awml.wasm wasm_exec.js build.json; do echo "updated $file to $1" > "$root/vendor/awml/$file"; done
+echo "updated fixtures to $1" > "$root/test/fixtures/example.txt"
+rm -rf "$root/test/fixtures/platforms"
+mkdir "$root/test/fixtures/platforms"
+echo new > "$root/test/fixtures/platforms/new.yaml"
+`;
+  const setUp = () => {
+    const root = scratch();
+    const tree = join(root, "tree");
+    for (const name of ["version.json", "awml.js"]) put(join(tree, "vendor/awml", name), "old\n");
+    put(join(tree, "test/fixtures/example.txt"), "old fixtures\n");
+    put(join(tree, "test/fixtures/platforms/old.yaml"), "old\n");
+    for (const name of ["engine-update.sh", "engine-lib.sh", "engine-build.sh", "engine-pin.mjs"]) {
+      put(join(root, "runner/engine/scripts", name), name === "engine-update.sh" ? stubUpdate : readFileSync(join(__dirname, "../scripts", name), "utf8"));
+      put(join(tree, "scripts", name), "exit 91 # The tree's script must never run.\n");
+    }
+    return { root, tree };
+  };
+  const update = (root: string, tree: string, env: Record<string, string> = {}, released = true) =>
+    rehearse(script("engine-update-for.sh", [tree, join(root, "runner/engine-update")]), {
+      root, env: { ENGINE_TAG: "v0.10.1", UPDATE_LOG: join(root, "update.log"), ...env },
+      answers: `  "api repos/chrismdp/awml/releases/tags/v0.10.1"*) ${released ? "answer <<< '{\"tag_name\":\"v0.10.1\",\"draft\":false,\"prerelease\":false}'" : "exit 1"} ;;`,
+    });
+
+  it.runIf(canRehearse)("runs main's update and library at the published release, ignoring environment source overrides", () => {
+    const { root, tree } = setUp();
+    const run = update(root, tree, { AWML_SOURCE: "https://example.com/evil.git", AWML_SOURCE_DIR: join(root, "evil") });
+    expect(run.failed, run.printed).toBe(false);
+    expect(readIfThere(join(root, "update.log"))).toBe("v0.10.1\thttps://github.com/chrismdp/awml.git\tunset\n");
+    expect(run.calls).toContain("api repos/chrismdp/awml/releases/tags/v0.10.1");
+    for (const name of ["version.json", "awml.js", "awml.wasm", "wasm_exec.js", "build.json"])
+      expect(readIfThere(join(tree, "vendor/awml", name))).toBe(`updated ${name} to v0.10.1\n`);
+    expect(readIfThere(join(tree, "test/fixtures/example.txt"))).toBe("updated fixtures to v0.10.1\n");
+    expect(existsSync(join(tree, "test/fixtures/platforms/old.yaml"))).toBe(false);
+    expect(readIfThere(join(tree, "test/fixtures/platforms/new.yaml"))).toBe("new\n");
+  });
+
+  it.runIf(canRehearse)("copies main's scripts out, runs those copies after tree scripts change, and tells the session", () => {
+    const { root, tree } = setUp();
+    for (const file of readdirSync(github).filter(file => /\.(sh|md)$/.test(file)))
+      put(join(tree, ".github", file), readFileSync(join(github, file), "utf8"));
+    for (const file of ["engine-update.sh", "engine-build.sh", "engine-lib.sh", "engine-pin.mjs"])
+      put(join(tree, "scripts", file), readIfThere(join(root, "runner/engine/scripts", file)));
+    for (const file of ["AGENTS.md", "REVIEW.md"]) put(join(tree, file), "Follow the rules.\n");
+    const draft = readJobs("build.yml").draft;
+    const copy = steps(draft).find(each => each.name?.startsWith("Copy main's prompt"))!;
+    const copied = rehearse(copy.run ?? "", { root, cwd: tree });
+    expect(copied.failed, copied.printed).toBe(false);
+    for (const file of ["engine-update.sh", "engine-build.sh", "engine-lib.sh", "engine-pin.mjs"])
+      put(join(tree, "scripts", file), "exit 91 # The tree's script must never run.\n");
+    put(join(tree, ".github/engine-update-for.sh"), "exit 91\n");
+    const run = rehearse(stepWithId(draft, "engine-update").run ?? "", {
+      root, cwd: tree, env: { ENGINE_TAG: "v0.10.1", UPDATE_LOG: join(root, "update.log") },
+      answers: `  "api repos/chrismdp/awml/releases/tags/v0.10.1"*) answer <<< '{"tag_name":"v0.10.1","draft":false}' ;;`,
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(readIfThere(join(tree, "vendor/awml/version.json"))).toBe("updated version.json to v0.10.1\n");
+    const note = left(root, "input/engine-update.txt");
+    expect(note).toContain("already updated to v0.10.1");
+    expect(note).toContain("pin, wrapper and fixtures are in the tree");
+    expect(note).toContain("without fetching the engine");
+  });
+
+  it.runIf(canRehearse).each(["version.json", "awml.js"])("refuses a missing %s, as the normal engine build does", (file) => {
+    const { root, tree } = setUp();
+    rmSync(join(tree, "vendor/awml", file));
+    const run = update(root, tree);
+    expect(run.failed).toBe(true);
+    expect(existsSync(join(root, "update.log"))).toBe(false);
+  });
+
+  it.runIf(canRehearse)("refuses a tag with no published release before running any update", () => {
+    const { root, tree } = setUp();
+    const run = update(root, tree, {}, false);
+    expect(run.failed).toBe(true);
+    expect(run.printed).toContain("published release of chrismdp/awml");
+    expect(existsSync(join(root, "update.log"))).toBe(false);
+    expect(readIfThere(join(tree, "vendor/awml/version.json"))).toBe("old\n");
+  });
+
+  it.runIf(canRehearse).each(["", "main", "v0.10.1-rc1", "v0.10.1; touch pwned", "v0.10.1\nforged=value"])("validates the environment's tag before using it: %s", (tag) => {
+    const { root, tree } = setUp();
+    const run = update(root, tree, { ENGINE_TAG: tag });
+    expect(run.failed).toBe(true);
+    expect(run.calls).toBe("");
+    expect(existsSync(join(root, "update.log"))).toBe(false);
+  });
+
+  it.runIf(canRehearse).each([
+    "vendor", "vendor/awml", "test", "test/fixtures", "test/fixtures/platforms",
+    "vendor/awml/version.json", "vendor/awml/awml.js", "vendor/awml/awml.wasm", "vendor/awml/wasm_exec.js", "vendor/awml/build.json",
+    "test/fixtures/example.txt", "test/fixtures/platforms/old.yaml",
+  ])("refuses a link at %s before updating, without writing through it", (path) => {
+    const { root, tree } = setUp();
+    const at = join(tree, path);
+    const outside = join(root, "outside");
+    if (existsSync(at)) execFileSync("mv", [at, outside]);
+    else put(outside, "outside\n");
+    symlinkSync(outside, at);
+    const run = update(root, tree);
+    expect(run.failed).toBe(true);
+    expect(existsSync(join(root, "update.log"))).toBe(false);
+    expect(run.printed).toMatch(/plain|link/);
+    const files = statSync(outside).isDirectory() ? readdirSync(outside, { recursive: true, encoding: "utf8" }).map(name => join(outside, name)) : [outside];
+    for (const file of files) if (statSync(file).isFile()) expect(readIfThere(file)).not.toContain("updated");
+  });
+});
+
 // Both builders read the same approved issue; only a build branch names one.
 describe("referring findings back", () => {
   const jobs = readJobs("fix.yml");
@@ -5396,6 +5579,21 @@ describe("the factory's drawings", () => {
     parts: { id: string; untrusted?: boolean; cleans?: boolean }[];
     lines: { from: string; to: string; kind: string }[];
   };
+  it("draws the engine update and its network outside the session's sandbox", () => {
+    const text = readFileSync(join(github, "drawings/issue-to-pull-request.yaml"), "utf8");
+    const build = parse(text) as {
+      parts: { id: string; kind: string; label: string }[];
+      lines: { from: string; to: string; kind: string }[];
+      implementations: { actions: { blocks: { id: string; parts: string[] }[] } };
+    };
+    expect(build.parts.find(p => p.id === "engineupdate")?.kind).toBe("code");
+    expect(build.parts.find(p => p.id === "awmlrepo")?.label).toContain("github.com/chrismdp/awml");
+    expect(build.parts.find(p => p.id === "godev")?.label).toContain("go.dev");
+    expect(build.implementations.actions.blocks.find(b => b.id === "draftjob")?.parts).toContain("engineupdate");
+    expect(build.implementations.actions.blocks.find(b => b.id === "agentjob")?.parts).not.toContain("engineupdate");
+    for (const from of ["awmlrepo", "godev"])
+      expect(build.lines).toContainEqual(expect.objectContaining({ from, to: "engineupdate", kind: "data" }));
+  });
   it("trusts review findings past the opener gate and keeps test output apart", () => {
     const ci = drawing("ci-a-commit");
     expect(ci.parts.find(p => p.id === "whose")?.cleans).toBe(true);

@@ -25,6 +25,8 @@ parts:
   - { id: token, kind: connector, label: "The repository, through its own Actions token", in: public }
   - { id: app, kind: connector, label: "The repository, through its own GitHub App", in: public }
   - { id: writer, kind: code, op: sort, cleans: true, label: "Sort by GitHub's record: did whoever last added the build label have a role, or a role's base permission, of admin, maintain or write, or are they the app, by its exact login and type? It passes on only the answer", in: public }
+  - { id: enginerequest, kind: code, op: sort, cleans: true, label: "Sort by the engine label and the untrusted title: with the label, require exactly one whole vX.Y.Z tag, passed on only through the environment", in: public }
+  - { id: enginebad, kind: code, op: do, cleans: true, label: "Post a fixed comment explaining that the engine label needs exactly one release tag in the title, then stop", in: public }
   - { id: refused, kind: code, op: do, cleans: true, label: "Post a new comment on the issue, from fixed text, that the label was added by someone who may not write here, so the build won't start, and only someone with write access, or the app, can start it", in: public }
   - { id: started, kind: code, op: do, label: "Post a new comment on the issue that the build has started, linking the run", in: public }
   - { id: startnote, kind: outside, label: "Comment on the issue: Allow", in: public }
@@ -33,6 +35,12 @@ parts:
   - { id: asked, kind: context, label: "The approved issue and comments, including earlier app referrals", in: public }
   - { id: failed, kind: context, label: "Why the last try failed: the failed tests' log of CI's latest run on the branch", in: public, untrusted: true }
   - { id: repo, kind: context, label: "The spec, guide, code, AGENTS.md and REVIEW.md, from main", in: public }
+  - { id: awmlrepo, kind: connector, label: "github.com/chrismdp/awml: published releases and source at the release tag", in: public }
+  - { id: godev, kind: connector, label: "go.dev: the pinned Go release and its archive hashes", in: public }
+  - { id: engineupdate, kind: code, op: do, label: "Before the sandbox or any session, check the tag is a published AWML release, then run main's engine-update scripts from the host-only folder, with source overrides off and links refused. Build and run native awml on the host to rewrite fixtures", in: public }
+  - { id: enginepin, kind: context, label: "The updated engine pin, wrapper and fixtures in the tree, with a note telling the session the engine is already updated", in: public }
+  - { id: enginebuild, kind: code, op: do, label: "Build the tree's engine from its pin with main's engine-for script before any session, using the new pin after an update", in: public }
+  - { id: enginetrust, kind: comment, label: "The engine label is the maintainer's decision. Updating executes AWML's native release code on the host, from the maintainer's own repository already trusted to compile. A person reviews the new pin and fixtures with the session's change in one pull request. Retry starts this update again; fix uses the branch's existing pin" }
   - { id: build, kind: ai, op: draft, label: "Write the change test first, and name the pages it alters, to be pictured before and after", in: public }
   - { id: pictures, kind: code, op: do, label: "Picture each page the change names, on main and with the change, at desktop and phone widths, with main's picture script", in: public }
   - { id: patch, kind: context, label: "The change, as a patch, with its pictures, Claude's note and its description for the pull request", in: public }
@@ -64,7 +72,11 @@ lines:
   - { from: thread, to: approve, kind: data, label: "the issue" }
   - { from: approve, to: writer, kind: start, label: "[yes]" }
   - { from: thread, to: writer, kind: data, label: "who last added the label" }
-  - { from: writer, to: started, kind: start, label: "[added with write access, or by the app]" }
+  - { from: writer, to: enginerequest, kind: start, label: "[added with write access, or by the app]" }
+  - { from: thread, to: enginerequest, kind: data, label: "the labels and untrusted title" }
+  - { from: enginerequest, to: started, kind: start, label: "[no engine label, or exactly one valid tag]" }
+  - { from: enginerequest, to: enginebad, kind: start, label: "[engine label, without exactly one valid tag]" }
+  - { from: enginebad, to: startnote, kind: data }
   - { from: writer, to: refused, kind: start, label: "[added without write access]" }
   - { from: refused, to: startnote, kind: data }
   - { from: dispatch, to: still, kind: start, label: "the issue's number" }
@@ -78,7 +90,16 @@ lines:
   - { from: token, to: bring, kind: data, label: "CI's latest pull_request run on the branch" }
   - { from: bring, to: asked, kind: data }
   - { from: bring, to: failed, kind: data }
-  - { from: bring, to: build, kind: start }
+  - { from: bring, to: engineupdate, kind: start, label: "[engine label and one validated tag]" }
+  - { from: enginerequest, to: engineupdate, kind: data, label: "only the validated tag, through the environment" }
+  - { from: awmlrepo, to: engineupdate, kind: data, label: "published release and its source" }
+  - { from: godev, to: engineupdate, kind: data, label: "pinned Go" }
+  - { from: engineupdate, to: enginepin, kind: data }
+  - { from: engineupdate, to: enginebuild, kind: start }
+  - { from: bring, to: enginebuild, kind: start, label: "[no engine label]" }
+  - { from: enginebuild, to: build, kind: start }
+  - { from: enginepin, to: build, kind: data }
+  - { from: enginetrust, to: engineupdate, kind: tie }
   - { from: asked, to: build, kind: data }
   - { from: failed, to: build, kind: data, label: "why the last try failed" }
   - { from: repo, to: build, kind: data }
@@ -119,9 +140,10 @@ implementations:
   actions:
     label: "GitHub Actions, build.yml"
     blocks:
-      - { id: github, label: "GitHub: issues, branches and pull requests", parts: [comment, dispatch, thread, who, approve, token, app, repo, startnote, offered, standing, branch, standingpr, pr, listed] }
-      - { id: startjob, label: "Actions job: post the start comment, checking out nothing and running only gh", platform: actions-code, parts: [still, writer, refused, started] }
-      - { id: draftjob, label: "Actions job: draft, with a read-only token", platform: actions-code, parts: [keep, bring, asked, failed] }
+      - { id: github, label: "GitHub: issues, branches and pull requests", parts: [comment, dispatch, thread, who, approve, token, app, repo, startnote, offered, standing, branch, standingpr, pr, listed, awmlrepo] }
+      - { id: downloads, label: "Go releases: go.dev", parts: [godev] }
+      - { id: startjob, label: "Actions job: post the start comment, checking out nothing and running only gh", platform: actions-code, parts: [still, writer, enginerequest, enginebad, refused, started] }
+      - { id: draftjob, label: "Actions job: draft, with a read-only token; engine update and build run on the host before the sandbox", platform: actions-code, parts: [keep, bring, asked, failed, engineupdate, enginepin, enginebuild] }
       - { id: agentjob, label: "Claude Code, claude-opus-5-5, on the maintainer's subscription", platform: actions-agent, in: draftjob, parts: [build] }
       - { id: picturejob, label: "Actions job: picture the pages, running the change's code with no secret and a token that only reads", platform: actions-code, parts: [pictures] }
       - { id: openjob, label: "Actions job: push and open, running nothing from the change", platform: actions-code, parts: [patch, guard, offer, push, open] }

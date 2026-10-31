@@ -86,6 +86,7 @@ jobs:
       issues: write
     outputs:
       go: ${{ steps.start.outputs.go }}
+      engine_tag: ${{ steps.start.outputs.engine_tag }}
     steps:
       - name: Check the label and the issue's last edit, and say the build has started
         id: start
@@ -111,6 +112,7 @@ jobs:
             query($owner: String!, $name: String!, $number: Int!) {
               repository(owner: $owner, name: $name) {
                 issue(number: $number) {
+                  title
                   lastEditedAt
                   labels(first: 100) { nodes { name } }
                   timelineItems(itemTypes: [LABELED_EVENT, RENAMED_TITLE_EVENT], last: 100) {
@@ -155,6 +157,26 @@ jobs:
             echo "go=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # The engine label is the decision to update. The title is untrusted data from the API,
+          # passed through the environment to jq, never interpolated into a shell script. Count
+          # whole release tags, excluding versions with extra components, prereleases or metadata.
+          engine_tag=""
+          if jq -e '.data.repository.issue.labels.nodes | any(.name == "engine")' "$here/issue.json" > /dev/null; then
+            ISSUE_TITLE="$(jq -r '.data.repository.issue.title' "$here/issue.json")" jq -nc \
+              '[env.ISSUE_TITLE | scan("(?<![A-Za-z0-9_.+-])v[0-9]+\\.[0-9]+\\.[0-9]+(?![A-Za-z0-9_+-]|\\.[A-Za-z0-9_])")]' > "$here/tags.json"
+            if [ "$(jq length "$here/tags.json")" != 1 ]; then
+              {
+                echo "**The engine label needs exactly one AWML release tag in the issue's title, such as v0.10.1, so the build won't start.**"
+                echo
+                echo "Use one tag of the form vX.Y.Z, then remove the build label and add it again. [The run]($run_url)"
+              } > "$here/comment.md"
+              gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$here/comment.md"
+              echo "go=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            engine_tag="$(jq -r '.[0]' "$here/tags.json")"
+          fi
+          echo "engine_tag=$engine_tag" >> "$GITHUB_OUTPUT"
           printf '**Building this issue.** CI judges the pull request it opens. [The run](%s)\n' "$run_url" > "$here/comment.md"
           gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$here/comment.md"
           echo "go=true" >> "$GITHUB_OUTPUT"
@@ -200,10 +222,11 @@ jobs:
       - name: Copy main's prompt, scripts, AGENTS.md and REVIEW.md out
         run: |
           mkdir -p "$HOST_DIR/main" "$RUNNER_TEMP/input"
-          cp .github/build-prompt.md .github/issue-text.sh .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh .github/engine-for.sh "$HOST_DIR/main/"
+          cp .github/build-prompt.md .github/issue-text.sh .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh .github/engine-for.sh .github/engine-update-for.sh "$HOST_DIR/main/"
           # Main's engine build script, which builds each tree's engine from the tree's own pin below.
           mkdir -p "$HOST_DIR/engine/scripts"
           cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"
+          cp scripts/engine-update.sh "$HOST_DIR/engine/scripts/"
           cp AGENTS.md REVIEW.md "$RUNNER_TEMP/input/"
 
       # The label approves the issue as it reads then, and a try drafts from it only if it hasn't
@@ -290,6 +313,22 @@ jobs:
           # Which of the paths Claude Code protects the tree holds, so the placeholders it leaves at
           # the rest can be taken away after the session.
           bash "$HOST_DIR/main/placeholders.sh" record . "$HOST_DIR/baseline/protected"
+
+      # The engine label asks for the title's one validated release tag. Main's scripts, kept in the
+      # host-only folder, fetch only chrismdp/awml's published release and its pinned Go from go.dev.
+      # Updating runs the native awml to rewrite fixtures on the host, before the sandbox or any
+      # session: this trusts code from the maintainer's own repository at a release tag, which the
+      # existing engine build already trusts to compile. A person reviews the new pin and fixtures
+      # with the session's change in one pull request. No script from the tree runs here.
+      - name: Update the AWML engine for an engine issue
+        id: engine-update
+        if: needs.start.outputs.engine_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENGINE_TAG: ${{ needs.start.outputs.engine_tag }}
+        run: |
+          bash "$HOST_DIR/main/engine-update-for.sh" . "$HOST_DIR/engine-update"
+          printf 'The AWML engine is already updated to %s; its pin, wrapper and fixtures are in the tree. Complete the rest of the issue without fetching the engine.\n' "$ENGINE_TAG" > "$RUNNER_TEMP/input/engine-update.txt"
 
       # A session that checks or draws a workflow needs the AWML engine, which npm ci --ignore-scripts
       # doesn't build. Main's copy of the build script builds it from the tree's own pin, outside the
