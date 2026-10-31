@@ -282,6 +282,7 @@ function rehearse(
       PATH: `${bin}:${process.env.PATH}`,
       HOME: root,
       RUNNER_TEMP: join(root, "runner"),
+      TMPDIR: join(root, "runner"),
       // The host-only folder is RUNNER_TEMP itself unless a test says otherwise, so a rehearsal's
       // files sit where they always have.
       HOST_DIR: join(root, "runner"),
@@ -938,13 +939,14 @@ describe("the factory's workflows", () => {
     for (const [file, id, job] of everyJob())
       for (const each of steps(job))
         if (each.uses?.startsWith("actions/create-github-app-token@"))
-          tokens[`${file} ${id}`] = Object.fromEntries(Object.entries(each.with ?? {}).filter(([key]) => key.startsWith("permission-")));
+          tokens[`${file} ${id} ${each.id}`] = Object.fromEntries(Object.entries(each.with ?? {}).filter(([key]) => key.startsWith("permission-")));
     expect(tokens).toEqual({
-      "ci.yml report": { "permission-issues": "write" },
-      "build.yml open": { "permission-contents": "write", "permission-pull-requests": "write" },
-      "fix.yml write": { "permission-contents": "write" },
-      "resolve.yml push": { "permission-contents": "write" },
-      "land.yml land": { "permission-contents": "write", "permission-pull-requests": "write" },
+      "ci.yml report app": { "permission-issues": "write" },
+      "build.yml open app": { "permission-contents": "write", "permission-pull-requests": "write" },
+      "fix.yml write app": { "permission-contents": "write" },
+      "fix.yml write asker": { "permission-issues": "write" },
+      "resolve.yml push app": { "permission-contents": "write" },
+      "land.yml land app": { "permission-contents": "write", "permission-pull-requests": "write" },
     });
   });
 
@@ -1078,7 +1080,9 @@ describe("the factory's workflows", () => {
         expect(text.slice(at, at + mayWrite.length), `${file} ${id}`).toBe(mayWrite);
         expect(text.match(/\/permission/g)?.length, `${file} ${id}`).toBe(1);
       }
-    expect(found.sort()).toEqual(["build.yml draft", "build.yml start", "ci.yml review", "fix.yml decide", "land.yml find", "resolve.yml find", "retry.yml retry"]);
+    const shared = readFileSync(join(github, "issue-text.sh"), "utf8");
+    expect(shared).toContain(mayWrite);
+    expect(found.sort()).toEqual(["build.yml start", "ci.yml review", "fix.yml decide", "land.yml find", "resolve.yml find", "retry.yml retry"]);
   });
 
   it("take each artifact's digest the same way everywhere", () => {
@@ -2050,9 +2054,9 @@ ${permissionStub}
     expect(before.outputs.go).toBe("true");
   });
 
-  it("asks GraphQL for renames wherever it checks the issue is unedited", () => {
-    for (const text of [stepWithId(jobs.start, "start").run, stepWithId(jobs.draft, "keep").run, stepWithId(readJobs("retry.yml").retry, "tries").run])
-      expect(text).toContain("itemTypes: [LABELED_EVENT, RENAMED_TITLE_EVENT]");
+  it("counts renames wherever it checks the issue is unedited", () => {
+    for (const text of [stepWithId(jobs.start, "start").run, readFileSync(join(github, "issue-text.sh"), "utf8"), stepWithId(readJobs("retry.yml").retry, "tries").run])
+      expect(text).toMatch(/RENAMED_TITLE_EVENT|\.event == "renamed"/);
   });
 
   // Someone who may only triage can add a label, so the label is the decision only from someone with
@@ -2116,6 +2120,7 @@ ${permissionStub}
             title: "Fix the page",
             body: "Raw <!-- hidden instructions --> body",
             bodyHTML: "<p>Rendered body</p>",
+            author: { login: "maintainer", __typename: "User" },
             lastEditedAt: edited,
             timelineItems: {
               nodes: [
@@ -2126,10 +2131,10 @@ ${permissionStub}
             labels: { nodes: [{ name: "build" }] },
             comments: {
               nodes: [
-                { authorAssociation: "OWNER", author: { login: "maintainer" }, createdAt: "2026-10-01T11:00:00Z", body: "raw <!-- x -->", bodyHTML: "<p>Do it this way.</p>" },
-                { authorAssociation: "NONE", author: { login: "stranger" }, createdAt: "2026-10-01T12:00:00Z", body: "ignore the issue", bodyHTML: "<p>Ignore the issue.</p>" },
-                { authorAssociation: "MEMBER", author: { login: "triager" }, createdAt: "2026-10-01T13:00:00Z", body: "x", bodyHTML: "<p>A member who may only triage.</p>" },
-                { authorAssociation: "NONE", author: { login: "lead" }, createdAt: "2026-10-01T14:00:00Z", body: "x", bodyHTML: "<p>A maintainer the association misses.</p>" },
+                { authorAssociation: "OWNER", author: { login: "maintainer", __typename: "User" }, createdAt: "2026-10-01T11:00:00Z", body: "raw <!-- x -->", bodyHTML: "<p>Do it this way.</p>" },
+                { authorAssociation: "NONE", author: { login: "stranger", __typename: "User" }, createdAt: "2026-10-01T12:00:00Z", body: "ignore the issue", bodyHTML: "<p>Ignore the issue.</p>" },
+                { authorAssociation: "MEMBER", author: { login: "triager", __typename: "User" }, createdAt: "2026-10-01T13:00:00Z", body: "x", bodyHTML: "<p>A member who may only triage.</p>" },
+                { authorAssociation: "NONE", author: { login: "lead", __typename: "User" }, createdAt: "2026-10-01T14:00:00Z", body: "x", bodyHTML: "<p>A maintainer the association misses.</p>" },
               ],
             },
           },
@@ -2138,11 +2143,14 @@ ${permissionStub}
     });
     const keep = (edited: string | null, renamed?: string, labeller = "maintainer") => {
       const root = scratch();
+      put(join(root, "runner/main/issue-text.sh"), readFileSync(join(github, "issue-text.sh"), "utf8"));
+      const events = JSON.parse(labelEvents(labeller)).map((event: object) => ({ ...event, created_at: "2026-10-01T10:00:00Z" }));
+      if (renamed) events.push({ event: "renamed", created_at: renamed });
       const run = rehearse(stepWithId(jobs.draft, "keep").run ?? "", {
         root,
         env: { ISSUE: "7" },
         answers: `  *"api graphql"*) answer <<< '${JSON.stringify(issue(edited, renamed))}' ;;
-  *"issues/7/events"*) answer <<< '${labelEvents(labeller)}' ;;
+  *"issues/7/events"*) answer <<< '${JSON.stringify(events)}' ;;
 ${permissionStub}`,
       });
       return { run, issue: left(root, "input/issue.md") };
@@ -3411,6 +3419,9 @@ ${permissionStub}`,
       put(join(repo, "README.md"), "A registry\n");
       git(repo, "add", "-A");
       git(repo, "commit", "-qm", "head");
+      git(repo, "branch", "feature/page");
+      git(repo, "remote", "add", "origin", repo);
+      const sha = git(repo, "rev-parse", "HEAD");
       if (link) symlinkSync(link, join(repo, path));
       else put(join(repo, path), "fixed\n");
       git(repo, "add", "-A");
@@ -3419,9 +3430,9 @@ ${permissionStub}`,
       return rehearse(stepWithId(jobs.write, "guard").run ?? "", {
         root,
         cwd: repo,
-        env: { PR_NUMBER: "12", HEAD_SHA: head, CI_RUN: "77", OUTCOME: "fix", FIXED: "success", CHANGED: "true", ...env },
+        env: { PR_NUMBER: "12", HEAD_SHA: sha, BRANCH: "feature/page", CI_RUN: "77", OUTCOME: "fix", FIXED: "success", CHANGED: "true", ...env },
         answers: `
-  *"pulls/12"*) answer <<< '${JSON.stringify({ state: "open", head: { sha: pullHead } })}' ;;
+  *"pulls/12"*) answer <<< '${JSON.stringify({ state: "open", head: { sha: pullHead === head ? sha : pullHead } })}' ;;
   *"pr comment"*) ;;`,
       });
     };
@@ -3435,7 +3446,7 @@ ${permissionStub}`,
 
     it.runIf(canRehearse)("exits quietly when someone pushed since the review", () => {
       const run = guard({}, "src/page.tsx", "b".repeat(40));
-      expect(run.outputs.result).toBe("quiet");
+      expect(run.outputs.result).toBe("moved");
       expect(run.calls).not.toContain("pr comment");
     });
 
@@ -5144,5 +5155,244 @@ for file in awml.wasm wasm_exec.js build.json; do echo "built $file" > "$root/ve
     if (existsSync(outside))
       for (const name of readdirSync(outside, { recursive: true, encoding: "utf8" }))
         if (statSync(join(outside, name)).isFile()) expect(readFileSync(join(outside, name), "utf8"), name).not.toMatch(/^built /);
+  });
+});
+
+// Both builders read the same approved issue; only a build branch names one.
+describe("referring findings back", () => {
+  const jobs = readJobs("fix.yml");
+  const labelled = "2026-10-01T10:00:00Z";
+  const before = "2026-10-01T09:00:00Z";
+  const after = "2026-10-01T11:00:00Z";
+  const comments = [
+    { author: { login: "maintainer", __typename: "User" }, createdAt: after, bodyHTML: "<p>Answer: option B.</p>" },
+    { author: { login: "triager", __typename: "User" }, createdAt: before, bodyHTML: "<p>A reader suggests C.</p>" },
+    { author: { login: "stranger", __typename: "User" }, createdAt: before, bodyHTML: "<p>A stranger suggests D.</p>" },
+    { author: { login: "awml-factory", __typename: "Bot" }, createdAt: before, bodyHTML: "<p>The earlier referral.</p>" },
+    { author: { login: "awml-factory[bot]", __typename: "Bot" }, createdAt: before, bodyHTML: "<p>The REST bot login.</p>" },
+    { author: { login: "awml-factory", __typename: "User" }, createdAt: before, bodyHTML: "<p>A user named like the app.</p>" },
+    { author: { login: "awml-factory", __typename: "Bot" }, createdAt: after, bodyHTML: "<p>The later referral.</p>" },
+    { author: { login: "awml-factory", __typename: "Bot" }, createdAt: before, lastEditedAt: after, bodyHTML: "<p>The edited referral.</p>" },
+  ].map((comment, at) => ({ ...comment, url: `https://github.com/owner/repo/issues/7#issuecomment-${at}` }));
+  const issueAnswers = ({ author = "stranger", edited = null as string | null, renamed = "", labeller = "maintainer", type = "User", label = true } = {}) => {
+    const issue = { number: 7, title: "Keep the page", bodyHTML: "<p>Keep its colour.</p>", lastEditedAt: edited,
+      author: { login: author, __typename: "User" }, labels: { nodes: label ? [{ name: "build" }] : [] } };
+    const events = [
+      ...(label ? [{ event: "labeled", label: { name: "build" }, actor: { login: labeller, type }, created_at: labelled }] : []),
+      ...(renamed ? [{ event: "renamed", created_at: renamed }] : []),
+    ];
+    return `
+  "api graphql --paginate"*) answer <<< '${JSON.stringify({ data: { repository: { issue: { comments: { nodes: comments } } } } })}' ;;
+  *"issues/7/events"*) answer <<< '${JSON.stringify(events)}' ;;
+  "api graphql"*) answer <<< '${JSON.stringify({ data: { repository: { issue } } })}' ;;
+${permissionStub}`;
+  };
+
+  it.runIf(canRehearse)("keeps writers and only app comments approved by the label", () => {
+    const root = scratch();
+    const run = rehearse(script("issue-text.sh", ["7", join(root, "issue.md"), join(root, "why")]), { root, answers: issueAnswers() });
+    expect(run.failed, run.printed).toBe(false);
+    const text = readIfThere(join(root, "issue.md"));
+    for (const kept of ["Keep the page", "Keep its colour.", "Answer: option B.", "The earlier referral.", "The REST bot login.", "#issuecomment-0"])
+      expect(text).toContain(kept);
+    for (const left of ["A reader suggests", "A stranger suggests", "A user named like", "The later referral", "The edited referral"])
+      expect(text).not.toContain(left);
+    expect(readIfThere(join(root, "why"))).toBe("");
+    expect(run.calls).toContain("graphql --paginate");
+  });
+
+  it.runIf(canRehearse).each([
+    ["a writer's label", {}, true],
+    ["the app's label", { labeller: "awml-factory[bot]", type: "Bot" }, true],
+    ["a triager's label", { labeller: "triager" }, false],
+    ["an edit after the label", { edited: after }, false],
+    ["a rename after the label", { renamed: after }, false],
+    ["no label", { label: false }, false],
+    ["a writer's edited issue", { author: "maintainer", edited: after }, true],
+    ["a writer's unlabelled issue", { author: "maintainer", label: false }, true],
+  ] as const)("reads the approved title and body with %s", (_, options, kept) => {
+    const root = scratch();
+    const run = rehearse(script("issue-text.sh", ["7", join(root, "issue.md"), join(root, "why")]), { root, answers: issueAnswers(options) });
+    expect(run.failed, run.printed).toBe(false);
+    const text = readIfThere(join(root, "issue.md"));
+    expect(text.includes("Keep its colour.")).toBe(kept);
+    expect(text).toContain("Answer: option B.");
+    if (("edited" in options && options.edited) || ("renamed" in options && options.renamed) || ("label" in options && options.label === false) || ("labeller" in options && options.labeller === "triager"))
+      expect(readIfThere(join(root, "why"))).not.toBe("");
+  });
+
+  it.runIf(canRehearse).each(["build/issue-7", "feature/page"])("brings main's decisions only for a build branch: %s", (branch) => {
+    const root = scratch();
+    const repo = join(root, "main");
+    for (const file of readdirSync(github).filter((file) => /\.(sh|md)$/.test(file)))
+      put(join(repo, ".github", file), readFileSync(join(github, file), "utf8"));
+    for (const file of ["engine-build.sh", "engine-lib.sh", "engine-pin.mjs"])
+      put(join(repo, "scripts", file), readFileSync(join(__dirname, "../scripts", file), "utf8"));
+    for (const file of ["AGENTS.md", "REVIEW.md"]) put(join(repo, file), "Follow these rules.\n");
+    const bring = steps(jobs.fix).find((each) => each.name?.startsWith("Copy main's prompt"))!;
+    const run = rehearse(bring.run ?? "", { root, cwd: repo, env: { BRANCH: branch, CI_RUN: "77", HEAD_SHA: "a".repeat(40) }, answers: `
+  *"actions/runs/77/jobs"*) answer <<< '{"jobs": []}' ;;
+  *"compare/main..."*) echo diff ;;
+${issueAnswers()}` });
+    expect(run.failed, run.printed).toBe(false);
+    const decisions = join(root, "runner/input/decisions.md");
+    expect(existsSync(decisions)).toBe(branch.startsWith("build/"));
+    if (existsSync(decisions)) {
+      expect(readIfThere(decisions)).toContain("Answer: option B.");
+      expect(statSync(decisions).mode & 0o222).toBe(0);
+    } else expect(run.calls).not.toContain("graphql");
+    expect(run.calls).not.toContain("closingIssuesReferences");
+    expect(run.outputs).not.toHaveProperty("issue");
+    expect(bring.env?.BRANCH).toBe("${{ needs.decide.outputs.branch }}");
+    expect(bring.run).toContain('.github/issue-text.sh');
+    expect(bring.run).toContain('bash "$HOST_DIR/main/issue-text.sh"');
+    const all = steps(jobs.fix);
+    expect(all.indexOf(bring)).toBeLessThan(all.findIndex((each) => each.with?.ref === "${{ needs.decide.outputs.head_sha }}"));
+  });
+
+  it("tells the session to refer a decision with its options and change nothing", () => {
+    const prompt = squash(readFileSync(join(github, "fix-prompt.md"), "utf8"));
+    for (const text of ["INPUT_DIR/decisions.md", "OUT_DIR/referred.md", "would change a decision", "If you refer any finding back, change nothing", "options"])
+      expect(prompt).toContain(text);
+    expect(squash(readFileSync(join(github, "build-prompt.md"), "utf8"))).toContain("answer to a finding the fixer referred back");
+  });
+
+  it.runIf(canRehearse).each([
+    [false, true, "referred", ""], [true, true, "giveup", "mixed"],
+    [false, false, "giveup", "nothing"], [true, false, "", ""],
+  ])("sorts a patch changed=%s referred=%s", (changed, referred, decision, reason) => {
+    const root = scratch();
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q");
+    put(join(repo, "README.md"), "A registry\n");
+    git(repo, "add", "-A"); git(repo, "commit", "-qm", "main");
+    put(join(root, "runner/baseline/git-config"), readFileSync(join(repo, ".git/config"), "utf8"));
+    put(join(root, "runner/baseline/workspace"), execFileSync("stat", ["-c", "%d:%i", repo, join(repo, ".git")], { encoding: "utf8" }));
+    for (const file of ["placeholders.sh", "check-out.sh", "unclose.sh"])
+      put(join(root, "runner/main", file), readFileSync(join(github, file), "utf8"));
+    execFileSync("bash", [join(github, "placeholders.sh"), "record", repo, join(root, "runner/baseline/protected")]);
+    put(join(root, "runner/sessions/fix/out/message.md"), "Fix the finding\n");
+    if (changed) put(join(repo, "README.md"), "Changed\n");
+    if (referred) put(join(root, "runner/sessions/fix/out/referred.md"), "The finding would undo the decision. Options: A or B.\n");
+    const patch = stepWithId(jobs.fix, "patch");
+    const run = rehearse(patch.run ?? "", { root, cwd: repo, env: { ...patch.env, GITHUB_WORKSPACE: repo } });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.decision ?? "").toBe(decision);
+    expect(run.outputs.reason ?? "").toBe(reason);
+    if (referred) expect(left(root, "fix/referred.md")).toContain("Options: A or B.");
+    expect(jobs.fix.outputs?.decision).toBe("${{ steps.patch.outputs.decision }}");
+    expect(jobs.fix.outputs?.reason).toBe("${{ steps.patch.outputs.reason }}");
+  });
+
+  const guard = (branch: string, referral: string, moved = false, decision = "referred", reason = "", apiMoved = false) => {
+    const root = scratch();
+    const origin = join(root, "origin");
+    mkdirSync(origin); git(origin, "init", "-q");
+    put(join(origin, "README.md"), "A registry\n");
+    git(origin, "add", "-A"); git(origin, "commit", "-qm", "main");
+    git(origin, "switch", "-qc", branch);
+    const head = git(origin, "rev-parse", "HEAD");
+    const work = join(root, "work"); git(root, "clone", "-q", origin, work);
+    if (moved) { put(join(origin, "README.md"), "Moved\n"); git(origin, "commit", "-qam", "Move"); }
+    put(join(root, "runner/fix/referred.md"), referral);
+    const run = rehearse(stepWithId(jobs.write, "guard").run ?? "", { root, cwd: work,
+      env: { PR_NUMBER: "12", HEAD_SHA: head, BRANCH: branch, CI_RUN: "77", OUTCOME: "fix", FIXED: "success", CHANGED: "false", DECISION: decision, STOPPED: reason },
+      answers: `  *"pulls/12"*) answer <<< '${JSON.stringify({ state: "open", head: { sha: apiMoved ? "b".repeat(40) : head } })}' ;;
+  *"pr comment"*) ;;` });
+    expect(run.failed, run.printed).toBe(false);
+    return run;
+  };
+
+  it.runIf(canRehearse)("refers without a push and checks the remote before posting", () => {
+    const run = guard("build/issue-7", "The finding and options.\n");
+    expect(run.outputs.result).toBe("referred");
+    expect(run.calls).not.toContain("comment");
+    const stale = guard("build/issue-7", "The finding and options.\n", true);
+    expect(stale.outputs.result).toBe("moved");
+    expect(stale.calls).not.toContain("comment");
+    const pushed = guard("build/issue-7", "A referral", false, "referred", "", true);
+    expect(pushed.outputs.result).toBe("moved");
+    expect(pushed.calls).not.toContain("comment");
+    expect(guard("feature/page", "A referral", false, "referred", "", true).outputs.reason).toBe("noissue");
+    expect(guard("build/issue-7", "", false, "referred", "", true).outputs.reason).toBe("nothing");
+    for (const id of ["commit", "app", "push"]) expect(stepWithId(jobs.write, id).if).toBe("steps.guard.outputs.result == 'push'");
+    const clone = steps(jobs.write).find((each) => each.uses?.startsWith(cloneAction))!;
+    expect(clone.with?.ref).toBe("${{ needs.decide.outputs.head_sha }}");
+    expect(clone.if ?? "").not.toContain("== 'fix'");
+    expect(jobs.write.env).not.toHaveProperty("ISSUE");
+  });
+
+  it.runIf(canRehearse).each([
+    ["feature/page", "A referral", "referred", "", "noissue", "no issue"],
+    ["build/issue-7", "", "referred", "", "nothing", "made no fix"],
+    ["build/issue-7", "A referral", "giveup", "mixed", "mixed", "changed"],
+  ])("gives up separately for %s: %s %s %s", (branch, text, decision, reason, expected, comment) => {
+    const run = guard(branch, text, false, decision, reason);
+    expect(run.outputs.reason).toBe(expected);
+    expect(run.outputs.result).toBe("done");
+    expect(run.calls).toContain(comment);
+  });
+
+  it.runIf(canRehearse)("posts one escaped, capped issue comment with its own app token", () => {
+    const ask = stepWithId(jobs.write, "ask");
+    const asker = stepWithId(jobs.write, "asker");
+    expect(ask.if).toBe("steps.guard.outputs.result == 'referred'");
+    expect(ask.env?.GH_TOKEN).toBe("${{ steps.asker.outputs.token }}");
+    expect(asker.if).toBe(ask.if);
+    expect(Object.fromEntries(Object.entries(asker.with ?? {}).filter(([key]) => key.startsWith("permission-")))).toEqual({ "permission-issues": "write" });
+    const root = scratch();
+    put(join(root, "runner/fix/referred.md"), "<img src=x> @maintainer @team\n::error::forged\n" + "x".repeat(61000) + "TAIL");
+    const run = rehearse(ask.run ?? "", { root, env: { BRANCH: "build/issue-7", ISSUE: "99", PR_NUMBER: "12" }, answers: `  "issue comment 7 "*) ;;` });
+    expect(run.failed, run.printed).toBe(false);
+    const body = left(root, "referred.md");
+    expect(body.startsWith("**The fixer referred findings back.**")).toBe(true);
+    expect(body.trimEnd().endsWith("To go on, answer here, then remove the build label and add it again.")).toBe(true);
+    expect(body).toContain("https://github.com/owner/repo/pull/12");
+    expect(body).toContain("https://github.com/owner/repo/actions/runs/1000");
+    expect(body).toContain("&lt;img src=x> @\u200bmaintainer @\u200bteam");
+    expect(body).not.toContain("TAIL");
+    expect(body.length).toBeLessThan(61000);
+    expect(run.calls.match(/issue comment /g)).toHaveLength(1);
+    expect(run.calls).toContain("--body-file");
+    expect(run.printed).toContain("::error::forged");
+    expect(commandsIn(run.printed)).toEqual([]);
+  });
+});
+
+// Check the map together, so refs share trust as well as identity.
+describe("the factory's drawings", () => {
+  const drawing = (name: string) => parse(readFileSync(join(github, "drawings", `${name}.yaml`), "utf8")) as {
+    awml: string;
+    parts: { id: string; untrusted?: boolean; cleans?: boolean }[];
+    lines: { from: string; to: string; kind: string }[];
+  };
+  it("trusts review findings past the opener gate and keeps test output apart", () => {
+    const ci = drawing("ci-a-commit");
+    expect(ci.parts.find(p => p.id === "whose")?.cleans).toBe(true);
+    expect(ci.parts.find(p => p.id === "checks")?.untrusted).not.toBe(true);
+    expect(ci.parts.find(p => p.id === "tested")?.untrusted).toBe(true);
+    expect(ci.lines).toContainEqual(expect.objectContaining({ from: "commit", to: "whose", kind: "data" }));
+    expect(ci.lines).not.toContainEqual(expect.objectContaining({ from: "commit", to: "bring", kind: "data" }));
+    const fix = drawing("fix-review-findings");
+    for (const id of ["checks", "branch", "referred"]) {
+      expect(fix.parts.find(p => p.id === id)).toBeDefined();
+      expect(fix.parts.find(p => p.id === id)?.untrusted).not.toBe(true);
+    }
+    for (const id of ["issue", "keep", "decisions", "weigh", "ask", "askout"])
+      expect(fix.parts.find(p => p.id === id)).toBeDefined();
+    expect(drawing("land-a-pull-request").parts.find(p => p.id === "tested")?.untrusted).toBe(true);
+  });
+
+  it("passes AWML 0.10's checks for all six together", async () => {
+    const { createAWML } = await import("../vendor/awml/awml.js");
+    const engine = await createAWML(readFileSync(join(__dirname, "../vendor/awml/awml.wasm")));
+    const files = readdirSync(join(github, "drawings")).filter(file => file.endsWith(".yaml")).map(file => ({
+      file: `.github/drawings/${file}`, source: readFileSync(join(github, "drawings", file), "utf8"),
+    }));
+    expect(files).toHaveLength(6);
+    for (const file of files) expect((parse(file.source) as { awml: string }).awml).toBe("0.10");
+    const checked = engine.checks(files) as { checks: { result: string; mistakes: unknown[] }[] };
+    expect(checked.checks.filter(c => c.result === "fail" || c.result === "error")).toEqual([]);
   });
 });
