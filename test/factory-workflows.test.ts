@@ -2077,7 +2077,6 @@ ${permissionStub}
     expect(update.env?.ENGINE_TAG).toBe("${{ needs.start.outputs.engine_tag }}");
     expect(update.run).toContain('bash "$HOST_DIR/main/engine-update-for.sh" . "$HOST_DIR/engine-update"');
     expect(update.run).not.toContain("${{");
-    expect(update.run).toContain('"$RUNNER_TEMP/input/engine-update.txt"');
     expect(jobs.start.outputs?.engine_tag).toBe("${{ steps.start.outputs.engine_tag }}");
     const copy = all.findIndex(each => each.name?.startsWith("Copy main's prompt"));
     expect(all[copy].run).toContain(".github/engine-update-for.sh");
@@ -2085,7 +2084,7 @@ ${permissionStub}
     expect(all.indexOf(update)).toBeGreaterThan(copy);
     expect(all.indexOf(update)).toBeLessThan(all.indexOf(step(jobs.draft, "Build the AWML engine from the tree's pin")));
     expect(all.indexOf(update)).toBeLessThan(all.indexOf(step(jobs.draft, "Install Claude Code and bubblewrap")));
-    expect(readFileSync(join(github, "build-prompt.md"), "utf8")).toContain("INPUT_DIR/engine-update.txt");
+    expect(readFileSync(join(github, "build-prompt.md"), "utf8")).toContain("If git diff shows vendor/awml/version.json changed");
     expect(runs(readJobs("retry.yml").retry)).toContain("gh workflow run build.yml");
     expect(runs(readJobs("fix.yml").fix)).not.toContain("engine-update");
   });
@@ -5290,10 +5289,6 @@ echo new > "$root/test/fixtures/platforms/new.yaml"
     });
     expect(run.failed, run.printed).toBe(false);
     expect(readIfThere(join(tree, "vendor/awml/version.json"))).toBe("updated version.json to v0.10.1\n");
-    const note = left(root, "input/engine-update.txt");
-    expect(note).toContain("already updated to v0.10.1");
-    expect(note).toContain("pin, wrapper and fixtures are in the tree");
-    expect(note).toContain("without fetching the engine");
   });
 
   it.runIf(canRehearse).each(["version.json", "awml.js"])("refuses a missing %s, as the normal engine build does", (file) => {

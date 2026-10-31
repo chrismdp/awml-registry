@@ -38,7 +38,7 @@ parts:
   - { id: awmlrepo, kind: connector, label: "github.com/chrismdp/awml: published releases and source at the release tag", in: public }
   - { id: godev, kind: connector, label: "go.dev: the pinned Go release and its archive hashes", in: public }
   - { id: engineupdate, kind: code, op: do, label: "Before the sandbox or any session, check the tag is a published AWML release, then run main's engine-update scripts from the host-only folder, with source overrides off and links refused. Build and run native awml on the host to rewrite fixtures", in: public }
-  - { id: enginepin, kind: context, label: "The updated engine pin, wrapper and fixtures in the tree, with a note telling the session the engine is already updated", in: public }
+  - { id: enginepin, kind: context, label: "The updated engine pin, wrapper and fixtures in the tree", in: public }
   - { id: enginebuild, kind: code, op: do, label: "Build the tree's engine from its pin with main's engine-for script before any session, using the new pin after an update", in: public }
   - { id: enginetrust, kind: comment, label: "The engine label is the maintainer's decision. Updating executes AWML's native release code on the host, from the maintainer's own repository already trusted to compile. A person reviews the new pin and fixtures with the session's change in one pull request. Retry starts this update again; fix uses the branch's existing pin" }
   - { id: build, kind: ai, op: draft, label: "Write the change test first, and name the pages it alters, to be pictured before and after", in: public }

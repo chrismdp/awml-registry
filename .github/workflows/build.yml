@@ -326,9 +326,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ENGINE_TAG: ${{ needs.start.outputs.engine_tag }}
-        run: |
-          bash "$HOST_DIR/main/engine-update-for.sh" . "$HOST_DIR/engine-update"
-          printf 'The AWML engine is already updated to %s; its pin, wrapper and fixtures are in the tree. Complete the rest of the issue without fetching the engine.\n' "$ENGINE_TAG" > "$RUNNER_TEMP/input/engine-update.txt"
+        run: bash "$HOST_DIR/main/engine-update-for.sh" . "$HOST_DIR/engine-update"
 
       # A session that checks or draws a workflow needs the AWML engine, which npm ci --ignore-scripts
       # doesn't build. Main's copy of the build script builds it from the tree's own pin, outside the
