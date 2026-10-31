@@ -5258,9 +5258,8 @@ ${issueAnswers()}` });
   });
 
   it.runIf(canRehearse).each([
-    [false, true, "referred", ""], [true, true, "giveup", "mixed"],
-    [false, false, "giveup", "nothing"], [true, false, "", ""],
-  ])("sorts a patch changed=%s referred=%s", (changed, referred, decision, reason) => {
+    [false, true], [true, true], [false, false], [true, false],
+  ])("keeps a patch changed=%s referred=%s", (changed, referred) => {
     const root = scratch();
     const repo = join(root, "repo");
     mkdirSync(repo);
@@ -5278,44 +5277,44 @@ ${issueAnswers()}` });
     const patch = stepWithId(jobs.fix, "patch");
     const run = rehearse(patch.run ?? "", { root, cwd: repo, env: { ...patch.env, GITHUB_WORKSPACE: repo } });
     expect(run.failed, run.printed).toBe(false);
-    expect(run.outputs.decision ?? "").toBe(decision);
-    expect(run.outputs.reason ?? "").toBe(reason);
+    expect(run.outputs).toEqual({ changed: String(changed) });
+    expect(left(root, "fix/fix.patch").length > 0).toBe(changed);
     if (referred) expect(left(root, "fix/referred.md")).toContain("Options: A or B.");
-    expect(jobs.fix.outputs?.decision).toBe("${{ steps.patch.outputs.decision }}");
-    expect(jobs.fix.outputs?.reason).toBe("${{ steps.patch.outputs.reason }}");
   });
 
-  const guard = (branch: string, referral: string, moved = false, decision = "referred", reason = "", apiMoved = false) => {
+  it("passes on only whether files changed and the artifact's digest", () => {
+    expect(jobs.fix.outputs).toEqual({
+      changed: "${{ steps.patch.outputs.changed }}",
+      digest: "${{ steps.pack.outputs.digest }}",
+    });
+    const guard = stepWithId(jobs.write, "guard");
+    expect(guard.env).not.toHaveProperty("DECISION");
+    expect(guard.env).not.toHaveProperty("STOPPED");
+    expect(guard.run).not.toContain("ls-remote");
+  });
+
+  const guard = (branch: string, referral: string, changed = false, apiMoved = false) => {
     const root = scratch();
-    const origin = join(root, "origin");
-    mkdirSync(origin); git(origin, "init", "-q");
-    put(join(origin, "README.md"), "A registry\n");
-    git(origin, "add", "-A"); git(origin, "commit", "-qm", "main");
-    git(origin, "switch", "-qc", branch);
-    const head = git(origin, "rev-parse", "HEAD");
-    const work = join(root, "work"); git(root, "clone", "-q", origin, work);
-    if (moved) { put(join(origin, "README.md"), "Moved\n"); git(origin, "commit", "-qam", "Move"); }
+    const head = "a".repeat(40);
+    put(join(root, "bin/git"), '#!/bin/bash\necho "The guard must decide a referral without git." >&2\nexit 1\n');
+    chmodSync(join(root, "bin/git"), 0o755);
     put(join(root, "runner/fix/referred.md"), referral);
-    const run = rehearse(stepWithId(jobs.write, "guard").run ?? "", { root, cwd: work,
-      env: { PR_NUMBER: "12", HEAD_SHA: head, BRANCH: branch, CI_RUN: "77", OUTCOME: "fix", FIXED: "success", CHANGED: "false", DECISION: decision, STOPPED: reason },
+    const run = rehearse(stepWithId(jobs.write, "guard").run ?? "", { root,
+      env: { PR_NUMBER: "12", HEAD_SHA: head, BRANCH: branch, CI_RUN: "77", OUTCOME: "fix", FIXED: "success", CHANGED: String(changed) },
       answers: `  *"pulls/12"*) answer <<< '${JSON.stringify({ state: "open", head: { sha: apiMoved ? "b".repeat(40) : head } })}' ;;
   *"pr comment"*) ;;` });
     expect(run.failed, run.printed).toBe(false);
     return run;
   };
 
-  it.runIf(canRehearse)("refers without a push and checks the remote before posting", () => {
+  it.runIf(canRehearse)("refers without running git and checks the head through GitHub", () => {
     const run = guard("build/issue-7", "The finding and options.\n");
     expect(run.outputs.result).toBe("referred");
     expect(run.calls).not.toContain("comment");
-    const stale = guard("build/issue-7", "The finding and options.\n", true);
+    expect(run.calls.match(/pulls\/12/g)).toHaveLength(1);
+    const stale = guard("build/issue-7", "The finding and options.\n", false, true);
     expect(stale.outputs.result).toBe("moved");
     expect(stale.calls).not.toContain("comment");
-    const pushed = guard("build/issue-7", "A referral", false, "referred", "", true);
-    expect(pushed.outputs.result).toBe("moved");
-    expect(pushed.calls).not.toContain("comment");
-    expect(guard("feature/page", "A referral", false, "referred", "", true).outputs.reason).toBe("noissue");
-    expect(guard("build/issue-7", "", false, "referred", "", true).outputs.reason).toBe("nothing");
     for (const id of ["commit", "app", "push"]) expect(stepWithId(jobs.write, id).if).toBe("steps.guard.outputs.result == 'push'");
     const clone = steps(jobs.write).find((each) => each.uses?.startsWith(cloneAction))!;
     expect(clone.with?.ref).toBe("${{ needs.decide.outputs.head_sha }}");
@@ -5324,11 +5323,25 @@ ${issueAnswers()}` });
   });
 
   it.runIf(canRehearse).each([
-    ["feature/page", "A referral", "referred", "", "noissue", "no issue"],
-    ["build/issue-7", "", "referred", "", "nothing", "made no fix"],
-    ["build/issue-7", "A referral", "giveup", "mixed", "mixed", "changed"],
-  ])("gives up separately for %s: %s %s %s", (branch, text, decision, reason, expected, comment) => {
-    const run = guard(branch, text, false, decision, reason);
+    ["feature/page", "A referral", false],
+    ["build/issue-7", "", false],
+    ["build/issue-7", "A referral", true],
+    ["feature/page", "A referral", true],
+    ["build/issue-7", "", true],
+  ] as const)("leaves a moved head quietly for %s, referral=%s, changed=%s", (branch, text, changed) => {
+    const run = guard(branch, text, changed, true);
+    expect(run.outputs).toEqual({ result: "moved" });
+    expect(run.calls).not.toContain("comment");
+  });
+
+  it.runIf(canRehearse).each([
+    ["feature/page", "A referral", false, "noissue", "no issue"],
+    ["build/issue-7", "", false, "nothing", "made no fix"],
+    ["feature/page", "", false, "nothing", "made no fix"],
+    ["build/issue-7", "A referral", true, "mixed", "changed"],
+    ["feature/page", "A referral", true, "mixed", "changed"],
+  ] as const)("gives up separately for %s: %s changed=%s", (branch, text, changed, expected, comment) => {
+    const run = guard(branch, text, changed);
     expect(run.outputs.reason).toBe(expected);
     expect(run.outputs.result).toBe("done");
     expect(run.calls).toContain(comment);
@@ -5357,6 +5370,22 @@ ${issueAnswers()}` });
     expect(run.calls).toContain("--body-file");
     expect(run.printed).toContain("::error::forged");
     expect(commandsIn(run.printed)).toEqual([]);
+  });
+
+  it.runIf(canRehearse)("caps the posted referral after escaping HTML", () => {
+    const root = scratch();
+    put(join(root, "runner/fix/referred.md"), "<".repeat(20000));
+    const run = rehearse(stepWithId(jobs.write, "ask").run ?? "", {
+      root,
+      env: { BRANCH: "build/issue-7", PR_NUMBER: "12" },
+      answers: `  "issue comment 7 "*) ;;`,
+    });
+    expect(run.failed, run.printed).toBe(false);
+    const body = left(root, "referred.md");
+    expect(body).toContain("&lt;");
+    expect(body).not.toContain("<");
+    expect(body.length).toBeLessThanOrEqual(65536);
+    expect(run.calls.match(/issue comment /g)).toHaveLength(1);
   });
 });
 

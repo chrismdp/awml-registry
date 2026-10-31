@@ -30,11 +30,11 @@ parts:
   - { id: repo, kind: context, label: "Main's fix prompt, AGENTS.md and REVIEW.md, copied out before the session starts", in: public }
   - { id: weigh, kind: ai, op: sort, label: "Would fixing any finding change a decision the maintainer wrote on the issue?", in: public }
   - { id: referred, kind: context, label: "The findings referred back, with the decision and options, in referred.md", in: public }
-  - { id: ask, kind: code, op: do, label: "Post one new issue comment with an issues-only app token: cap the session's text, escape every <, break mentions, and print inside stop-commands", in: public }
+  - { id: ask, kind: code, op: do, label: "Post one new issue comment with an issues-only app token: escape every <, break mentions, cap the text, and print inside stop-commands", in: public }
   - { id: askout, kind: outside, label: "Comment on the build's issue: Allow", in: public }
   - { id: fix, kind: ai, op: draft, label: "Fix every Important finding and Nit, test first, only if none needs referring back", in: public }
   - { id: change, kind: context, label: "The fix, as a patch", in: public }
-  - { id: guard, kind: code, op: sort, label: "Refuse a referral with a patch, no build issue or no text. Leave a moved head quietly; otherwise post the referral, push the fix or offer guarded files", in: public }
+  - { id: guard, kind: code, op: sort, label: "Leave a moved head quietly. Give up for mixed output, a referral with no build issue or nothing made; otherwise post the referral, push the fix or offer guarded files", in: public }
   - { id: push, kind: code, op: do, label: "Push the fix as one commit carrying the fix line in its message, with --force-with-lease at the reviewed commit", in: public }
   - { id: standpush, kind: approval, label: "The maintainer's standing approval: one fix commit a failed review, to the pull request's own branch, up to two a branch, accepted by the maintainer in #160, under rule 4", in: public }
   - { id: pushed, kind: outside, label: "Push one commit to the pull request's branch: Ask", in: public }
@@ -82,7 +82,7 @@ lines:
   - { from: referred, to: ask, kind: data }
   - { from: ask, to: askout, kind: data }
   - { from: askout, to: app, kind: data }
-  - { from: guard, to: giveup, kind: start, label: "[mixed output, no issue or no referral text]" }
+  - { from: guard, to: giveup, kind: start, label: "[not moved: mixed output, a referral without an issue, or no fix or referral]" }
   - { from: change, to: push, kind: data }
   - { from: push, to: standpush, kind: start }
   - { from: standpush, to: pushed, kind: data, label: "[within limits]" }
