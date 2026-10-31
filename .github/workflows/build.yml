@@ -200,7 +200,7 @@ jobs:
       - name: Copy main's prompt, scripts, AGENTS.md and REVIEW.md out
         run: |
           mkdir -p "$HOST_DIR/main" "$RUNNER_TEMP/input"
-          cp .github/build-prompt.md .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh .github/engine-for.sh "$HOST_DIR/main/"
+          cp .github/build-prompt.md .github/issue-text.sh .github/claude-settings.sh .github/scan-tokens.sh .github/check-lockfile.sh .github/check-out.sh .github/placeholders.sh .github/engine-for.sh "$HOST_DIR/main/"
           # Main's engine build script, which builds each tree's engine from the tree's own pin below.
           mkdir -p "$HOST_DIR/engine/scripts"
           cp scripts/engine-build.sh scripts/engine-lib.sh scripts/engine-pin.mjs "$HOST_DIR/engine/scripts/"
@@ -210,68 +210,20 @@ jobs:
       # been edited or renamed since the label was last added. Its text and its comments are read as GitHub
       # renders them, bodyHTML, never the raw body, so HTML comments and hidden markup never reach
       # Claude (chrismdp/awml#150). Anyone can comment, but only the comments of those GitHub says
-      # may write to the repository are passed on.
+      # may write to the repository, and app comments approved by the label, are passed on.
       - name: Keep the issue's text and its people's comments, as GitHub renders them
         id: keep
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Whether GitHub says someone may write to the repository: their role or its base permission is
-          # exactly admin, maintain or write, so a custom role counts only by what it grants.
-          may_write() {
-            [[ "$1" =~ ^[A-Za-z0-9-]{1,39}$ ]] || return 1
-            local role="" permission=""
-            IFS=$'\t' read -r role permission < <(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq '[.role_name // "", .permission // ""] | @tsv' || true) || true
-            case "$role" in admin|maintain|write) return 0 ;; esac
-            case "$permission" in admin|maintain|write) return 0 ;; esac
-            return 1
-          }
-          case "$ISSUE" in ''|*[!0-9]*) echo "The issue must be a number: $ISSUE"; exit 1 ;; esac
-          input="$RUNNER_TEMP/input"
-          mkdir -p "$input"
-          # shellcheck disable=SC2016 # The query's variables are GraphQL's.
-          gh api graphql -F owner="$GITHUB_REPOSITORY_OWNER" -f name="${GITHUB_REPOSITORY#*/}" -F number="$ISSUE" -f query='
-            query($owner: String!, $name: String!, $number: Int!) {
-              repository(owner: $owner, name: $name) {
-                issue(number: $number) {
-                  number
-                  title
-                  bodyHTML
-                  lastEditedAt
-                  timelineItems(itemTypes: [LABELED_EVENT, RENAMED_TITLE_EVENT], last: 100) {
-                    nodes { __typename ... on LabeledEvent { createdAt label { name } } ... on RenamedTitleEvent { createdAt } }
-                  }
-                  comments(first: 100) { nodes { author { login } createdAt bodyHTML } }
-                }
-              }
-            }' > "$RUNNER_TEMP/issue.json"
-          labelled="$(jq -r '[.data.repository.issue.timelineItems.nodes[] | select(.label.name == "build") | .createdAt] | last // empty' "$RUNNER_TEMP/issue.json")"
-          edited="$(jq -r '.data.repository.issue | [.lastEditedAt // empty, (.timelineItems.nodes[] | select(.__typename == "RenamedTitleEvent") | .createdAt)] | max // empty' "$RUNNER_TEMP/issue.json")"
-          if [ -z "$labelled" ] || { [ -n "$edited" ] && [[ "$edited" > "$labelled" ]]; }; then
-            echo "The issue was edited since the build label was last added, so it isn't drafted from."
+          mkdir -p "$RUNNER_TEMP/input"
+          bash "$HOST_DIR/main/issue-text.sh" "$ISSUE" "$RUNNER_TEMP/issue.md" "$RUNNER_TEMP/issue-why.txt"
+          if [ -s "$RUNNER_TEMP/issue-why.txt" ]; then
+            cat "$RUNNER_TEMP/issue-why.txt"
+            echo
             exit 1
           fi
-          # Someone who may only triage can add a label, so the label is the decision only if whoever last
-          # added it may write to the repository, or is the build's app, by its exact login and type.
-          labelled_by="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE/events" |
-            jq -rs '[.[][] | select(.event == "labeled" and .label.name == "build")] | last | "\(.actor.login // "")\t\(.actor.type // "")"')"
-          IFS=$'\t' read -r by by_type <<< "$labelled_by"
-
-          if ! { [ "$by" = "awml-factory[bot]" ] && [ "$by_type" = Bot ]; } && ! may_write "$by"; then
-            echo "The build label was last added by someone who may not write to this repository, so it isn't drafted from."
-            exit 1
-          fi
-          # A comment is kept by what GitHub says its author may do to the repository, write,
-          # maintain or admin, not by how they're associated with it: a member may only triage.
-          jq -r '[.data.repository.issue.comments.nodes[].author.login // empty] | unique | .[]' "$RUNNER_TEMP/issue.json" |
-            while IFS= read -r login; do
-              if may_write "$login"; then echo "$login"; fi
-            done | jq -Rsc 'split("\n") | map(select(. != ""))' > "$RUNNER_TEMP/writers.json"
-          jq -r --slurpfile writers "$RUNNER_TEMP/writers.json" '.data.repository.issue as $issue
-            | "# #\($issue.number): \($issue.title)\n\n\($issue.bodyHTML)\n",
-              ($issue.comments.nodes[] | select(.author.login as $login | $writers[0] | index([$login]))
-                | "## Comment by \(.author.login), \(.createdAt)\n\n\(.bodyHTML)\n")' \
-            "$RUNNER_TEMP/issue.json" > "$input/issue.md"
+          cp "$RUNNER_TEMP/issue.md" "$RUNNER_TEMP/input/issue.md"
 
       # Why the last try failed comes from CI itself: the failed tests' log of CI's latest
       # pull_request run on the issue's branch, from this repository, if its tests failed. A fork's

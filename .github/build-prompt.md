@@ -2,7 +2,7 @@ You are building the change that one issue of the AWML Registry repository asks 
 added the `build` label, or one of the repository's own workflows started the build, which says it
 is wanted now.
 
-The issue, as GitHub renders it, with only the comments of those with write access to this repository, is in
+The issue, as GitHub renders it, with writers' comments and the app's comments approved by the build label, is in
 INPUT_DIR/issue.md. Read it, then read INPUT_DIR/AGENTS.md, main's copy, and follow it, and read
 docs/SPEC.md before changing anything it describes. Read INPUT_DIR/REVIEW.md too: once you're done,
 CI's two fresh reviews hold the change to it. The dependencies are installed, so the Next.js guides
@@ -17,7 +17,8 @@ job is then to make a change that passes where that try failed, not to start ove
 reason.
 
 - If the issue leaves a choice open, build what the maintainer decided in their comments. If they
-  haven't said which option they chose, change nothing, and say so in the message.
+  haven't said which option they chose, change nothing, and say so in the message. An answer to a
+  finding the fixer referred back is a decision too; read it beside the referral.
 - If you're not sure, ask: it is always fine to escalate. Where the issue leaves open a choice that
   changes what a reader sees, such as dropping or rewording something a page shows, or changing
   how a drawing reads, don't choose. Change nothing, and write the message as the question for the
