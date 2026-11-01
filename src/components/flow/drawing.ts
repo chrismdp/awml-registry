@@ -23,6 +23,8 @@ export type DrawnPart = Rect & {
   // The thick outline of a part untrusted text comes from (#83): orange, or
   // red when its text reaches an outside action that nothing stops.
   outline?: "untrusted" | "unstopped";
+  // The dashed outline of a code step a model carries out (AWML 0.10.1).
+  agentRun?: true;
 };
 
 export type DrawnScope = Rect & {
@@ -34,6 +36,8 @@ export type DrawnScope = Rect & {
   dashed: boolean;
   fill?: string;
   stroke?: string;
+  // A dashed scope's label colour, with its stroke.
+  color?: string;
   scope?: string;
   // On a system's map, the workflow a box is, as owner/slug.
   workflow?: string;

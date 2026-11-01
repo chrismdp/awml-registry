@@ -7,7 +7,18 @@ import type { Db } from "@/db/client";
 import { membership, platform, platformVersion, user } from "@/db/schema";
 import { engine } from "@/engine";
 import { record } from "./audit";
-import { awmlOf, descriptionId, isOlderAwml, PLATFORM_IS_TOO_OLD, platformAddress, readYaml, REGISTERED_PLATFORM } from "./awml-file";
+import { descriptionAsRead } from "./as-read";
+import {
+  awmlOf,
+  blockPlatforms,
+  descriptionId,
+  isOlderAwml,
+  PLATFORM_IS_TOO_OLD,
+  platformAddress,
+  readYaml,
+  REGISTERED_PLATFORM,
+  withDescriptionId,
+} from "./awml-file";
 import { findOwner, isOwnerOrMember, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH } from "./push";
 import { refuse, type Result } from "./result";
@@ -182,6 +193,24 @@ export async function findReadablePlatformVersion(
     .limit(1);
   if (!v) return null;
   return { owner, platform: p, version: { ...v, label: labelOf(v.description) } };
+}
+
+// The descriptions a platform view is drawn with (AWML 0.10.1), so that it
+// marks each code step a model carries out: the latest version of each
+// registered platform, owner/platforms/slug, that the implementation's blocks
+// name and the viewer may read, as the engine reads it, under the address its
+// blocks name it by. A platform the viewer may not read is left out, as one
+// that doesn't exist is, so the drawing is the one a missing platform gives.
+export async function drawnDescriptions(db: Db, viewer: Viewer, file: string, implementation: string): Promise<string[]> {
+  const addresses = [...new Set(blockPlatforms(file, implementation).values())].filter((id) => REGISTERED_PLATFORM.test(id)).sort();
+  const found = await Promise.all(
+    addresses.map(async (address) => {
+      const [, owner, slug] = REGISTERED_PLATFORM.exec(address)!;
+      const read = await findReadablePlatformVersion(db, viewer, owner, slug, "latest");
+      return read ? [withDescriptionId(await descriptionAsRead(read.version.description), address)] : [];
+    }),
+  );
+  return found.flat();
 }
 
 // The label a description gives, which the platform's own label follows as

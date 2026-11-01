@@ -12,6 +12,9 @@
 // - acme, an organisation that ana owns, with ben as a member;
 // - acme/dinners, public, at two versions: the AWML 0.4 file, then the 0.5 one;
 // - acme/client-email, public;
+// - acme/inbox, public, a copy of acme/client-email whose Mac mini block names
+//   acme/platforms/cowork-mac-mini, so ana sees its platform view's code steps outlined as a
+//   model's, and a visitor, who may not read that platform, doesn't;
 // - acme/shopping, public, whose favourites refer to dinners.yaml#favourites, stored as
 //   acme/dinners#favourites, so acme/dinners is referred to by it;
 // - acme/pantry, public, a copy of acme/shopping under another title, so dinners' favourites are
@@ -55,6 +58,15 @@ const pantry = fixture("shopping.yaml").replace("title: The family's shopping", 
 // A private workflow of acme's own for the kitchen system, under its own slug and title so it
 // isn't taken for the public acme/pantry.
 const cupboards = fixture("pantry.yaml").replace("title: The family's pantry", "title: The family's cupboards");
+
+// The client's email under its own title, its Mac mini block naming acme's private Claude Cowork
+// platform, whose steps an agent carries out, so ana sees its code steps outlined.
+const inbox = fixture("client-email.yaml")
+  .replace("title: A client's email, answered with a draft", "title: The consultant's inbox")
+  .replace(
+    '{ id: cowork, label: "Claude Cowork, Mac mini", parts',
+    '{ id: cowork, label: "Claude Cowork, Mac mini", platform: acme/platforms/cowork-mac-mini, parts',
+  );
 
 const recipe = `# Install on a code worker
 
@@ -118,6 +130,7 @@ export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ c
     ["/api/v1/acme/dinners/versions", { workflow: designOnly(fixture("dinners.yaml")), visibility: "public" }],
     ["/api/v1/acme/dinners/versions", { workflow: fixture("dinners.yaml") }],
     ["/api/v1/acme/client-email/versions", { workflow: fixture("client-email.yaml"), visibility: "public" }],
+    ["/api/v1/acme/inbox/versions", { workflow: inbox, visibility: "public" }],
     ["/api/v1/acme/shopping/versions", { workflow: fixture("shopping.yaml"), visibility: "public" }],
     ["/api/v1/acme/pantry/versions", { workflow: pantry, visibility: "public" }],
     ["/api/v1/acme/cupboards/versions", { workflow: cupboards, visibility: "private" }],

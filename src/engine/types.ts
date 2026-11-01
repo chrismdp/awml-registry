@@ -141,8 +141,10 @@ export interface Engine {
   // drawing out from (src/server/drawing.ts): its security view, or a
   // workflow's platform view of one implementation. The file must be valid,
   // and its errors are drawn red. Its text is unescaped
-  // (src/components/flow/graph.ts).
-  graph(yaml: string, implementation?: string): Promise<string>;
+  // (src/components/flow/graph.ts). A platform view marks each code step a
+  // model carries out: one whose block names, by its id, a platform
+  // description given whose steps are an agent's (AWML 0.10.1).
+  graph(yaml: string, implementation?: string, descriptions?: string[]): Promise<string>;
   // Where a workflow can run: its design judged against platform
   // descriptions, each named by its own id. With an implementation, its
   // placement is judged instead, each block against the description it

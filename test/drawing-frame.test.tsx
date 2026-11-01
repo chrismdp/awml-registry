@@ -406,6 +406,55 @@ describe("untrusted text (#83)", () => {
   });
 });
 
+// AWML 0.10.1 outlines a code step a model carries out in the platform view in dashed orange
+// (awml#208, awml#209), and gives each scope of a security view its own colour, for its dashed
+// edge and its label (awml#210). The registry draws both, in the server's SVG and React Flow alike.
+describe("what AWML 0.10.1 draws", () => {
+  const onCowork = example("client-email.yaml").replace(
+    '{ id: cowork, label: "Claude Cowork, Mac mini", parts',
+    '{ id: cowork, label: "Claude Cowork, Mac mini", platform: cowork-mac-mini, parts',
+  );
+  const partClasses = (html: string) =>
+    Object.fromEntries([...html.matchAll(/data-part="([^"]+)"[^>]*>(?:<title>[^<]*<\/title>)?<g class="(flow-part[^"]*)">/g)].map((m) => [m[1], m[2]]));
+
+  it("outlines each code step a model carries out, dashed, and no other part", async () => {
+    const { full } = laidOut(await layOut(await engine.graph(onCowork, "office", [example("platforms/cowork-mac-mini.yaml")])));
+    const svg = renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />);
+    const parts = partClasses(svg);
+    expect(Object.entries(parts).filter(([, c]) => c.includes("agent-run")).map(([id]) => id)).toEqual(["bring", "rules", "save"]);
+    expect(parts.bring).toBe("flow-part flow-kind-code agent-run");
+    const flow = renderToStaticMarkup(<ReactFlow nodes={serverNodes(full)} edges={[]} nodeTypes={NODE_TYPES} width={800} height={600} />);
+    expect(flow.match(/flow-part [^"]*\bagent-run\b/g)).toHaveLength(3);
+    expect(css).toContain(".flow-part.agent-run .flow-shape { stroke: var(--agent-run); stroke-width: 3px; stroke-dasharray: 6 3; }");
+    const token = new RegExp("--agent-run: (#[0-9a-f]{6})").exec(css)?.[1];
+    expect(token).toBe("#d97a00");
+    expect(contrast(token!, "#ffffff")).toBeGreaterThanOrEqual(3);
+    expect(contrast(token!, "#16171b")).toBeGreaterThanOrEqual(3);
+  });
+
+  it("outlines nothing in a platform view without the description", async () => {
+    const { full } = laidOut(await layOut(await engine.graph(onCowork, "office")));
+    expect(renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />)).not.toContain("agent-run");
+  });
+
+  it("draws each scope's edge and its name and who it is for in the colours the engine gives it, its fill its own", async () => {
+    const { full } = laidOut(await layOut(await engine.graph(dinners)));
+    expect(full.scopes.map((s) => [s.id, s.stroke, s.color])).toEqual([
+      ["carers", "#127c8c", "#0d5c68"],
+      ["family", "#8c2f6b", "#6b2251"],
+    ]);
+    for (const html of [
+      renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />),
+      renderToStaticMarkup(<ReactFlow nodes={serverNodes(full)} edges={[]} nodeTypes={NODE_TYPES} width={800} height={600} />),
+    ]) {
+      expect(html).toContain('style="stroke:#127c8c"');
+      expect(html).toContain('style="stroke:#8c2f6b"');
+      expect(html.match(/class="flow-scope-(name|who)" [^>]*style="fill:#0d5c68"/g)).toHaveLength(2);
+      expect(html.match(/class="flow-scope-(name|who)" [^>]*style="fill:#6b2251"/g)).toHaveLength(2);
+    }
+  });
+});
+
 // A colour's hue, in degrees, and whether it reads as violet or purple: from indigo to purple,
 // with enough colour in it to see.
 function rgb(hex: string) {
