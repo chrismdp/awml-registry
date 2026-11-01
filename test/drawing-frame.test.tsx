@@ -384,21 +384,19 @@ describe("untrusted text (#83)", () => {
     expect(css).toContain(".flow-part.unstopped .flow-shape { stroke: var(--broken); stroke-width: 3px; }");
   });
 
-  it("has no violet or purple anywhere in a drawing, the AI step's colour included, and no ⚠️ or 🛡️", async () => {
-    // Every colour the drawing's CSS names, and every token it takes from the site's.
+  it("draws the AI step in the site's indigo, a focused or linked-to part in its link colour, a lavender place as the engine gives it, and no ⚠️ or 🛡️", async () => {
+    // Violet is allowed in a drawing (#110): an AI step is the site's own colour for AI.
     const site = fs.readFileSync(path.join(__dirname, "../src/app/site.css"), "utf8");
-    const tokens = new Map([...`${site}\n${css}`.matchAll(/--([\w-]+): (#[0-9a-fA-F]{3,6})\b/g)].map((m) => [m[1], m[2]]));
-    const used = [...css.matchAll(/var\(--([\w-]+)\)/g)].map((m) => m[1]);
-    const colours = [...css.matchAll(/#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b/g)].map((m) => m[0]).concat(used.flatMap((t) => (tokens.has(t) ? [tokens.get(t)!] : [])));
-    expect(used).toContain("ai-fill");
-    expect(used).toContain("ai-line");
-    expect(colours.filter(violet)).toEqual([]);
-    // Nor the site's link colour, which is an indigo.
-    expect(used).not.toContain("link");
-    // Nor in what the server draws: the dinners' wall, a lavender place, is grey.
+    expect(site).toContain("--ai-fill: #cdd3fb;");
+    expect(site).toContain("--ai-line: #3b4bb0;");
+    expect(site).toContain("--link: #3b4bb0;");
+    expect(css).toContain(".flow-kind-ai .flow-shape { fill: var(--ai-fill); stroke: var(--ai-line); }");
+    expect(css).toMatch(/\.part-target \.flow-shape \{ stroke: var\(--link\); stroke-width: 3px; \}/);
+    // The dinners' wall, a lavender place, is drawn in the engine's colours.
     const { full } = laidOut(await layOut(example("dinners-home.graph.json")));
     const svg = renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />);
-    expect([...svg.matchAll(/#[0-9a-f]{6}/g)].map((m) => m[0]).filter(violet)).toEqual([]);
+    expect(svg).toContain("#efe6fa");
+    expect(svg).toContain("#d3c2ea");
     for (const graph of ["untrusted-text.graph.json", "older/enquiries-07.graph.json"]) {
       const drawn = renderToStaticMarkup(<StaticDrawing drawing={laidOut(await layOut(example(graph))).full} id="t" />);
       expect(drawn).not.toMatch(/⚠|🛡/);
@@ -455,8 +453,7 @@ describe("what AWML 0.10.1 draws", () => {
   });
 });
 
-// A colour's hue, in degrees, and whether it reads as violet or purple: from indigo to purple,
-// with enough colour in it to see.
+// A colour's red, green and blue, from 0 to 1, and its hue, in degrees.
 function rgb(hex: string) {
   const h = hex.length === 4 ? [...hex.slice(1)].map((d) => d + d).join("") : hex.slice(1);
   return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
@@ -469,10 +466,6 @@ function hue(hex: string) {
   const h = max === r ? ((g - b) / c) % 6 : max === g ? (b - r) / c + 2 : (r - g) / c + 4;
   return (h * 60 + 360) % 360;
 }
-const violet = (hex: string) => {
-  const [r, g, b] = rgb(hex);
-  return Math.max(r, g, b) - Math.min(r, g, b) >= 0.04 && hue(hex) >= 228 && hue(hex) <= 320;
-};
 // WCAG's contrast ratio between two colours.
 function contrast(a: string, b: string) {
   const lum = (hex: string) => {

@@ -85,13 +85,13 @@ describe("reading a drawing's graph from the engine", () => {
     ]);
   });
 
-  it("takes only a hex colour for a scope, and a violet one as a grey as light as it", () => {
+  it("takes only a hex colour for a scope, a violet one as the engine gives it", () => {
     const g = readGraph({
       view: "security",
       groups: [
         { id: "a", label: "a: anyone", stroke: "#127c8c", color: "#0d5c68" },
         { id: "b", label: "b: anyone", stroke: "url(javascript:x)", color: "red" },
-        { id: "c", label: "c: anyone", stroke: "#7c3aed", color: "#5b21b6" },
+        { id: "c", label: "c: anyone", stroke: "#655294", color: "#493b6d" },
         { id: "d", label: "d: anyone", stroke: "#127c8c" },
       ],
       parts: [],
@@ -102,7 +102,7 @@ describe("reading a drawing's graph from the engine", () => {
     expect(g.scopes).toEqual([
       { id: "a", label: "a: anyone", dashed: true, stroke: "#127c8c", color: "#0d5c68" },
       { id: "b", label: "b: anyone", dashed: true },
-      { id: "c", label: "c: anyone", dashed: true, stroke: "#949494", color: "#6c6c6c" },
+      { id: "c", label: "c: anyone", dashed: true, stroke: "#655294", color: "#493b6d" },
       { id: "d", label: "d: anyone", dashed: true },
     ]);
   });
@@ -456,15 +456,14 @@ describe("a code step a model carries out (AWML 0.10.1)", () => {
   });
 });
 
-// Registry issue #83: no violet or purple anywhere in a drawing. The engine gives a platform
-// view's places colours from a palette with a lavender in it, which the registry draws grey.
+// The engine gives a platform view's places colours from a palette with a lavender in it,
+// which the registry draws as the engine gives it, as AWML draws it (#110).
 describe("a place's colours", () => {
-  it("are never violet: a violet place is drawn in a grey as light as it", () => {
+  it("are the engine's, the lavender among them", () => {
     const home = graphOf(fixture("dinners-home.graph.json"));
     const wall = JSON.parse(fixture("dinners-home.graph.json")).places.find((p: { id: string }) => p.id === "wall");
     expect(wall).toEqual({ id: "wall", fill: "#efe6fa", stroke: "#d3c2ea" });
-    expect(home.scopes.find((s) => s.id === "wall")).toMatchObject({ fill: "#f0f0f0", stroke: "#d6d6d6" });
-    // The others keep the engine's colours.
+    expect(home.scopes.find((s) => s.id === "wall")).toMatchObject({ fill: "#efe6fa", stroke: "#d3c2ea" });
     expect(home.scopes.find((s) => s.id === "app")).toMatchObject({ fill: "#fbe9df", stroke: "#ecc7b2" });
   });
 });
