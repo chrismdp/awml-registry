@@ -3,24 +3,21 @@
 # access, and the repository's own app, can add a label, so the label is the decision. The build
 # says on the issue, in one new comment, that it has started. Claude drafts with a read-only token,
 # from the issue as GitHub renders it, unedited since the label was last added, with only the
-# comments of those with write access to this repository, and why the last try failed, read from CI's latest run on
-# the issue's branch. The pages the change alters are pictured, before and after. The app then
-# pushes the branch and the pictures and opens the pull request, which says Closes #n, unless one is
+# comments of those with write access to this repository. The pages the change alters are pictured,
+# before and after. The app then pushes the branch and the pictures and opens the pull request, which says Closes #n, unless one is
 # open from the branch already, which the push updates.
 #
 # The build runs no checks of its own. CI judges the commit when the pull request opens or the push
-# updates it, as it judges every pull request, and land.yml, fix.yml and retry.yml each wake when CI
+# updates it, as it judges every pull request, and land.yml and fix.yml each wake when CI
 # finishes, reading GitHub rather than anything this workflow writes. A draft that touches .github/
 # or Claude Code's own files, .claude/, .mcp.json or a CLAUDE.md, isn't pushed: it's offered in a
 # new comment with the commands to download and apply it, and the build stops.
 #
-# retry.yml starts a build again with only the issue's number. The start job then checks that the
-# label is still on, and that the issue's last edit, from GraphQL, is older than the label's last
-# labelled event, or it stops with a new comment asking for the label again.
+# Removing and re-adding the build label starts a fresh build. Failed tests and Important review
+# findings go to the fixer on the existing pull request, within its two-commit cap.
 name: Build from an issue
-# GitHub names each run for its issue, so retry.yml can count the build's runs for an issue since
-# the label was last added.
-run-name: ${{ (github.event_name == 'workflow_dispatch' || github.event.label.name == 'build') && format('Build of issue {0}', inputs.issue || github.event.issue.number) || format('A label added to issue {0}', github.event.issue.number) }}
+# Each build's run is named for its issue so a person can find its builds.
+run-name: ${{ github.event.label.name == 'build' && format('Build of issue {0}', github.event.issue.number) || format('A label added to issue {0}', github.event.issue.number) }}
 
 # Before it works, a repository needs:
 # - a GitHub App with read and write access to contents, pull requests and issues, installed on the
@@ -53,21 +50,15 @@ run-name: ${{ (github.event_name == 'workflow_dispatch' || github.event.label.na
 on:
   issues:
     types: [labeled]
-  # retry.yml starts each try after the first, and a person can start one by hand.
-  workflow_dispatch:
-    inputs:
-      issue:
-        description: The number of the issue to build
-        required: true
 
 # Each label added to an issue starts a run, and the app opens an issue with two labels at once. So
 # only a build has the issue's group, and a run for any other label can't cancel the build.
 concurrency:
-  group: ${{ (github.event_name == 'workflow_dispatch' || github.event.label.name == 'build') && format('build-issue-{0}', inputs.issue || github.event.issue.number) || format('build-other-label-{0}', github.run_id) }}
+  group: ${{ github.event.label.name == 'build' && format('build-issue-{0}', github.event.issue.number) || format('build-other-label-{0}', github.run_id) }}
   cancel-in-progress: true
 
 env:
-  ISSUE: ${{ inputs.issue || github.event.issue.number }}
+  ISSUE: ${{ github.event.issue.number }}
 
 # Named, so GitHub runs each step's script with bash -eo pipefail, not bash -e alone, and a failure
 # inside a pipe fails the step.
@@ -79,7 +70,7 @@ jobs:
   # Checks the label and the issue's last edit, then says on the issue that the build has started,
   # in a new comment linking the run. It checks out nothing and runs only gh.
   start:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'build'
+    if: github.event.label.name == 'build'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -169,7 +160,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      actions: read
       contents: read
       issues: read
     outputs:
@@ -224,32 +214,6 @@ jobs:
             exit 1
           fi
           cp "$RUNNER_TEMP/issue.md" "$RUNNER_TEMP/input/issue.md"
-
-      # Why the last try failed comes from CI itself: the failed tests' log of CI's latest
-      # pull_request run on the issue's branch, from this repository, if its tests failed. A fork's
-      # branch can carry a build's name, so its runs are left out. The log is the output of the
-      # branch's code, so the draft reads it as untrusted.
-      - name: Bring in why the last try failed
-        id: why
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          input="$RUNNER_TEMP/input"
-          mkdir -p "$input"
-          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=build/issue-$ISSUE&event=pull_request&per_page=20" |
-            jq -r --arg repository "$GITHUB_REPOSITORY" \
-              '[.workflow_runs[] | select(.event == "pull_request" and .head_repository.full_name == $repository)] | first
-                | select(.conclusion == "failure") | .id // empty')"
-          case "$run" in *[!0-9]*) echo "CI's run isn't a number: $run"; exit 1 ;; esac
-          [ -n "$run" ] || exit 0
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs" |
-            jq -r '.jobs[] | select(.name == "test" and .conclusion == "failure") | .id' |
-            while read -r job; do
-              case "$job" in ''|*[!0-9]*) continue ;; esac
-              gh run view --job "$job" --repo "$GITHUB_REPOSITORY" --log-failed || true
-            done | tail -n 300 > "$RUNNER_TEMP/failed.log"
-          # Only a log with something in it tells the draft why the last try failed.
-          if [ -s "$RUNNER_TEMP/failed.log" ]; then mv "$RUNNER_TEMP/failed.log" "$input/failed.log"; fi
 
       # The session runs the checks but can't install: under the scrub, Claude Code denies its
       # commands writes to node_modules/.bin and package-lock.json, and its sandbox has no network.
@@ -863,7 +827,7 @@ jobs:
           fi
 
   # Says in a new comment when the build stopped before it opened anything, since nothing was pushed
-  # for CI to fail and retry.yml won't hear of it. Pictures that fail are left out, and stop nothing.
+  # for CI to judge and the fixer won't hear of it. Pictures that fail are left out, and stop nothing.
   stopped:
     needs: [start, draft, pictures, open]
     if: ${{ failure() && needs.start.outputs.go == 'true' }}

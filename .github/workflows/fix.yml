@@ -1,20 +1,17 @@
-# The factory's fixer, drawn in .github/drawings/fix-review-findings.yaml (A failed review is
-# fixed). When CI finishes on a pull request with the tests passed and Bug review or Security review
-# failed, because a review found something Important, a fresh Claude session fixes every finding of
-# both reviews, Nits included, and the repository's app pushes the fix to the pull request's branch
-# as one commit. It reads only GitHub and git: CI's run and its checks, the pull request, and the fix
-# commits already on the branch, which are its tries, counted by the Factory-Fix line each one's
-# message carries, which survives a rebase. It runs no checks of its own: the push starts CI, which
-# judges the fix as it judges every commit. A fix that breaks a test wakes retry.yml instead.
+# The factory's fixer, drawn in .github/drawings/fix-review-findings.yaml (A failed pull request
+# is fixed). Failed tests, an Important review finding, or both wake one fresh Claude session.
+# It reads the end of this CI run's failed tests' log as untrusted, read-only data beside both
+# reviews' findings and the patch. The app pushes one fix commit to the existing pull request's
+# branch. It reads only GitHub and git, runs no checks of its own, and lets CI judge each push.
+# A fix that breaks a test wakes this fixer again, within the same two-commit cap.
 #
-# It gives up with a new comment after two fix commits on a branch, or when the session makes no
-# fix. It exits quietly if the pull request has closed or anyone has pushed since the review. A fix
-# that touches .github/ or Claude Code's own files is offered, not pushed: a new comment gives the
-# commands to download and apply the run's artifact, kept 30 days. Builds and landing don't call it
-# or wait for it, so a person's pull request is fixed the same way as a build's. A finding that
-# would change a decision on the build's issue goes back with its options. That session changes
-# nothing; a separate app token posts the referral on the issue. Closes chrismdp/awml-registry#82.
-name: Fix review findings
+# The opener gate stays. A closed pull request or moved head is left quietly. A fix touching
+# .github/ or Claude Code's own files is offered as an artifact with download and apply commands,
+# kept 30 days. A finding or failing test whose fix would change an issue decision is referred
+# back with its options; that session changes nothing. Builds and landing don't call or wait for
+# the fixer, so a person's pull request is fixed the same way as a build's. Follows #108 and
+# chrismdp/awml#213.
+name: Fix a failed pull request
 
 # GitHub runs this from main's copy. The decide job reads with a token that can't write. The fix job
 # holds the Claude token and a token that only reads, checks out the head as data, and runs nothing
@@ -32,7 +29,7 @@ on:
 # started by someone else's pull request from a branch of the same name could otherwise cancel or
 # displace the real one. The fix and write jobs, which act once decide has chosen the pull request,
 # each have a group of their own keyed on its number, and nothing cancels them. A run whose head
-# has moved posts nothing and pushes nothing, by the lease at the reviewed commit.
+# has moved posts nothing and pushes nothing, by the lease at CI's commit.
 
 # Named, so GitHub runs each step's script with bash -eo pipefail, not bash -e alone, and a failure
 # inside a pipe fails the step.
@@ -63,10 +60,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Only a pull_request run from a branch of this repository, whose tests all passed and one of
-      # whose reviews failed. The pull request must be open with the reviewed commit as its head.
-      # Only its outcome, the pull request's number, the reviewed commit and the branch pass on.
-      - name: Check the pull request is open at the reviewed commit, and count its fix commits
+      # Only a pull_request run from a branch of this repository, with failed tests, an Important
+      # review finding, or both. The pull request must be open with CI's commit as its head.
+      # Only its outcome, the pull request's number, CI's commit and the branch pass on.
+      - name: Check the pull request is open at CI's commit, and count its fix commits
         id: ready
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,22 +91,19 @@ jobs:
           [[ "$BRANCH" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || leave "The branch's name holds more than letters, digits and ./-_."
           case "$CI_RUN" in ''|*[!0-9]*) leave "CI's run isn't a number." ;; esac
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/jobs" --paginate --jq '.jobs[]' | jq -s . > "$RUNNER_TEMP/jobs.json"
-          jq -e '[.[] | select(.name == "test")] | length > 0 and all(.[]; .conclusion == "success")' "$RUNNER_TEMP/jobs.json" > /dev/null ||
-            leave "CI's tests didn't all pass, so this is retry's, or nothing's."
-          jq -e 'any(.[]; (.name | IN("Bug review", "Security review")) and .conclusion == "failure")' "$RUNNER_TEMP/jobs.json" > /dev/null ||
-            leave "Neither review failed."
-          # An earlier attempt of this run, on this head, whose tests all passed and a review failed
-          # has already woken the fixer, so a re-run neither fixes nor comments again. One whose tests
-          # failed was retry's, and the fixer left it.
+          tests_failed="$(jq -r 'any(.[]; .name == "test" and .conclusion == "failure")' "$RUNNER_TEMP/jobs.json")"
+          jq -e 'any(.[]; (.name | IN("test", "Bug review", "Security review")) and .conclusion == "failure")' "$RUNNER_TEMP/jobs.json" > /dev/null ||
+            leave "Neither tests nor reviews failed, so there's nothing to fix."
+          # An earlier attempt on this head with failed tests or a failed review already woke the
+          # fixer, so a re-run neither fixes nor comments again.
           case "$RUN_ATTEMPT" in ''|*[!0-9]*) leave "CI's attempt isn't a number." ;; esac
           for earlier in $(seq 1 $((RUN_ATTEMPT - 1))); do
             if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/attempts/$earlier/jobs" --paginate --jq '.jobs[]' |
-              jq -se '([.[] | select(.name == "test")] | length > 0 and all(.[]; .conclusion == "success"))
-                and any(.[]; (.name | IN("Bug review", "Security review")) and .conclusion == "failure")' > /dev/null; then
-              leave "Attempt $earlier of CI's run already passed its tests and failed a review on this head, and woke the fixer then."
+              jq -se 'any(.[]; (.name | IN("test", "Bug review", "Security review")) and .conclusion == "failure")' > /dev/null; then
+              leave "Attempt $earlier of CI's run already failed tests or a review on this head, and woke the fixer then."
             fi
           done
-          # The first open pull request at the reviewed commit opened by the factory's app, known by
+          # The first open pull request at CI's commit opened by the factory's app, known by
           # its exact login and type, or by someone GitHub says may write to the repository: write,
           # maintain or admin, not how they're associated with it.
           pr=""
@@ -122,7 +116,7 @@ jobs:
               '.[] | select(.head.ref == $branch and .head.repo.full_name == $repository and .head.sha == $head)
                 | [.number, .user.login, .user.type] | @tsv')
           case "$pr" in *[!0-9]*) leave "The pull request's number isn't a number." ;; esac
-          [ -n "$pr" ] || leave "No open pull request on $BRANCH is at the reviewed commit, so there's nothing to fix."
+          [ -n "$pr" ] || leave "No open pull request on $BRANCH is at CI's commit, so there's nothing to fix."
           # A stranger's pull request from the branch, at the same head, gets a CI run of its own,
           # whose pull_requests still lists this one. So the run must list this pull request, by
           # GitHub's record of the run, and must have been started by the factory's app, by its exact
@@ -135,9 +129,9 @@ jobs:
           if ! { [ "$actor" = "awml-factory[bot]" ] && [ "$actor_type" = Bot ]; }; then
             may_write "$actor" || leave "CI's run was started by someone who may not write here."
           fi
-          # A review that failed without an Important finding refused the patch or ran out of time,
-          # so there's nothing for a session to fix: a person must look at its check. The names are
-          # the reviews', from a fixed list.
+          # Without failed tests, a review that failed without an Important finding leaves nothing
+          # for a session to fix: it refused the patch or ran out of time, so a person must look.
+          # The names are the reviews', from a fixed list.
           important="$(bash .github/review-findings.sh findings "$CI_RUN" | jq '[.[] | select(.severity == "Important")] | length')"
           case "$important" in ''|*[!0-9]*) echo "The Important findings couldn't be counted: $important"; exit 1 ;; esac
           failed="$(jq -r '[.[] | select((.name | IN("Bug review", "Security review")) and .conclusion == "failure") | .name] | unique | join(" and ")' "$RUNNER_TEMP/jobs.json")"
@@ -160,7 +154,7 @@ jobs:
           deps='(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
           claudes='(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$'
           safe_git diff --name-only --no-renames --no-ext-diff --no-textconv -z "$base" "$HEAD_SHA" > "$RUNNER_TEMP/changed"
-          if [ "$important" -eq 0 ]; then
+          if [ "$tests_failed" != true ] && [ "$important" -eq 0 ]; then
             outcome=noimportant
           elif grep -zqE "$claudes" "$RUNNER_TEMP/changed"; then
             outcome=claudefiles
@@ -175,7 +169,7 @@ jobs:
             echo "failed=$failed"
           } | tee -a "$GITHUB_OUTPUT"
 
-  # Claude fixes every finding of both reviews here, with a read-only token, and hands back a patch.
+  # One Claude session fixes failing tests and both reviews' findings, with a read-only token, and hands back a patch.
   # It follows main's fix prompt, AGENTS.md and REVIEW.md, copied out before the head is checked out.
   fix:
     needs: decide
@@ -213,7 +207,7 @@ jobs:
       - name: Make the host-only folder
         run: sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 "$HOST_DIR"
 
-      # The findings come from the reviews' checks on the reviewed commit, and the patch from
+      # The findings come from the reviews' checks on CI's commit, and the patch from
       # GitHub, both as data the session can't change.
       - name: Copy main's prompt, scripts, AGENTS.md and REVIEW.md out, and bring in the findings and the patch
         id: bring
@@ -236,6 +230,24 @@ jobs:
             bash "$HOST_DIR/main/issue-text.sh" "${BASH_REMATCH[1]}" "$RUNNER_TEMP/input/decisions.md"
             chmod a-w "$RUNNER_TEMP/input/decisions.md"
           fi
+
+      # Only this CI run's failed test jobs, as untrusted data, never shell code or prompt text.
+      # The session step makes the log read-only with the other inputs. A missing log is optional.
+      - name: Bring in the end of this CI run's failed tests' log
+        id: failed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          case "$CI_RUN" in ''|*[!0-9]*) echo "CI's run isn't a number: $CI_RUN"; exit 1 ;; esac
+          mkdir -p "$RUNNER_TEMP/input"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/jobs" --paginate \
+            --jq '.jobs[] | select(.name == "test" and .conclusion == "failure") | .id' |
+            while read -r job; do
+              case "$job" in ''|*[!0-9]*) continue ;; esac
+              gh run view --job "$job" --repo "$GITHUB_REPOSITORY" --log-failed || true
+            done | tail -n 300 > "$RUNNER_TEMP/failed.log"
+          if [ -s "$RUNNER_TEMP/failed.log" ]; then mv "$RUNNER_TEMP/failed.log" "$RUNNER_TEMP/input/failed.log"; fi
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -310,6 +322,7 @@ jobs:
           (cd "$RUNNER_TEMP" && npm_config_userconfig="$RUNNER_TEMP/npm/user.npmrc" npm_config_globalconfig="$RUNNER_TEMP/npm/global.npmrc" npm install -g @anthropic-ai/claude-code@2.1.312)
 
       # Past the opener gate, the findings and patch are trusted people's and models' text.
+      # The failed tests' log stays untrusted, read-only data, and the prompt says so.
       # They can still steer the session. Its commands run in its sandbox, which reaches no network and
       # sees none of Claude Code's own process. They can write .git, apart from what the scrub guards,
       # its config and hooks among them, so git after the session checks the rest and takes away the
@@ -317,7 +330,7 @@ jobs:
       # forces --permission-mode default, so every tool it may use is named. It loads
       # only the settings claude-settings.sh writes in a home of its own, and no MCP servers, and
       # reads only the workspace and its inputs, never /proc.
-      - name: Fix the findings
+      - name: Make failing tests pass and fix both reviews' findings in one session, test first
         id: session
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -504,9 +517,9 @@ jobs:
           give_up() {
             echo "reason=${2:-stopped}" >> "$GITHUB_OUTPUT"
             {
-              echo "**$1 The review findings need a person.**"
+              echo "**$1 The failed tests or review findings need a person.**"
               echo
-              echo "- [CI's run]($ci_url) holds the failed review checks and their findings."
+              echo "- [CI's run]($ci_url) holds the failed tests and review checks with their findings."
               echo "- [The fixer's run]($run_url)"
             } > "$RUNNER_TEMP/comment.md"
             gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/comment.md"
@@ -514,7 +527,7 @@ jobs:
             exit 0
           }
           if [ "$(jq -r .head.sha <<< "$pull")" != "$HEAD_SHA" ]; then
-            echo "Someone pushed since the review, so the fix or referral is left."
+            echo "Someone pushed since CI ran, so the fix or referral is left."
             echo "result=moved" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -535,7 +548,7 @@ jobs:
           fi
           [ "$CHANGED" = true ] || give_up "The fixer's session made no fix." nothing
           git -c core.hooksPath=/dev/null apply --index "$RUNNER_TEMP/fix/fix.patch" ||
-            give_up "The fixer's fix doesn't apply to the reviewed commit." apply
+            give_up "The fixer's fix doesn't apply to CI's commit." apply
           guarded='^\.github/|(^|/)\.claude(/|$)|(^|/)\.mcp\.json$|(^|/)CLAUDE(\.local)?\.md$|(^|/)\.npmrc$|(^|/)\.yarnrc[^/]*$|(^|/)node_modules(/|$)|(^|/)npm-shrinkwrap\.json$|(^|/)yarn\.lock$|(^|/)package(-lock)?\.json$'
           # A symbolic link is read wherever it's followed, so the app never pushes one either.
           links="$(git diff --cached --raw --no-renames | awk '$2 == "120000" { found = 1 } END { if (found) print "link" }')"
@@ -616,7 +629,7 @@ jobs:
           id="$(gh api "users/awml-factory%5Bbot%5D" --jq .id)"
           case "$id" in ''|*[!0-9]*) echo "The app's bot has no id: $id"; exit 1 ;; esac
           {
-            echo "Fix the review findings"
+            echo "Fix the failed tests and review findings"
             echo
             if [ -s "$RUNNER_TEMP/fix/message.md" ]; then head -c 5000 "$RUNNER_TEMP/fix/message.md"; echo; echo; fi
             echo "Factory-Fix: $run_url"
@@ -636,7 +649,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
 
-      # Only if the branch is still at the reviewed commit, so GitHub refuses the push if anyone
+      # Only if the branch is still at CI's commit, so GitHub refuses the push if anyone
       # pushed since. CI then judges the fix.
       - name: Push the fix
         id: push
@@ -647,5 +660,5 @@ jobs:
           if ! git -c core.hooksPath=/dev/null \
             -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
             push --force-with-lease="refs/heads/$BRANCH:$HEAD_SHA" origin "HEAD:refs/heads/$BRANCH"; then
-            echo "Someone pushed to $BRANCH since the review, so the fix wasn't pushed."
+            echo "Someone pushed to $BRANCH since CI ran, so the fix wasn't pushed."
           fi

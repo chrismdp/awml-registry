@@ -5,7 +5,7 @@
 # at CI's commit, the head commit's checks, the reviews' Nits and Classify's verdict among them, the
 # branch's commits since main, and the build rule run on that commit. It exits quietly unless every
 # check on the head commit has finished, and CI's test, Bug review and Security review have passed:
-# a failed one belongs to retry.yml or fix.yml. Classify, which may have been skipped or not
+# failed tests and Important review findings belong to fix.yml. Classify, which may have been skipped or not
 # succeeded, counts then as no verdict, which means ask.
 #
 # The rule can only move Classify's verdict towards ask. Ship merges, pinned with

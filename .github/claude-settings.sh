@@ -18,7 +18,7 @@
 # cache.
 #
 # The keys are Claude Code's, from its sandboxing documentation: the sandbox on, and Claude Code
-# refusing to start without it; no retry of a command outside it, and no command excluded from it;
+# refusing to start without it; no command may run outside it, and no command excluded from it;
 # a fresh /proc, so a command sees no process outside the sandbox, Claude Code's own included,
 # whose environment holds the login token; no user namespaces inside it; writes to the working
 # directory, the session's own temporary directory and the added folders, but never to a

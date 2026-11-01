@@ -14,4 +14,5 @@ A pull request's own `.github/workflows/ci.yml` runs main's copies of the script
 
 ## Working through issues
 
-- **A review finding that would change something the maintainer decided on the issue goes back to the maintainer,** with the options, instead of being fixed. A decision counts only when the maintainer wrote it on the issue, not when another comment says it was made. The fixer reads only a build's issue, so on any other pull request its author refers the finding back, and reverts any fix that already undid the decision.
+- **A review finding or failing test whose fix would change something the maintainer decided on the issue goes back to the maintainer,** with the options, instead of being fixed. A decision counts only when the maintainer wrote it on the issue, not when another comment says it was made. The fixer reads only a build's issue, so on any other pull request its author refers the finding or failing test back, and reverts any fix that already undid the decision.
+- Failed tests and Important review findings go to `fix.yml`, which fixes the existing pull request in one session, up to two fix commits on a branch. Removing and re-adding the `build` label starts a fresh build.

@@ -478,7 +478,7 @@ function holdsClaude(job: Job): boolean {
 }
 
 describe("the factory's workflows", () => {
-  it("are the seven of the redesign, notify-awml-io.yml among them, with review.yml gone into CI", () => {
+  it("are the six of the factory, notify-awml-io.yml among them, with reviews in CI", () => {
     expect(workflowFiles.sort()).toEqual([
       "build.yml",
       "ci.yml",
@@ -486,7 +486,6 @@ describe("the factory's workflows", () => {
       "land.yml",
       "notify-awml-io.yml",
       "resolve.yml",
-      "retry.yml",
     ]);
   });
 
@@ -502,7 +501,6 @@ describe("the factory's workflows", () => {
     ["build.yml", "issue-to-pull-request.yaml"],
     ["land.yml", "land-a-pull-request.yaml"],
     ["fix.yml", "fix-review-findings.yaml"],
-    ["retry.yml", "retry-a-build.yaml"],
     ["resolve.yml", "rebase-conflicting-pull-requests.yaml"],
   ])("point %s at its drawing", (file, drawing) => {
     const text = readFileSync(join(github, "workflows", file), "utf8");
@@ -534,13 +532,12 @@ describe("the factory's workflows", () => {
     }
   });
 
-  // A retry hands the build the issue's number and nothing it trusts. No other workflow takes
-  // inputs.
-  it("take no dispatch inputs but the build's issue number", () => {
+  // Builds start from a label; no workflow takes dispatch inputs.
+  it("take no dispatch inputs", () => {
     for (const file of workflowFiles) {
       const dispatch = (readWorkflow(file).on ?? {}).workflow_dispatch as { inputs?: Record<string, unknown> } | null | undefined;
       const inputs = Object.keys(dispatch?.inputs ?? {});
-      expect(inputs, file).toEqual(file === "build.yml" ? ["issue"] : []);
+      expect(inputs, file).toEqual([]);
     }
   });
 
@@ -953,7 +950,7 @@ describe("the factory's workflows", () => {
   // Without a shell named, GitHub runs a step's script with bash -e alone, so a failure inside a
   // pipe passes unseen. Named, it runs bash --noprofile --norc -eo pipefail, as the rehearsals do.
   it("run every factory step with bash and pipefail", () => {
-    for (const file of ["ci.yml", "build.yml", "fix.yml", "land.yml", "retry.yml", "resolve.yml"])
+    for (const file of ["ci.yml", "build.yml", "fix.yml", "land.yml", "resolve.yml"])
       expect(readWorkflow(file).defaults, file).toEqual({ run: { shell: "bash" } });
   });
 
@@ -1082,7 +1079,7 @@ describe("the factory's workflows", () => {
       }
     const shared = readFileSync(join(github, "issue-text.sh"), "utf8");
     expect(shared).toContain(mayWrite);
-    expect(found.sort()).toEqual(["build.yml start", "ci.yml review", "fix.yml decide", "land.yml find", "resolve.yml find", "retry.yml retry"]);
+    expect(found.sort()).toEqual(["build.yml start", "ci.yml review", "fix.yml decide", "land.yml find", "resolve.yml find"]);
   });
 
   it("take each artifact's digest the same way everywhere", () => {
@@ -1155,7 +1152,7 @@ describe("the factory's path patterns", () => {
 
 describe("claude-settings.sh", () => {
   // The keys and values are Claude Code's own, from its sandboxing documentation: the sandbox on,
-  // refusing to start without it, no retry outside it, no command excluded from it, a fresh /proc
+  // refusing to start without it, no command outside it, no command excluded from it, a fresh /proc
   // so a command can't see Claude Code's process, no nested namespaces, and no host at all: the
   // dependencies are installed before a session starts.
   it.runIf(canRehearse)("writes the session's user settings with the sandbox on and no network", () => {
@@ -1957,23 +1954,20 @@ describe("build.yml", () => {
   const build = readWorkflow("build.yml");
   const jobs = build.jobs;
 
-  it("starts from the build label, or from retry with only the issue's number", () => {
+  it("starts only from the build label", () => {
     expect(build.on).toEqual({
       issues: { types: ["labeled"] },
-      workflow_dispatch: { inputs: { issue: { description: expect.any(String), required: true } } },
     });
   });
 
-  // retry.yml counts a try as a build.yml run named for the issue since the label was last added.
   it("names each run for its issue", () => {
     expect(build["run-name"]).toBe(
-      "${{ (github.event_name == 'workflow_dispatch' || github.event.label.name == 'build') && format('Build of issue {0}', inputs.issue || github.event.issue.number) || format('A label added to issue {0}', github.event.issue.number) }}",
+      "${{ github.event.label.name == 'build' && format('Build of issue {0}', github.event.issue.number) || format('A label added to issue {0}', github.event.issue.number) }}",
     );
   });
 
-  // The build runs no checks of its own: CI judges the pull request, and retry wakes when its tests
-  // fail. Nothing here starts retry or judges the change.
-  it("runs no checks, reviews or retries of its own", () => {
+  // CI judges the pull request, and the fixer wakes when its tests or reviews fail.
+  it("runs no checks or reviews of its own", () => {
     expect(Object.keys(jobs).sort()).toEqual(["draft", "open", "pictures", "start", "stopped"]);
     const text = readFileSync(join(github, "workflows/build.yml"), "utf8");
     for (const word of ["npm run typecheck", "npm run lint", "gh workflow run", "review-bugs-prompt", "classify-prompt"])
@@ -2055,7 +2049,7 @@ ${permissionStub}
   });
 
   it("counts renames wherever it checks the issue is unedited", () => {
-    for (const text of [stepWithId(jobs.start, "start").run, readFileSync(join(github, "issue-text.sh"), "utf8"), stepWithId(readJobs("retry.yml").retry, "tries").run])
+    for (const text of [stepWithId(jobs.start, "start").run, readFileSync(join(github, "issue-text.sh"), "utf8")])
       expect(text).toMatch(/RENAMED_TITLE_EVENT|\.event == "renamed"/);
   });
 
@@ -2195,44 +2189,12 @@ ${permissionStub}`,
     });
   });
 
-  // Why the last try failed comes from CI itself: the failed test log of CI's latest pull_request
-  // run on the issue's branch, from this repository, and never a fork's run that took the name.
-  // An empty log would tell the draft a try failed with nothing to show, so the file is written
-  // only when it has something in it.
-  it.runIf(canRehearse)("writes no failed log when the failed tests left none", () => {
-    const root = scratch();
-    const run = rehearse(stepWithId(jobs.draft, "why").run ?? "", {
-      root,
-      env: { ISSUE: "7" },
-      answers: `
-  *"actions/workflows/ci.yml/runs"*) answer <<< '${JSON.stringify({ workflow_runs: [{ id: 50, conclusion: "failure", event: "pull_request", head_repository: { full_name: "owner/repo" } }] })}' ;;
-  *"actions/runs/50/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ id: 9, name: "test", conclusion: "failure" }] })}' ;;
-  *"run view --job 9"*) ;;`,
-    });
-    expect(run.failed, run.printed).toBe(false);
-    expect(existsSync(join(root, "runner/input/failed.log"))).toBe(false);
-  });
-
-  it.runIf(canRehearse)("brings in the failed tests' log of CI's latest run on the branch", () => {
-    const root = scratch();
-    const runs_ = {
-      workflow_runs: [
-        { id: 51, conclusion: "failure", event: "pull_request", head_repository: { full_name: "stranger/repo" } },
-        { id: 50, conclusion: "failure", event: "pull_request", head_repository: { full_name: "owner/repo" } },
-      ],
-    };
-    const run = rehearse(stepWithId(jobs.draft, "why").run ?? "", {
-      root,
-      env: { ISSUE: "7" },
-      answers: `
-  *"actions/workflows/ci.yml/runs"*) answer <<< '${JSON.stringify(runs_)}' ;;
-  *"actions/runs/50/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ id: 9, name: "test", conclusion: "failure" }, { id: 8, name: "Bug review", conclusion: "failure" }] })}' ;;
-  *"run view --job 9"*) echo "FAIL test/a.test.ts" ;;`,
-    });
-    expect(run.failed, run.printed).toBe(false);
-    expect(run.calls).toContain("branch=build/issue-7");
-    expect(run.calls).not.toContain("--job 8");
-    expect(left(root, "input/failed.log")).toContain("FAIL test/a.test.ts");
+  it("starts a fresh draft without reading a previous CI failure", () => {
+    expect(steps(jobs.draft).some(each => each.id === "why")).toBe(false);
+    expect(runs(jobs.draft)).not.toContain("failed.log");
+    expect(readFileSync(join(github, "build-prompt.md"), "utf8")).not.toContain("failed.log");
+    expect(jobs.start.if).toBe("github.event.label.name == 'build'");
+    expect(build.concurrency?.group).not.toContain("inputs.issue");
   });
 
   // The draft session runs every command, tests included, in its sandbox, which reaches npm's
@@ -2255,6 +2217,7 @@ ${permissionStub}`,
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     });
     expect(run.failed, run.printed).toBe(false);
+    expect(started).toHaveLength(1);
     expect(started).toHaveLength(1);
     const [session] = started;
     expect(session.maintain, "Bash's cd stays in the tree").toBe("1");
@@ -2911,7 +2874,7 @@ ${permissionStub}
     expect(ready({ labeller: { login: "awml-factory[bot]", type: "Bot" } }).outputs.labeller).toBe("owner");
   });
 
-  // A failed check belongs to retry or the fixer, and a head that moved to a newer CI run.
+  // A failed check belongs to the fixer, and a head that moved to a newer CI run.
   it.runIf(canRehearse).each([
     ["a push's run", { event: "push" }],
     ["a fork's run", { repository: "stranger/repo" }],
@@ -3131,14 +3094,6 @@ describe("fix.yml", () => {
     expect(jobs.write.concurrency).toEqual({ group: "fix-write-${{ needs.decide.outputs.pr }}", "cancel-in-progress": false });
   });
 
-  // The retry is one job that acts only for CI's run at the head of the open pull request it reads
-  // and starts a build only on that run's first attempt, so it needs no group, and has none.
-  it("gives the retry no group that another pull request's run could share", () => {
-    const retry = readWorkflow("retry.yml");
-    expect(retry.concurrency).toBeUndefined();
-    for (const job of Object.values(retry.jobs)) expect(job.concurrency).toBeUndefined();
-  });
-
   it("wakes when CI's run finishes, on any branch, as a person's pull request is fixed the same way", () => {
     expect(fix.on).toEqual({ workflow_run: { workflows: ["CI"], types: ["completed"] } });
     expect(Object.keys(jobs).sort()).toEqual(["decide", "fix", "write"]);
@@ -3156,6 +3111,8 @@ describe("fix.yml", () => {
   // head fetched in, never from GitHub's compare, which lists at most 300 files.
   const decide = ({
     event = "pull_request",
+    branch = "build/issue-7",
+    open = true,
     repository = "owner/repo",
     pullHead = undefined as string | undefined,
     test = "success",
@@ -3178,6 +3135,8 @@ describe("fix.yml", () => {
     runPulls: number[];
     actor: { login: string; type: string };
     event: string;
+    branch: string;
+    open: boolean;
     repository: string;
     pullHead: string;
     test: string;
@@ -3197,7 +3156,7 @@ describe("fix.yml", () => {
     put(join(origin, ".github/review-findings.sh"), readFileSync(join(github, "review-findings.sh"), "utf8"));
     git(origin, "add", "-A");
     git(origin, "commit", "-qm", "main");
-    git(origin, "switch", "-q", "-c", "build/issue-7");
+    git(origin, "switch", "-q", "-c", branch);
     for (const path of files) put(join(origin, path), "changed\n");
     git(origin, "add", "-A");
     git(origin, "commit", "-qm", "Build #7\n\nCloses #7");
@@ -3214,7 +3173,7 @@ describe("fix.yml", () => {
     const run = rehearse(stepWithId(jobs.decide, "ready").run ?? "", {
       root,
       cwd: work,
-      env: { BRANCH: "build/issue-7", HEAD_SHA: sha, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77", RUN_ATTEMPT: attempt },
+      env: { BRANCH: branch, HEAD_SHA: sha, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77", RUN_ATTEMPT: attempt },
       answers: `
   *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({
     jobs: [
@@ -3228,11 +3187,11 @@ describe("fix.yml", () => {
   *"check-runs/12/annotations"*) answer <<< '${JSON.stringify(important && security === "failure" ? [{ annotation_level: "failure", title: "Important: Hole", message: "m", path: "src/a.ts", start_line: 1 }] : [])}' ;;
   *"actions/runs/77/attempts/1/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: earlierTest }, { name: "Bug review", conclusion: earlierReview }] })}' ;;
   *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })), triggering_actor: actor })}' ;;
-  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([
+  *"pulls?head=owner:${branch}"*) answer <<< '${JSON.stringify(open ? [
     strangerPull(pullHead ?? sha),
     { ...appPull(pullHead ?? sha, pullRepository), number: 13, user: { login: "triager", type: "User" }, author_association: "MEMBER" },
     { ...appPull(pullHead ?? sha, pullRepository), user: { login: "maintainer", type: "User" }, author_association: "NONE" },
-  ])}' ;;
+  ].map(pull => ({ ...pull, head: { ...pull.head, ref: branch } })) : [])}' ;;
 ${permissionStub}`,
     });
     return { ...run, sha };
@@ -3259,13 +3218,30 @@ ${permissionStub}`,
     expect(decide({ files: [...files, "package.json"] }).outputs.outcome).toBe("npmfiles");
   });
 
-  it.runIf(canRehearse)("fixes when the tests passed, a review failed, and the branch has fewer than two fix commits", () => {
-    for (const fixes of [0, 1]) {
-      const run = decide({ fixes });
+  it.runIf(canRehearse).each([
+    ["failed tests alone", "failure", "success", "success"],
+    ["a failed review alone", "success", "failure", "success"],
+    ["a failed security review alone", "success", "success", "failure"],
+    ["both tests and reviews failed", "failure", "failure", "failure"],
+  ])("fixes %s on the existing pull request, within the same two-commit cap", (_, test, bug, security) => {
+    for (const fixes of [0, 1, 2]) {
+      const run = decide({ test, bug, security, fixes });
       expect(run.failed, run.printed).toBe(false);
-      expect(run.outputs).toMatchObject({ outcome: "fix", pr: "12", head_sha: run.sha, branch: "build/issue-7" });
+      expect(run.outputs).toMatchObject({ outcome: fixes < 2 ? "fix" : "giveup", pr: "12", head_sha: run.sha, branch: "build/issue-7" });
     }
-    expect(decide({ bug: "success", security: "failure" }).outputs.outcome).toBe("fix");
+    expect(steps(jobs.fix).filter(each => each.env?.CLAUDE_CODE_OAUTH_TOKEN)).toHaveLength(1);
+  });
+
+  it.runIf(canRehearse)("fixes failed tests even when a failed review left no Important finding", () => {
+    const run = decide({ test: "failure", important: false });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs.outcome).toBe("fix");
+  });
+
+  it.runIf(canRehearse)("fixes failed tests on a person's feature branch", () => {
+    const run = decide({ branch: "feature/page", test: "failure", bug: "success" });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.outputs).toMatchObject({ outcome: "fix", pr: "12", branch: "feature/page" });
   });
 
   // Trust is by the opener's permission on the repository: an organisation's member who can only
@@ -3296,7 +3272,8 @@ ${permissionStub}`,
     ["a stranger", { login: "stranger", type: "User" }, "none"],
     ["a user named like the app", { login: "awml-factory[bot]", type: "User" }, "none"],
   ])("acts on a run %s started only if they may write", (_, actor, outcome) => {
-    expect(decide({ actor }).outputs.outcome).toBe(outcome);
+    for (const test of ["success", "failure"])
+      expect(decide({ actor, test }).outputs.outcome).toBe(outcome);
   });
 
   it.runIf(canRehearse)("exits quietly on a CI run that isn't the pull request's own", () => {
@@ -3305,13 +3282,12 @@ ${permissionStub}`,
     expect(run.outputs.outcome).toBe("none");
   });
 
-  // An earlier attempt of the same run, on the same head, whose tests passed and review failed has
-  // already woken the fixer, so a re-run doesn't fix, or comment, again. One whose tests failed was
-  // retry's, and the fixer never acted on it.
+  // A failed test or review in an earlier attempt already woke the fixer on this head.
   it.runIf(canRehearse)("leaves a re-run quietly only when an earlier attempt already woke the fixer", () => {
     expect(decide({ attempt: "2", earlierReview: "failure" }).outputs.outcome).toBe("none");
     expect(decide({ attempt: "2", earlierReview: "success" }).outputs.outcome).toBe("fix");
-    expect(decide({ attempt: "2", earlierTest: "failure", earlierReview: "failure" }).outputs.outcome).toBe("fix");
+    expect(decide({ attempt: "2", earlierTest: "failure", earlierReview: "failure" }).outputs.outcome).toBe("none");
+    expect(decide({ attempt: "2", earlierTest: "failure", earlierReview: "success" }).outputs.outcome).toBe("none");
     expect(stepWithId(jobs.decide, "ready").env?.RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
   });
 
@@ -3342,15 +3318,15 @@ ${permissionStub}`,
     },
   );
 
-  // The tests own a run where both they and a review failed, so retry acts then. Someone else's
-  // push since the review, or a closed pull request, leaves nothing to fix.
+  // A moved head or a closed pull request leaves nothing to fix.
   it.runIf(canRehearse).each([
-    ["failed tests", { test: "failure" }],
+    ["cancelled tests and passed reviews", { test: "cancelled", bug: "success" }],
     ["passed reviews", { bug: "success" }],
     ["a push's run", { event: "push" }],
     ["a fork's run", { repository: "stranger/repo" }],
     ["a fork's pull request from a build/issue-N branch", { pullRepository: "stranger/repo" }],
-    ["a head that moved", { pullHead: "b".repeat(40) }],
+    ["a head that moved", { pullHead: "b".repeat(40), test: "failure" }],
+    ["a closed pull request", { open: false, test: "failure" }],
   ])("exits quietly on %s", (_, options) => {
     const run = decide(options);
     expect(run.failed, run.printed).toBe(false);
@@ -3363,7 +3339,8 @@ ${permissionStub}`,
     const root = scratch();
     const input = join(root, "runner/input");
     put(join(input, "findings.json"), "[]");
-    put(join(root, "runner/main/fix-prompt.md"), "Read INPUT_DIR/findings.json. Write OUT_DIR/message.md.\n");
+    put(join(input, "failed.log"), "FAIL test/a.test.ts\n");
+    put(join(root, "runner/main/fix-prompt.md"), readFileSync(join(github, "fix-prompt.md"), "utf8"));
     put(join(root, "runner/main/claude-settings.sh"), readFileSync(join(github, "claude-settings.sh"), "utf8"));
     put(join(root, "runner/main/check-out.sh"), readFileSync(join(github, "check-out.sh"), "utf8"));
     const workspace = join(root, "workspace");
@@ -3375,6 +3352,7 @@ ${permissionStub}`,
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     });
     expect(run.failed, run.printed).toBe(false);
+    expect(started).toHaveLength(1);
     const [session] = started;
     expect(session.maintain, "Bash's cd stays in the tree").toBe("1");
     const settings = JSON.parse(readFileSync(join(session.home, ".claude/settings.json"), "utf8"));
@@ -3385,6 +3363,53 @@ ${permissionStub}`,
     expect(flagValues(session.args, "--disallowedTools")).toEqual(["Read(//proc/**)", "Edit(./.git/**)", `Edit(/${workspace}/.git/**)`]);
     const prompt = session.args[session.args.indexOf("-p") + 1];
     expect(prompt).toContain(`${input}/findings.json`);
+    expect(prompt).toContain(`${input}/failed.log`);
+    expect(prompt).toContain("untrusted");
+    expect(session.changes).toBe("no");
+    expect(statSync(join(input, "failed.log")).mode & 0o222).toBe(0);
+    expect(settings.sandbox.filesystem.denyWrite.some((path: string) => input === path || input.startsWith(`${path}/`))).toBe(true);
+  });
+
+  it.runIf(canRehearse)("brings only this CI run's failed tests' log tail as data", () => {
+    const root = scratch();
+    const log = Array.from({ length: 310 }, (_, n) => `failed line ${n + 1}`).join("\n") +
+      "\n::error::untrusted output\n$(touch should-not-exist)\n";
+    const failed = stepWithId(jobs.fix, "failed");
+    const run = rehearse(failed.run ?? "", {
+      root, env: { CI_RUN: "77" }, answers: `
+  *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [
+    { id: 9, name: "test", conclusion: "failure" },
+    { id: 8, name: "Bug review", conclusion: "failure" },
+    { id: 7, name: "test", conclusion: "success" },
+    { id: "invalid", name: "test", conclusion: "failure" },
+  ] })}' ;;
+  *"run view --job 9"*) cat <<'LOG'
+${log}LOG
+;;`,
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(run.calls).toContain("actions/runs/77/jobs");
+    expect(run.calls).not.toContain("workflows/ci.yml/runs");
+    expect(run.calls).not.toMatch(/--job (8|7|invalid)/);
+    const received = left(root, "input/failed.log");
+    expect(received.trimEnd().split("\n")).toHaveLength(300);
+    expect(received).toBe(log.split("\n").slice(-301).join("\n"));
+    expect(commandsIn(run.printed)).toEqual([]);
+    expect(existsSync(join(root, "should-not-exist"))).toBe(false);
+    expect(failed.env?.CI_RUN).toBe("${{ github.event.workflow_run.id }}");
+    const all = steps(jobs.fix);
+    expect(all.indexOf(failed)).toBeLessThan(all.indexOf(stepWithId(jobs.fix, "session")));
+  });
+
+  it.runIf(canRehearse).each(["success", "empty", "unavailable"])("keeps the log optional when %s", (result) => {
+    const root = scratch();
+    const run = rehearse(stepWithId(jobs.fix, "failed").run ?? "", {
+      root, env: { CI_RUN: "77" }, answers: `
+  *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ id: 9, name: "test", conclusion: result === "success" ? "success" : "failure" }] })}' ;;
+  *"run view --job 9"*) ${result === "unavailable" ? "exit 1" : ":"} ;;`,
+    });
+    expect(run.failed, run.printed).toBe(false);
+    expect(existsSync(join(root, "runner/input/failed.log"))).toBe(false);
   });
 
   it("brings in both reviews' findings from CI's checks, and main's prompt, before it checks out the head", () => {
@@ -3411,7 +3436,7 @@ ${permissionStub}`,
   });
 
   describe("the write job's guard", () => {
-    const guard = (env: Record<string, string>, path = "src/page.tsx", pullHead = head, link = "") => {
+    const guard = (env: Record<string, string>, path = "src/page.tsx", pullHead = head, link = "", state = "open") => {
       const root = scratch();
       const repo = join(root, "repo");
       mkdirSync(repo);
@@ -3432,7 +3457,7 @@ ${permissionStub}`,
         cwd: repo,
         env: { PR_NUMBER: "12", HEAD_SHA: sha, BRANCH: "feature/page", CI_RUN: "77", OUTCOME: "fix", FIXED: "success", CHANGED: "true", ...env },
         answers: `
-  *"pulls/12"*) answer <<< '${JSON.stringify({ state: "open", head: { sha: pullHead === head ? sha : pullHead } })}' ;;
+  *"pulls/12"*) answer <<< '${JSON.stringify({ state, head: { sha: pullHead === head ? sha : pullHead } })}' ;;
   *"pr comment"*) ;;`,
       });
     };
@@ -3447,6 +3472,13 @@ ${permissionStub}`,
     it.runIf(canRehearse)("exits quietly when someone pushed since the review", () => {
       const run = guard({}, "src/page.tsx", "b".repeat(40));
       expect(run.outputs.result).toBe("moved");
+      expect(run.calls).not.toContain("pr comment");
+    });
+
+    it.runIf(canRehearse).each(["fix", "giveup", "noimportant"])("leaves a closed pull request quietly for outcome %s", (OUTCOME) => {
+      const run = guard({ OUTCOME }, "src/page.tsx", head, "", "closed");
+      expect(run.failed, run.printed).toBe(false);
+      expect(run.outputs.result).toBe("quiet");
       expect(run.calls).not.toContain("pr comment");
     });
 
@@ -3529,270 +3561,6 @@ ${permissionStub}`,
     for (const [id, job] of Object.entries(jobs))
       for (const each of steps(job))
         if (JSON.stringify(each.env ?? {}).includes("steps.app.outputs.token")) expect(`${id} ${each.id}`).toBe("write push");
-  });
-});
-
-describe("retry.yml", () => {
-  const retry = readWorkflow("retry.yml");
-  const jobs = retry.jobs;
-  const head = "a".repeat(40);
-
-  it("wakes when CI's run finishes on a factory branch, and takes no inputs", () => {
-    expect(retry.on).toEqual({ workflow_run: { workflows: ["CI"], types: ["completed"], branches: ["build/issue-*"] } });
-    expect(retry["run-name"]).toBeUndefined();
-  });
-
-  // It reads the branch's commits with git, from a clone of main that keeps no credentials, and runs
-  // nothing from the branch.
-  it("reads the branch with git from a clone of main, and runs only gh and git", () => {
-    expect(Object.keys(jobs)).toEqual(["retry"]);
-    const uses = steps(jobs.retry).filter((each) => each.uses);
-    expect(uses).toHaveLength(1);
-    expect(uses[0].uses?.startsWith(cloneAction)).toBe(true);
-    expect(uses[0].with).toEqual({ ref: "main", "fetch-depth": 0, "persist-credentials": false });
-    expect(jobs.retry.permissions).toEqual({ actions: "write", contents: "read", issues: "write", "pull-requests": "read" });
-  });
-
-  const tries = ({
-    event = "pull_request",
-    repository = "owner/repo",
-    test = "failure",
-    bug = "failure",
-    pullHead = head,
-    labels = ["build"],
-    edited = null as string | null,
-    renamed = undefined as string | undefined,
-    builds = 1,
-    pullRepository = "owner/repo",
-    earlierFailure = false as boolean | "review",
-    runPulls = [12],
-    actor = { login: "awml-factory[bot]", type: "Bot" },
-    personCommits = false,
-    earlierTaken = false,
-    attempt = "1",
-    earlierTest = "failure",
-  } = {}) => {
-    const root = scratch();
-    // The branch's commits, the factory's, then a person's if asked.
-    const origin = join(root, "origin");
-    mkdirSync(origin);
-    git(origin, "init", "-q");
-    put(join(origin, "README.md"), "A registry\n");
-    git(origin, "add", "-A");
-    git(origin, "commit", "-qm", "main");
-    git(origin, "switch", "-q", "-c", "build/issue-7");
-    put(join(origin, "src/page.tsx"), "page\n");
-    git(origin, "add", "-A");
-    git(origin, "-c", "user.name=awml-factory[bot]", "-c", "user.email=1+awml-factory[bot]@users.noreply.github.com", "commit", "-qm", "Build #7");
-    if (personCommits) {
-      put(join(origin, "src/page.tsx"), "a person's page\n");
-      git(origin, "commit", "-qam", "A person takes it on", "--date=2026-10-03T00:00:00Z");
-    }
-    const sha = git(origin, "rev-parse", "HEAD");
-    git(origin, "switch", "-q", "main");
-    const work = join(root, "work");
-    git(root, "clone", "-q", origin, work);
-    const at = pullHead === head ? sha : pullHead;
-    const runs_ = Array.from({ length: builds }, (_, at) => ({
-      display_title: "Build of issue 7",
-      event: at === 0 ? "issues" : "workflow_dispatch",
-      head_branch: "main",
-      created_at: `2026-10-02T0${at}:00:00Z`,
-    }));
-    const ciRuns = {
-      workflow_runs: [
-        { id: 77, event: "pull_request", conclusion: "failure", head_repository: { full_name: "owner/repo" } },
-        ...(earlierFailure
-          ? [{ id: 70, event: "pull_request", conclusion: "failure", head_sha: "7".repeat(40), head_repository: { full_name: "owner/repo" } }]
-          : []),
-        { id: 69, event: "pull_request", conclusion: "failure", head_repository: { full_name: "stranger/repo" } },
-      ],
-    };
-    runs_.push({ display_title: "Build of issue 8", event: "issues", head_branch: "main", created_at: "2026-10-02T00:00:00Z" });
-    runs_.push({ display_title: "A label added to issue 7", event: "issues", head_branch: "main", created_at: "2026-10-02T00:00:00Z" });
-    return rehearse(stepWithId(jobs.retry, "tries").run ?? "", {
-      root,
-      cwd: work,
-      env: { BRANCH: "build/issue-7", HEAD_SHA: sha, HEAD_REPOSITORY: repository, CI_EVENT: event, CI_RUN: "77", RUN_ATTEMPT: attempt },
-      answers: `
-${permissionStub}
-  *"actions/runs/77/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: test }, { name: "Bug review", conclusion: bug }] })}' ;;
-  *"actions/runs/77/attempts/1/jobs"*) answer <<< '${JSON.stringify({ jobs: [{ name: "test", conclusion: earlierTest }, { name: "Bug review", conclusion: "failure" }] })}' ;;
-  *"actions/runs/77"*) answer <<< '${JSON.stringify({ pull_requests: runPulls.map((number) => ({ number })), triggering_actor: actor })}' ;;
-  *"pulls?head=owner:build/issue-7"*) answer <<< '${JSON.stringify([strangerPull(sha), appPull(at, pullRepository)])}' ;;
-  *"actions/workflows/ci.yml/runs"*) answer <<< '${JSON.stringify(ciRuns)}' ;;
-  *"compare/main...${"7".repeat(40)}"*) answer <<< '${JSON.stringify({
-    commits: [
-      { parents: [{}], commit: { author: { email: "1+awml-factory[bot]@users.noreply.github.com" }, committer: { email: "1+awml-factory[bot]@users.noreply.github.com" } } },
-      ...(earlierTaken ? [{ parents: [{}], commit: { author: { email: "person@example.com" }, committer: { email: "person@example.com" } } }] : []),
-    ],
-  })}' ;;
-  *"actions/runs/70/jobs"*) answer <<< '${JSON.stringify({
-    jobs: [
-      { name: "test", conclusion: earlierFailure === "review" ? "success" : "failure" },
-      { name: "Bug review", conclusion: "failure" },
-    ],
-  })}' ;;
-  *"api graphql"*) answer <<< '${JSON.stringify({
-    data: {
-      repository: {
-        issue: {
-          lastEditedAt: edited,
-          labels: { nodes: labels.map((name) => ({ name })) },
-          timelineItems: {
-            nodes: [
-              { __typename: "LabeledEvent", createdAt: "2026-10-01T10:00:00Z", label: { name: "build" } },
-              ...(renamed ? [{ __typename: "RenamedTitleEvent", createdAt: renamed }] : []),
-            ],
-          },
-        },
-      },
-    },
-  })}' ;;
-  *"actions/workflows/build.yml/runs"*) answer <<< '${JSON.stringify({ workflow_runs: runs_ })}' ;;
-  *"workflow run"*) ;;
-  *"issue comment"*) ;;`,
-    });
-  };
-
-  // The tests own a run where both they and a review failed.
-  it.runIf(canRehearse)("starts the build again with only the issue's number while there are fewer than three builds", () => {
-    for (const builds of [1, 2]) {
-      const run = tries({ builds });
-      expect(run.failed, run.printed).toBe(false);
-      expect(run.calls).toContain("workflow run build.yml --repo owner/repo --ref main -f issue=7\n");
-      expect(run.calls).not.toContain("issue comment");
-    }
-    expect(tries({ bug: "success" }).calls).toContain("workflow run build.yml");
-  });
-
-  // A re-run of CI's run whose earlier attempt failed its tests would start another build for the
-  // same failure, so it starts none. One whose earlier attempts passed their tests started none.
-  it.runIf(canRehearse)("starts no build from a re-run of CI whose earlier attempt already started one", () => {
-    const run = tries({ attempt: "2" });
-    expect(run.failed, run.printed).toBe(false);
-    expect(run.calls).not.toMatch(/workflow run|issue comment/);
-    const first = tries({ attempt: "2", earlierTest: "success" });
-    expect(first.failed, first.printed).toBe(false);
-    expect(first.calls).toContain("workflow run build.yml --repo owner/repo --ref main -f issue=7\n");
-    expect(stepWithId(jobs.retry, "tries").env?.RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
-  });
-
-  it.runIf(canRehearse)("counts only build.yml runs for the issue since the label was last added", () => {
-    const run = tries({ builds: 2 });
-    expect(run.calls).toContain("created=>=2026-10-01T10:00:00Z");
-    expect(run.printed).toContain("2 builds");
-  });
-
-  it.runIf(canRehearse)("says in a new comment that a person must act after three builds", () => {
-    const run = tries({ builds: 3 });
-    expect(run.calls).not.toContain("workflow run");
-    expect(run.calls).toContain("issue comment 7 --repo owner/repo --body-file");
-    expect(run.calls).toMatch(/> .*three times/);
-    expect(run.calls).toContain("https://github.com/owner/repo/actions/runs/77");
-  });
-
-  // A stranger's pull request from the branch starts a run whose pull_requests still lists the
-  // app's, so whoever started the run must be the app or someone who may write.
-  it.runIf(canRehearse)("exits quietly on a CI run a stranger started", () => {
-    const run = tries({ actor: { login: "stranger", type: "User" } });
-    expect(run.failed, run.printed).toBe(false);
-    expect(run.calls).not.toMatch(/workflow run|issue comment/);
-    expect(tries({ actor: { login: "maintainer", type: "User" } }).calls).toContain("workflow run build.yml");
-  });
-
-  // A person's commit on the branch means they've taken it on: the build doesn't redraft over it,
-  // and says so once, by the first run whose tests failed since that commit.
-  // Told once, by GitHub's record: an earlier run whose tests failed on a head that already held a
-  // commit not the factory's said it. An earlier failed run of the factory's own commits didn't, so
-  // a person whose commits were written before it, and pushed after, is still told.
-  it.runIf(canRehearse)("leaves a branch a person has committed to, and says so once", () => {
-    const run = tries({ personCommits: true });
-    expect(run.failed, run.printed).toBe(false);
-    expect(run.calls).not.toContain("workflow run");
-    expect(run.calls.match(/issue comment 7 /g)).toHaveLength(1);
-    expect(run.calls).toMatch(/> .*a person has taken it over/);
-    const factoryOnlyBefore = tries({ personCommits: true, earlierFailure: true });
-    expect(factoryOnlyBefore.calls.match(/issue comment 7 /g)).toHaveLength(1);
-    const told = tries({ personCommits: true, earlierFailure: true, earlierTaken: true });
-    expect(told.calls).not.toMatch(/workflow run|issue comment/);
-  });
-
-  it("is drawn with its takeover, and says so in its header", () => {
-    const drawing = readFileSync(join(github, "drawings/retry-a-build.yaml"), "utf8");
-    expect(drawing).toMatch(/- \{ id: takenover, kind: code, op: do, cleans: true, label: "[^"]+"/);
-    expect(drawing).toContain('{ from: tries, to: takenover, kind: start, label: "[a commit since main isn\'t the factory\'s]" }');
-    expect(drawing).toMatch(/- \{ id: takenovernote, kind: outside, label: "Comment on the issue: Allow"/);
-    expect(drawing).toContain("{ from: takenover, to: takenovernote, kind: data }");
-    const text = readFileSync(join(github, "workflows/retry.yml"), "utf8");
-    expect(squash(text.slice(0, text.indexOf("\nname:")))).toContain("a person has taken it over");
-  });
-
-  it.runIf(canRehearse)("exits quietly on a CI run that isn't the app's pull request's own", () => {
-    const run = tries({ runPulls: [99] });
-    expect(run.failed, run.printed).toBe(false);
-    expect(run.calls).not.toMatch(/workflow run|issue comment/);
-  });
-
-  it.runIf(canRehearse)("names the app's pull request in its comments, never a stranger's", () => {
-    const run = tries({ builds: 3 });
-    expect(run.calls).toContain("#12");
-    expect(run.calls).not.toContain("#99");
-  });
-
-  // The comment is posted once: only by the first CI run whose tests failed after the third build
-  // started, found from GitHub's runs, never from a marker in an earlier comment.
-  // After the third build its CI passed the tests and failed a review, the fixer pushed, and the fix
-  // broke the tests: that's the first run since the third build whose tests failed, so a person is
-  // told, once.
-  it.runIf(canRehearse)("tells a person when a fix commit after the third build breaks the tests", () => {
-    const run = tries({ builds: 3, earlierFailure: "review" });
-    expect(run.failed, run.printed).toBe(false);
-    expect(run.calls).not.toContain("workflow run");
-    expect(run.calls.match(/issue comment 7 /g)).toHaveLength(1);
-  });
-
-  it.runIf(canRehearse)("says a person must act only once", () => {
-    const run = tries({ builds: 3, earlierFailure: true });
-    expect(run.failed, run.printed).toBe(false);
-    expect(run.calls).not.toMatch(/workflow run|issue comment/);
-    expect(run.calls).toContain("created=>=2026-10-02T02:00:00Z");
-  });
-
-  it.runIf(canRehearse)("stops with a new comment when the title was renamed since the label went on", () => {
-    const run = tries({ renamed: "2026-10-01T11:00:00Z" });
-    expect(run.calls).not.toContain("workflow run");
-    expect(run.calls).toMatch(/> .*edited since the build label/);
-  });
-
-  it.runIf(canRehearse)("stops with a new comment when the issue was edited since the label went on", () => {
-    const run = tries({ edited: "2026-10-01T11:00:00Z" });
-    expect(run.calls).not.toContain("workflow run");
-    expect(run.calls).toMatch(/> .*edited since the build label/);
-  });
-
-  // Said once, by the same test as the other comments: an earlier run whose tests failed since the
-  // edit said it already. A person's takeover is told first.
-  it.runIf(canRehearse)("says the issue was edited only once, and after a takeover, not at all", () => {
-    const again = tries({ edited: "2026-10-01T11:00:00Z", earlierFailure: true });
-    expect(again.calls).not.toMatch(/workflow run|issue comment/);
-    expect(again.calls).toContain("created=>=2026-10-01T11:00:00Z");
-    const taken = tries({ edited: "2026-10-01T11:00:00Z", personCommits: true });
-    expect(taken.calls).toMatch(/> .*a person has taken it over/);
-    expect(taken.calls).not.toMatch(/> .*edited since the build label/);
-  });
-
-  it.runIf(canRehearse).each([
-    ["passed tests", { test: "success" }],
-    ["a push's run", { event: "push" }],
-    ["a fork's run", { repository: "stranger/repo" }],
-    ["a fork's pull request from a build/issue-N branch", { pullRepository: "stranger/repo" }],
-    ["a head that moved", { pullHead: "b".repeat(40) }],
-    ["a label that's off", { labels: ["bug"] }],
-  ])("exits quietly on %s", (_, options) => {
-    const run = tries(options);
-    expect(run.failed, run.printed).toBe(false);
-    expect(run.calls).not.toMatch(/workflow run|issue comment/);
   });
 });
 
@@ -5252,7 +5020,7 @@ ${issueAnswers()}` });
 
   it("tells the session to refer a decision with its options and change nothing", () => {
     const prompt = squash(readFileSync(join(github, "fix-prompt.md"), "utf8"));
-    for (const text of ["INPUT_DIR/decisions.md", "OUT_DIR/referred.md", "would change a decision", "If you refer any finding back, change nothing", "options"])
+    for (const text of ["INPUT_DIR/decisions.md", "OUT_DIR/referred.md", "would change a decision", "If you refer any finding or failing test back, change nothing", "options", "each failing test", "making a failing test pass would change a decision", "a test may still hold the behaviour a decision changed"])
       expect(prompt).toContain(text);
     expect(squash(readFileSync(join(github, "build-prompt.md"), "utf8"))).toContain("answer to a finding the fixer referred back");
   });
@@ -5410,16 +5178,19 @@ describe("the factory's drawings", () => {
     }
     for (const id of ["issue", "keep", "decisions", "weigh", "ask", "askout"])
       expect(fix.parts.find(p => p.id === id)).toBeDefined();
+    expect(fix.parts.find(p => p.id === "failedlog")?.untrusted).toBe(true);
+    for (const [to, label] of [["weigh", "which tests failed"], ["fix", "why the tests failed"]])
+      expect(fix.lines).toContainEqual(expect.objectContaining({ from: "failedlog", to, kind: "data", label }));
     expect(drawing("land-a-pull-request").parts.find(p => p.id === "tested")?.untrusted).toBe(true);
   });
 
-  it("passes AWML 0.10's checks for all six together", async () => {
+  it("passes AWML 0.10's checks for all five together", async () => {
     const { createAWML } = await import("../vendor/awml/awml.js");
     const engine = await createAWML(readFileSync(join(__dirname, "../vendor/awml/awml.wasm")));
     const files = readdirSync(join(github, "drawings")).filter(file => file.endsWith(".yaml")).map(file => ({
       file: `.github/drawings/${file}`, source: readFileSync(join(github, "drawings", file), "utf8"),
     }));
-    expect(files).toHaveLength(6);
+    expect(files).toHaveLength(5);
     for (const file of files) expect((parse(file.source) as { awml: string }).awml).toBe("0.10");
     const checked = engine.checks(files) as { checks: { result: string; mistakes: unknown[] }[] };
     expect(checked.checks.filter(c => c.result === "fail" || c.result === "error")).toEqual([]);
