@@ -1,9 +1,7 @@
 /* The registry's drawing (issue #62): the server's SVG and React Flow drawing
    the same pieces (flow/Graphic.tsx) in the site's own look. The kinds keep
    AWML's colours; the steps use the site's. Sizes and text positions are set
-   in flow/drawing.ts, which the server lays out by, not here. A drawing has no
-   violet or purple in it (#83), so its focus is the site's ink, not its link.
-   Untrusted text (#83) is drawn orange where it goes, green out of what
+   in flow/drawing.ts, which the server lays out by, not here. Untrusted text (#83) is drawn orange where it goes, green out of what
    stopped it, and red the whole way to an outside action nothing stops: each
    reads at 3:1 or more on white and on the site's ink. A scope of a security
    view takes the colours the engine gives it, in its element's style. */
@@ -75,7 +73,7 @@
 .flow-static a:focus { outline: none; }
 .flow-static a:focus-visible .flow-shape, .flow-static a:focus-visible .flow-scope-card,
 .react-flow__node:focus-visible .flow-shape, .react-flow__node:focus-visible .flow-scope-card,
-.part-target .flow-shape { stroke: var(--ink); stroke-width: 3px; }
+.part-target .flow-shape { stroke: var(--link); stroke-width: 3px; }
 .part-target { filter: drop-shadow(0 0 3px rgba(22, 23, 27, 0.5)); }
 
 /* Scopes: soft cards holding their parts, their name and who they are for at the top. */

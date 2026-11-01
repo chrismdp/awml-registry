@@ -136,42 +136,9 @@ const BESIDE = new Set(["context", "connector", "surface"]);
 const folded = (text: unknown) => String(text ?? "").replace(/\s+/g, " ").trim();
 
 // A colour, when it is one: only a hex colour is taken, so nothing but a
-// colour reaches the page's styles. A drawing has no violet or purple in it
-// (#83), so a violet one, such as the lavender among the engine's colours for
-// places, is drawn as a grey as light as it.
+// colour reaches the page's styles, drawn as the engine gives it.
 const colour = (value: unknown) =>
-  typeof value === "string" && /^#[0-9a-fA-F]{3,8}$/.test(value) ? unviolet(value.toLowerCase()) : undefined;
-
-// Each of a hex colour's red, green and blue, from 0 to 255; a colour of 4 or
-// 8 digits also has an alpha, which is kept as it is.
-function channels(hex: string): { rgb: number[]; alpha: string } {
-  const digits = hex.slice(1);
-  const short = digits.length <= 4;
-  const pairs = short ? [...digits].map((d) => d + d) : digits.match(/../g)!;
-  return { rgb: pairs.slice(0, 3).map((p) => parseInt(p, 16)), alpha: pairs[3] ?? "" };
-}
-
-// Whether a colour reads as violet or purple: a hue from indigo, past
-// violet, to purple, 228° to 320°, with enough colour in it to see.
-function isViolet(hex: string) {
-  const [r, g, b] = channels(hex).rgb.map((c) => c / 255);
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const chroma = max - min;
-  if (chroma < 0.04) return false;
-  const hue = max === r ? 60 * (((g - b) / chroma + 6) % 6) : max === g ? 60 * ((b - r) / chroma + 2) : 60 * ((r - g) / chroma + 4);
-  return hue >= 228 && hue <= 320;
-}
-
-// A colour that isn't violet as it is, and a violet one as the grey of its lightness.
-function unviolet(hex: string) {
-  if (!isViolet(hex)) return hex;
-  const { rgb, alpha } = channels(hex);
-  const grey = Math.round((Math.max(...rgb) + Math.min(...rgb)) / 2)
-    .toString(16)
-    .padStart(2, "0");
-  return `#${grey}${grey}${grey}${alpha}`;
-}
+  typeof value === "string" && /^#[0-9a-fA-F]{3,8}$/.test(value) ? value.toLowerCase() : undefined;
 
 // The workflow a map's box is, as owner/slug: the name a ref gives it, or the
 // path the registry gave it at, which ends owner/slug.yaml.

@@ -11,10 +11,10 @@
   --on-ink: #d4d7dd;
   --link: #3b4bb0;
 
-  /* Box colours: a fill and an outline for each kind of step. AI is a cyan,
-     never a violet (#83), and apart from untrusted text's orange, green and red. */
-  --ai-fill: #c9ebf5;
-  --ai-line: #0b6e8a;
+  /* Box colours: a fill and an outline for each kind of step, apart from
+     untrusted text's orange, green and red. */
+  --ai-fill: #cdd3fb;
+  --ai-line: #3b4bb0;
   --code-fill: #c4e3d1;
   --code-line: #2b7a4f;
   --person-fill: #f7d79a;
