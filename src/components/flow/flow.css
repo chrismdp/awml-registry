@@ -5,7 +5,8 @@
    violet or purple in it (#83), so its focus is the site's ink, not its link.
    Untrusted text (#83) is drawn orange where it goes, green out of what
    stopped it, and red the whole way to an outside action nothing stops: each
-   reads at 3:1 or more on white and on the site's ink. */
+   reads at 3:1 or more on white and on the site's ink. A scope of a security
+   view takes the colours the engine gives it, in its element's style. */
 .flow-frame, .flow-static {
   --trigger-fill: #fbe1ee; --trigger-line: #a33a74;
   --context-fill: #e2eef9; --context-line: #3d6fa3;
@@ -15,6 +16,7 @@
   --broken: #d0342c;
   --untrusted: #d67200;
   --stopped: #109a74;
+  --agent-run: #d97a00;
 }
 .flow-frame { overflow: hidden; border-radius: inherit; }
 .flow-frame:focus-visible { outline: 3px solid var(--ink); outline-offset: -3px; }
@@ -62,6 +64,9 @@
    its text reaches an outside action that nothing stops. */
 .flow-part.untrusted .flow-shape { stroke: var(--untrusted); stroke-width: 3px; }
 .flow-part.unstopped .flow-shape { stroke: var(--broken); stroke-width: 3px; }
+/* A code step a model carries out (AWML 0.10.1): a dashed orange outline, as
+   AWML draws it. */
+.flow-part.agent-run .flow-shape { stroke: var(--agent-run); stroke-width: 3px; stroke-dasharray: 6 3; }
 /* A part linked to other workflows (#55): a chain mark in its top-right corner,
    and an outline when focused or when the address's fragment names it. */
 .part-link-mark circle { fill: var(--ink); stroke: var(--paper); stroke-width: 2px; }

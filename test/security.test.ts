@@ -17,8 +17,9 @@ import OwnerPage from "@/app/[owner]/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import OrgSettingsPage from "@/app/[owner]/settings/page";
 import GalleryPage from "@/app/gallery/page";
+import WorkflowEmbed from "@/app/[owner]/[slug]/embed/page";
 import { BASE, example, orgWith, person, request, withEdition, type Who } from "./helpers";
-import { renderPage, type Page } from "./pages";
+import { renderPage, sealed, type Page } from "./pages";
 
 const workflow = example("dinners.yaml");
 
@@ -792,6 +793,98 @@ describe("Private platforms", () => {
       expect((await res.json()).errors).toEqual([
         `description: the platform id "acme/platforms/back-office" must be ${nell.username}/platforms/back-office, where it is pushed, or a bare id.`,
       ]);
+    });
+  });
+
+  // AWML 0.10.1 outlines a code step a model carries out, from the description of the platform
+  // its block names (awml#208). A workflow's platform view is drawn with the descriptions of the
+  // registered platforms its blocks name that the viewer may read, so whether a private platform's
+  // steps are an agent's shows only to its organisation's members, and everyone else gets the
+  // drawing a missing platform gives.
+  describe("An implementation's drawing", () => {
+    const agentDesk = backOffice.replace("id: back-office", "id: desk").replace("steps: code", "steps: agent");
+    const placedOn = (address: string) =>
+      clientEmail.replace(
+        '{ id: cowork, label: "Claude Cowork, Mac mini", parts',
+        `{ id: cowork, label: "Claude Cowork, Mac mini", platform: ${address}, parts`,
+      );
+    // Acme's private agent desk and Beta's private agent vault, and Nell's public workflows: one
+    // whose Mac mini block names each, and one naming a platform that doesn't exist.
+    async function drawings() {
+      const people = await platforms();
+      const { olive, bea, nell } = people;
+      for (const [owner, slug, as] of [
+        ["acme", "desk", olive],
+        ["beta", "agent-vault", bea],
+      ] as const) {
+        const res = await pushPlatform(owner, slug, { token: as.token }, { description: agentDesk, visibility: "private" });
+        expect(res.status).toBe(201);
+      }
+      for (const [slug, address] of [
+        ["on-desk", "acme/platforms/desk"],
+        ["on-vault", "beta/platforms/agent-vault"],
+        ["on-nothing", "acme/platforms/nothing-here"],
+      ]) {
+        const res = await request("POST", `/api/v1/${nell.username}/${slug}/versions`, {
+          as: { token: nell.token },
+          json: { workflow: placedOn(address), visibility: "public" },
+        });
+        expect(res.status).toBe(201);
+      }
+      return people;
+    }
+    // The server's SVG of a workflow's platform view, as someone sees it.
+    const svgOf = async (owner: string, slug: string, as?: Who, headers?: Headers) => {
+      const page = await renderPage(WorkflowPlatformPage, { owner, slug }, { as, headers });
+      expect(page.status).toBe(200);
+      return /<svg class="flow-static"[^]*?<\/svg>/.exec(page.html)![0];
+    };
+    const outlined = (svg: string) => [...svg.matchAll(/data-part="([^"]+)"[^>]*>(?:<title>[^<]*<\/title>)?<g class="flow-part [^"]*\bagent-run\b/g)].map((m) => m[1]);
+
+    it("positive and roles: the organisation's owner and member see its private platform's steps outlined", async () => {
+      const { olive, mo, nell } = await drawings();
+      for (const who of [olive, mo]) expect(outlined(await svgOf(nell.username, "on-desk", { cookie: who.cookie }))).toEqual(["bring", "rules", "save"]);
+    });
+
+    it("negative: anyone else, signed in or out, gets the drawing a missing platform gives", async () => {
+      const { nell } = await drawings();
+      const missing = await svgOf(nell.username, "on-nothing");
+      expect(outlined(missing)).toEqual([]);
+      for (const who of [{ cookie: nell.cookie }, undefined]) expect(await svgOf(nell.username, "on-desk", who)).toBe(missing);
+    });
+
+    it("cross-tenant: one organisation's members never see another's private platform in a drawing", async () => {
+      const { mo, bea, nell } = await drawings();
+      const missing = await svgOf(nell.username, "on-nothing");
+      expect(await svgOf(nell.username, "on-vault", { cookie: mo.cookie })).toBe(missing);
+      expect(await svgOf(nell.username, "on-desk", { cookie: bea.cookie })).toBe(missing);
+      expect(outlined(await svgOf(nell.username, "on-vault", { cookie: bea.cookie }))).toEqual(["bring", "rules", "save"]);
+    });
+
+    it("a token that is not valid is taken as nobody on a page, so it draws as for someone signed out", async () => {
+      const { mo, nell } = await drawings();
+      await revoke(mo);
+      const missing = await svgOf(nell.username, "on-nothing");
+      const headers = new Headers({ authorization: `Bearer ${mo.token}` });
+      expect(await svgOf(nell.username, "on-desk", undefined, headers)).toBe(missing);
+    });
+
+    it("an embed is drawn for nobody, so it never outlines a private platform's steps", async () => {
+      const { nell } = await drawings();
+      const embed = await renderPage(WorkflowEmbed, { owner: nell.username, slug: "on-desk" }, { search: { view: "platform" }, headers: sealed });
+      expect(embed.status).toBe(200);
+      expect(embed.html).toContain('class="flow-static"');
+      expect(embed.html).not.toContain("agent-run");
+      // A public platform's steps are outlined there, as on the page, for everyone.
+      expect((await pushPlatform(nell.username, "open-desk", { token: nell.token }, { description: agentDesk })).status).toBe(201);
+      const onOpen = await request("POST", `/api/v1/${nell.username}/on-open/versions`, {
+        as: { token: nell.token },
+        json: { workflow: placedOn(`${nell.username}/platforms/open-desk`), visibility: "public" },
+      });
+      expect(onOpen.status).toBe(201);
+      const open = await renderPage(WorkflowEmbed, { owner: nell.username, slug: "on-open" }, { search: { view: "platform" }, headers: sealed });
+      expect(outlined(/<svg class="flow-static"[^]*?<\/svg>/.exec(open.html)![0])).toEqual(["bring", "rules", "save"]);
+      expect(outlined(await svgOf(nell.username, "on-open"))).toEqual(["bring", "rules", "save"]);
     });
   });
 

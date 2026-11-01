@@ -125,7 +125,7 @@ describe("a scope's heading (#67)", () => {
     const html = await rendered(example("dinners.graph.json"), {});
     for (const drawn of [/<g [^>]*data-scope="carers"[^]*?<\/g>/.exec(svg)![0], node(html, "carers").inside]) {
       const name = /<text class="flow-scope-name" x="20" y="([\d.]+)"[^>]*>carers<\/text>/.exec(drawn);
-      const who = /<text class="flow-scope-who" font-size="12"><tspan x="20" y="([\d.]+)">\+ June, Beth<\/tspan><\/text>/.exec(drawn);
+      const who = /<text class="flow-scope-who" font-size="12"[^>]*><tspan x="20" y="([\d.]+)">\+ June, Beth<\/tspan><\/text>/.exec(drawn);
       expect(name, drawn).not.toBeNull();
       expect(who, drawn).not.toBeNull();
       // Below the name, and above where the scope's parts start.

@@ -24,11 +24,15 @@ export type Part = {
   // Its text reaches an outside action that nothing stops and nobody
   // accepted the risk of (AWML 0.8).
   unstopped?: true;
+  // A code step a model carries out, in a platform view: its block names a
+  // platform whose steps are an agent's (AWML 0.10.1).
+  agentRun?: true;
 };
 
-// A scope (dashed, who may see), a place a platform view puts parts (filled,
-// in the colours the engine gives each place), or a workflow's box on a
-// system's map, which names the workflow as owner/slug.
+// A scope (dashed, who may see, its edge and label in the colours the engine
+// gives each scope from AWML 0.10.1), a place a platform view puts parts
+// (filled, in the colours the engine gives each place), or a workflow's box
+// on a system's map, which names the workflow as owner/slug.
 export type Scope = {
   id: string;
   label: string;
@@ -36,6 +40,8 @@ export type Scope = {
   scope?: string;
   fill?: string;
   stroke?: string;
+  // A scope's label colour.
+  color?: string;
   workflow?: string;
 };
 
@@ -77,7 +83,7 @@ export type Graph = { parts: Part[]; scopes: Scope[]; lines: Line[]; notes: Note
 // is left out.
 export type EngineGraph = {
   view: string;
-  groups: { id: string; label: string; in?: string; file?: string; published?: string }[];
+  groups: { id: string; label: string; in?: string; file?: string; published?: string; stroke?: string; color?: string }[];
   parts: {
     id: string;
     kind: string;
@@ -88,6 +94,7 @@ export type EngineGraph = {
     tier?: string;
     untrusted?: boolean;
     unstopped?: boolean;
+    agentRun?: boolean;
   }[];
   lines: {
     from: string;
@@ -175,9 +182,10 @@ function workflowOf(group: EngineGraph["groups"][number]) {
 }
 
 // The registry's graph of the engine's: its parts with their kinds, a step's
-// kind of work and an outside action's tier, and whether untrusted text comes
-// from it, and reaches an outside action unstopped; its scopes with their
-// nesting, a platform view's colours and a map's workflows; the lines drawn,
+// kind of work and an outside action's tier, whether untrusted text comes
+// from it, and reaches an outside action unstopped, and whether a model
+// carries out a code step; its scopes with their nesting, a security view's
+// and a platform view's colours, and a map's workflows; the lines drawn,
 // each with its style, which ends have arrows and how it carries untrusted
 // text; and the comments as notes on what they are tied to. A tie and a
 // hidden line aren't drawn, and nor is a line one of whose ends isn't.
@@ -188,7 +196,8 @@ export function readGraph(g: EngineGraph): Graph {
   const scopes: Scope[] = g.groups.map((s) => {
     const place = places.get(s.id);
     const fill = colour(place?.fill);
-    const stroke = colour(place?.stroke);
+    const stroke = colour(dashed ? s.stroke : place?.stroke);
+    const color = dashed ? colour(s.color) : undefined;
     const workflow = g.view === "map" ? workflowOf(s) : undefined;
     return {
       id: s.id,
@@ -196,6 +205,7 @@ export function readGraph(g: EngineGraph): Graph {
       dashed,
       ...(s.in && groups.has(s.in) ? { scope: s.in } : {}),
       ...(fill && stroke ? { fill, stroke } : {}),
+      ...(color && stroke ? { stroke, color } : {}),
       ...(workflow ? { workflow } : {}),
     };
   });
@@ -214,6 +224,7 @@ export function readGraph(g: EngineGraph): Graph {
     if (p.in && groups.has(p.in)) part.scope = p.in;
     if (p.untrusted === true) part.untrusted = true;
     if (p.unstopped === true) part.unstopped = true;
+    if (p.agentRun === true) part.agentRun = true;
     return part;
   });
   const ends = new Set([...kinds.keys(), ...groups]);

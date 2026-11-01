@@ -10,6 +10,7 @@ import { followOldName, isPageView, pageContext, underOwner, workflowPath, type 
 import { layOut } from "@/server/drawing";
 import { partLinks } from "@/server/part-links";
 import { organisationsOf } from "@/server/organisations";
+import { drawnDescriptions } from "@/server/platforms";
 import { forksOf, readVersion, referrersOf, systemsWith, VIEWS, type FileName, type View } from "@/server/registry";
 import type { Viewer } from "@/server/viewer";
 
@@ -175,6 +176,7 @@ export async function versionProps(
   const drawnFile = source && !nowhere && (shown === "security" || shown === "platform") ? readFile(source) : undefined;
   const storedFailed = checks.some((c) => c.name === source && c.listed === "stored" && mistakesIn([c]) > 0);
   const drawable = drawnFile !== undefined && !storedFailed && (await engine.unsound(drawnFile)).length === 0;
+  const drawnAs = drawable ? drawnImplementation(source!, placed, drawnFile) : undefined;
   // A public workflow can be forked into the viewer's own account or one of
   // their organisations; someone signed out is asked to sign in first.
   const fork =
@@ -215,8 +217,16 @@ export async function versionProps(
     links: partLinks(refs.shown, referredBy ?? [], workflowRead ? partKinds(workflowRead) : new Map()),
     systems: systems ?? [],
     // The drawing, laid out here from the engine's graph (src/server/drawing.ts),
-    // so the page draws it with no layout of its own.
-    drawing: drawable ? await layOut(await engine.graph(drawnFile, drawnImplementation(source!, placed, drawnFile))) : null,
+    // so the page draws it with no layout of its own. A platform view is drawn
+    // with the descriptions of the platforms its blocks name that the viewer
+    // may read, so it marks each code step a model carries out (AWML 0.10.1).
+    drawing: !drawable
+      ? null
+      : await layOut(
+          drawnAs === undefined
+            ? await engine.graph(drawnFile)
+            : await engine.graph(drawnFile, drawnAs, await drawnDescriptions(db, viewer, drawnFile, drawnAs)),
+        ),
     drawnErrors: drawable ? errorsIn(checks.filter((c) => c.name === source)) : 0,
     summary: v.summary,
     versions: v.versions,

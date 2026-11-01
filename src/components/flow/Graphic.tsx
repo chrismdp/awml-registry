@@ -26,7 +26,8 @@ import { baseline, textWidth } from "./text";
 
 // A part: its outline, its kind and verb small above its label, an outside
 // action's tier, and the mark of a part linked to other workflows (#55). A
-// part untrusted text comes from has a thick outline (#83), in its class.
+// part untrusted text comes from has a thick outline (#83), and a code step a
+// model carries out a dashed one (AWML 0.10.1), in its class.
 export function PartGraphic({ part, link }: { part: DrawnPart; link?: PartLink }) {
   const { d, extra } = outline(part.kind, part.width, part.height);
   const [top, , , left] = PADDING[part.kind];
@@ -41,7 +42,7 @@ export function PartGraphic({ part, link }: { part: DrawnPart; link?: PartLink }
   y += part.lines.length * LABEL.line;
   const tierTop = y + TIER.gap;
   return (
-    <g className={`flow-part flow-kind-${part.kind}${part.outline ? ` ${part.outline}` : ""}`}>
+    <g className={`flow-part flow-kind-${part.kind}${part.outline ? ` ${part.outline}` : ""}${part.agentRun ? " agent-run" : ""}`}>
       <path className="flow-shape" d={d} />
       {extra && <path className="flow-shape-line" d={extra} />}
       {caption}
@@ -79,19 +80,22 @@ function LinkMark({ x, y, off }: Point & { off: boolean }) {
 
 // A scope: a soft card holding its parts, its name and who it is for in its
 // top corner. One that holds nothing, such as a workflow's box on a system's
-// map, has its name inside it, with an arrow when it opens a page.
+// map, has its name inside it, with an arrow when it opens a page. A dashed
+// scope's edge and heading take the colours the engine gives it (AWML 0.10.1).
 export function ScopeGraphic({ scope, href, hull }: { scope: DrawnScope; href?: string; hull?: boolean }) {
   const kind = scope.dashed ? "dashed" : scope.fill && !href ? "place" : "box";
-  const style = kind === "place" ? { fill: scope.fill, stroke: scope.stroke } : undefined;
+  const style =
+    kind === "place" ? { fill: scope.fill, stroke: scope.stroke } : kind === "dashed" && scope.color ? { stroke: scope.stroke } : undefined;
+  const ink = kind === "dashed" && scope.color ? { fill: scope.color } : undefined;
   const r = scope.holds ? 22 : 18;
   const whoTop = SCOPE_TITLE.top + SCOPE_TITLE.line + SCOPE_WHO.gap;
   const title = scope.holds ? (
     <>
-      <text className="flow-scope-name" x={SCOPE_TITLE.left} y={SCOPE_TITLE.top + baseline(SCOPE_TITLE.size, SCOPE_TITLE.line)} fontSize={SCOPE_TITLE.size}>
+      <text className="flow-scope-name" x={SCOPE_TITLE.left} y={SCOPE_TITLE.top + baseline(SCOPE_TITLE.size, SCOPE_TITLE.line)} fontSize={SCOPE_TITLE.size} style={ink}>
         {scope.name}
       </text>
       {scope.who && (
-        <text className="flow-scope-who" fontSize={SCOPE_WHO.size}>
+        <text className="flow-scope-who" fontSize={SCOPE_WHO.size} style={ink}>
           {scope.who.map((line, i) => (
             <tspan key={i} x={SCOPE_TITLE.left} y={whoTop + i * SCOPE_WHO.line + baseline(SCOPE_WHO.size, SCOPE_WHO.line)}>
               {line}

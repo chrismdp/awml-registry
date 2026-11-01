@@ -7,8 +7,9 @@ import { getDb } from "@/db/client";
 import { findOwner } from "@/server/owners";
 import { listMembers } from "@/server/organisations";
 import SystemPage from "@/app/[owner]/systems/[slug]/page";
+import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
 import { seed } from "../scripts/seed-pictures";
-import { BASE, request, sentEmails } from "./helpers";
+import { BASE, request, sentEmails, type Who } from "./helpers";
 import { renderPage } from "./pages";
 import { route } from "./router";
 
@@ -122,5 +123,18 @@ describe("seeding a registry for the build's pictures", () => {
     expect((await read("/api/v1/acme/platforms/codex-laptop")).status).toBe(200);
     expect((await read("/api/v1/acme/platforms/cowork-mac-mini")).status).toBe(404);
     expect((await read("/api/v1/acme/platforms/cowork-mac-mini", cookie)).status).toBe(200);
+  });
+
+  it("pushes acme/inbox, public, whose Mac mini block names acme's private agent platform, outlined for ana alone", async () => {
+    const { cookie } = await seeded();
+    const inbox = await read("/api/v1/acme/inbox");
+    expect(inbox.body).toMatchObject({ title: "The consultant's inbox", visibility: "public" });
+    const outlined = async (as?: Who) => {
+      const page = await renderPage(WorkflowPlatformPage, { owner: "acme", slug: "inbox" }, { as });
+      expect(page.status).toBe(200);
+      return page.html.match(/class="flow-part flow-kind-code agent-run"/g)?.length ?? 0;
+    };
+    expect(await outlined({ cookie })).toBe(3);
+    expect(await outlined()).toBe(0);
   });
 });

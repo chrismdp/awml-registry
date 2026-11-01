@@ -64,10 +64,47 @@ describe("reading a drawing's graph from the engine", () => {
     expect(g.parts[0]).toEqual({ id: "basket", kind: "outside", label: "Fill the basket", tier: "Allow under £180" });
   });
 
-  it("reads scopes with their nesting, dashed in a security view", () => {
-    expect(dinners.scopes).toEqual(
-      (doc(dinnersFile).scopes ?? []).map((s) => ({ id: s.id, label: s.label, dashed: true, ...(s.in ? { scope: s.in } : {}) })),
+  it("reads scopes with their nesting, dashed in a security view, each in the colours the engine gives it", () => {
+    // From AWML 0.10.1 each scope of a security view has its own colour, for its edge and its
+    // label, one of six in file order (awml#210).
+    const colours = new Map(
+      (JSON.parse(fixture("dinners.graph.json")) as EngineGraph).groups.map((g) => [g.id, { stroke: g.stroke, color: g.color }]),
     );
+    expect(dinners.scopes).toEqual(
+      (doc(dinnersFile).scopes ?? []).map((s) => ({
+        id: s.id,
+        label: s.label,
+        dashed: true,
+        ...(s.in ? { scope: s.in } : {}),
+        ...colours.get(s.id),
+      })),
+    );
+    expect(dinners.scopes.map((s) => [s.stroke, s.color])).toEqual([
+      ["#127c8c", "#0d5c68"],
+      ["#8c2f6b", "#6b2251"],
+    ]);
+  });
+
+  it("takes only a hex colour for a scope, and a violet one as a grey as light as it", () => {
+    const g = readGraph({
+      view: "security",
+      groups: [
+        { id: "a", label: "a: anyone", stroke: "#127c8c", color: "#0d5c68" },
+        { id: "b", label: "b: anyone", stroke: "url(javascript:x)", color: "red" },
+        { id: "c", label: "c: anyone", stroke: "#7c3aed", color: "#5b21b6" },
+        { id: "d", label: "d: anyone", stroke: "#127c8c" },
+      ],
+      parts: [],
+      lines: [],
+      comments: [],
+      places: [],
+    });
+    expect(g.scopes).toEqual([
+      { id: "a", label: "a: anyone", dashed: true, stroke: "#127c8c", color: "#0d5c68" },
+      { id: "b", label: "b: anyone", dashed: true },
+      { id: "c", label: "c: anyone", dashed: true, stroke: "#949494", color: "#6c6c6c" },
+      { id: "d", label: "d: anyone", dashed: true },
+    ]);
   });
 
   it("draws every line but a tie, each solid, dotted into or out of what holds information, or thick where it publishes", () => {
@@ -112,8 +149,8 @@ describe("reading a drawing's graph from the engine", () => {
     const home = graphOf(fixture("dinners-home.graph.json"));
     expect(home.scopes.find((s) => s.id === "server")).toEqual({ id: "server", label: "Server: claude-sonnet-4-5", dashed: false, fill: "#e3ebfa", stroke: "#b9c8e8" });
     expect(home.scopes.every((s) => s.fill && s.stroke && !s.dashed)).toBe(true);
-    // A security view's scopes are dashed, and keep no colours.
-    expect(dinners.scopes.every((s) => s.fill === undefined)).toBe(true);
+    // A security view's scopes are dashed, and have no fill.
+    expect(dinners.scopes.every((s) => s.fill === undefined && s.dashed)).toBe(true);
   });
 
   it("takes only a colour for a place, draws a line that breaks a rule red, a refused read with a cross, and no hidden line", () => {
@@ -204,7 +241,7 @@ describe("text as the file wrote it", () => {
   // itself, since the page shows text only as text (test/drawing-frame.test.tsx).
   it("folds line breaks in labels, a line that says end in one ending nothing", async () => {
     const g = graphOf(await engine.graph(fixture("label-end.yaml")));
-    expect(g.scopes).toEqual([{ id: "home", label: "home: the end family", dashed: true }]);
+    expect(g.scopes).toEqual([{ id: "home", label: "home: the end family", dashed: true, stroke: "#127c8c", color: "#0d5c68" }]);
     expect(g.parts).toEqual([
       { id: "tick", kind: "trigger", label: "Every end morning", scope: "home" },
       { id: "step", kind: "code", verb: "do", label: 'Do it "quoted"', scope: "home" },
@@ -372,6 +409,50 @@ describe("untrusted text (#83)", () => {
       { id: "b", kind: "code", label: "B" },
     ]);
     expect(g.lines.map((l) => l.untrusted)).toEqual([undefined, undefined]);
+  });
+});
+
+// AWML 0.10.1 marks a code step a model carries out in the platform view: one whose block names a
+// platform whose description has `steps: agent`, given with the file (awml#208, awml#209).
+describe("a code step a model carries out (AWML 0.10.1)", () => {
+  // The client's email with its Mac mini block on Claude Cowork, whose steps an agent carries out.
+  const onCowork = fixture("client-email.yaml").replace(
+    '{ id: cowork, label: "Claude Cowork, Mac mini", parts',
+    '{ id: cowork, label: "Claude Cowork, Mac mini", platform: cowork-mac-mini, parts',
+  );
+  const cowork = fixture("platforms/cowork-mac-mini.yaml");
+
+  it("marks each code step in a block on a platform whose steps an agent carries out, given its description", async () => {
+    const g = graphOf(await engine.graph(onCowork, "office", [cowork]));
+    expect(g.parts.filter((p) => p.agentRun).map((p) => p.id)).toEqual(["bring", "rules", "save"]);
+    // A model's own step, a person's, and everything off the Mac mini are not marked.
+    expect(part(g, "draft")?.agentRun).toBeUndefined();
+    expect(part(g, "edit")?.agentRun).toBeUndefined();
+  });
+
+  it("marks nothing without the description, or with one whose steps are code", async () => {
+    for (const descriptions of [undefined, [], [fixture("platforms/scripts-mac-mini.yaml").replace(/id: [\w-]+/, "id: cowork-mac-mini")]]) {
+      const g = graphOf(await engine.graph(onCowork, "office", descriptions));
+      expect(g.parts.some((p) => p.agentRun)).toBe(false);
+    }
+  });
+
+  it("takes nothing but true", () => {
+    const g = readGraph({
+      view: "platform",
+      groups: [],
+      parts: [
+        { id: "a", kind: "code", label: "A", agentRun: true },
+        { id: "b", kind: "code", label: "B", agentRun: "yes" as unknown as boolean },
+      ],
+      lines: [],
+      comments: [],
+      places: [],
+    });
+    expect(g.parts).toEqual([
+      { id: "a", kind: "code", label: "A", agentRun: true },
+      { id: "b", kind: "code", label: "B" },
+    ]);
   });
 });
 

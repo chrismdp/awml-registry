@@ -89,7 +89,9 @@ export const wasmEngine: Engine = {
     const sources = [files.workflow, files.security, files.platform].filter((f): f is string => f !== undefined);
     return (await awml()).summary(sources) as Summary;
   }),
-  graph: memoise(async (yaml: string, implementation = "") => (await awml()).graphJSON(yaml, implementation)),
+  graph: memoise(async (yaml: string, implementation = "", descriptions: string[] = []) =>
+    (await awml()).graphJSON(yaml, implementation, descriptions),
+  ),
   fit: memoise(
     async (workflow: string, descriptions: string[], implementation = "") =>
       JSON.parse((await awml()).fitJSON([workflow, ...descriptions], implementation)) as FitReport,

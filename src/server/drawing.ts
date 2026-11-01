@@ -170,6 +170,7 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
       ...(p.tier ? { tier: p.tier } : {}),
       ...(p.scope ? { scope: p.scope } : {}),
       ...(p.unstopped ? { outline: "unstopped" as const } : p.untrusted ? { outline: "untrusted" as const } : {}),
+      ...(p.agentRun ? { agentRun: true as const } : {}),
       ...at.get(p.id)!,
     };
   });
@@ -178,6 +179,7 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
     ...headingOf(s),
     dashed: s.dashed,
     ...(s.fill && s.stroke ? { fill: s.fill, stroke: s.stroke } : {}),
+    ...(s.color && s.stroke ? { stroke: s.stroke, color: s.color } : {}),
     ...(s.scope ? { scope: s.scope } : {}),
     ...(s.workflow ? { workflow: s.workflow } : {}),
     holds: holding.has(s.id),
