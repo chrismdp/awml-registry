@@ -106,11 +106,11 @@ describe("a linked part, once React Flow draws it", () => {
 
 describe("a workflow's box on a system's map, once React Flow draws it", () => {
   it("is a focusable link to the workflow's page, named by it, though it holds the outside actions that start others", async () => {
-    const html = await rendered(example("bakery-map.graph.json"), { hrefs: { w1: "/bakery/stock" } });
+    const html = await rendered(example("flow/factory-map.graph.json"), { hrefs: { w1: "/chrismdp/issue-to-pull-request" } });
     const w1 = node(html, "w1");
     expect(w1.tag).toContain('tabindex="0"');
     expect(w1.tag).toContain('role="link"');
-    expect(w1.tag).toContain('aria-label="Open The bakery&#x27;s stock count"');
+    expect(w1.tag).toContain('aria-label="Open An issue becomes a pull request"');
     // A box the viewer may not open is no link.
     expect(node(html, "w2").tag).not.toContain('role="link"');
   });

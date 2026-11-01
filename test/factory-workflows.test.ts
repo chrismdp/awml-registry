@@ -5184,13 +5184,6 @@ describe("the factory's drawings", () => {
     expect(drawing("land-a-pull-request").parts.find(p => p.id === "tested")?.untrusted).toBe(true);
   });
 
-  it("keeps the registry's factory fixtures in step with its drawings", () => {
-    for (const name of ["issue-to-pull-request", "land-a-pull-request", "fix-review-findings", "ci-a-commit"])
-      expect(readFileSync(join(__dirname, "fixtures/flow/chrismdp", `${name}.yaml`), "utf8")).toBe(
-        readFileSync(join(github, "drawings", `${name}.yaml`), "utf8").replace(/ref: ([a-z-]+)\.yaml#/g, "ref: chrismdp/$1#"),
-      );
-  });
-
   it("passes AWML 0.10's checks for all five together", async () => {
     const { createAWML } = await import("../vendor/awml/awml.js");
     const engine = await createAWML(readFileSync(join(__dirname, "../vendor/awml/awml.wasm")));

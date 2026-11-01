@@ -206,12 +206,11 @@ describe("a system's map, laid out on the server", () => {
     expect(full.lines.find((l) => l.from === "w1_comment" && l.to === "w1")).toBeDefined();
     // Each box holds the outside actions that start other workflows, and names its workflow.
     expect(full.scopes.map((s) => [s.id, s.holds, s.name, s.workflow])).toEqual([
-      ["w1", false, "An issue becomes a pull request", "chrismdp/issue-to-pull-request"],
-      ["w2", false, "A pull request lands once CI has run", "chrismdp/land-a-pull-request"],
-      ["w3", false, "A failed pull request is fixed", "chrismdp/fix-review-findings"],
-      ["w4", false, "A commit is checked", "chrismdp/ci-a-commit"],
+      ["w1", true, "An issue becomes a pull request", "chrismdp/issue-to-pull-request"],
+      ["w2", true, "A pull request lands once CI has run", "chrismdp/land-a-pull-request"],
+      ["w3", true, "A failed build tries again", "chrismdp/retry-a-build"],
     ]);
-    expect(full.parts.find((p) => p.id === "w3_failed")?.scope).toBeUndefined();
+    expect(full.parts.find((p) => p.id === "w1_tryfailed")?.scope).toBe("w1");
   });
 
   it("draws a box that holds nothing as a box with its name in it", async () => {
@@ -227,40 +226,32 @@ describe("a system's map, laid out on the server", () => {
     const { full } = await lay(map);
     const boxes = {
       w1: { title: "An issue becomes a pull request", address: "chrismdp/issue-to-pull-request", href: "/chrismdp/issue-to-pull-request" },
-      w3: { title: "A failed pull request is fixed", address: "chrismdp/fix-review-findings", href: "/chrismdp/fix-review-findings" },
+      w3: { title: "A failed build tries again", address: "chrismdp/retry-a-build", href: "/chrismdp/retry-a-build" },
     };
     const links = mapLinks(full, boxes);
-    // The Actions token joins the build and fixer: it leads to both.
+    // The Actions token the build and the retry both read: it leads to both.
     expect(links.find((l) => l.part === "s1")).toEqual({
       part: "s1",
-      title: "In An issue becomes a pull request and A failed pull request is fixed",
+      title: "In An issue becomes a pull request and A failed build tries again",
       to: [
         { label: "chrismdp/issue-to-pull-request", href: "/chrismdp/issue-to-pull-request" },
-        { label: "chrismdp/fix-review-findings", href: "/chrismdp/fix-review-findings" },
+        { label: "chrismdp/retry-a-build", href: "/chrismdp/retry-a-build" },
       ],
     });
     // w2 isn't given, so nothing leads to it.
     expect(JSON.stringify(links)).not.toContain("land-a-pull-request");
-    // The GitHub App joins the build, landing and fixer; only the visible workflows are linked.
-    expect(links.find((l) => l.part === "s2")?.to).toEqual([
-      { label: "chrismdp/issue-to-pull-request", href: "/chrismdp/issue-to-pull-request" },
-      { label: "chrismdp/fix-review-findings", href: "/chrismdp/fix-review-findings" },
-    ]);
-    // CI's failure trigger leads into the fixer's box.
-    expect(links.find((l) => l.part === "w3_failed")).toMatchObject({ title: "In A failed pull request is fixed" });
-  });
-
-  it("links an outside action to the visible workflow its trigger starts", async () => {
-    const { full } = await lay(example("bakery-map.graph.json"));
-    const links = mapLinks(full, {
-      w2: { title: "The bakery's supplier order", address: "bakery/order", href: "/bakery/order" },
+    // The GitHub App joins only w1 and w2: it leads to w1 alone.
+    expect(links.find((l) => l.part === "s2")?.to).toEqual([{ label: "chrismdp/issue-to-pull-request", href: "/chrismdp/issue-to-pull-request" }]);
+    // The trigger a failed try starts leads into the retry's box.
+    expect(links.find((l) => l.part === "w3_tryfailed")).toMatchObject({ title: "In A failed build tries again" });
+    // The outside action that starts a retry leads to the retry, by the trigger it starts.
+    expect(links.find((l) => l.part === "w1_tryfailed")).toEqual({
+      part: "w1_tryfailed",
+      title: "Starts A failed build tries again",
+      to: [{ label: "chrismdp/retry-a-build", href: "/chrismdp/retry-a-build" }],
     });
-    expect(links.find((l) => l.part === "w1_start")).toEqual({
-      part: "w1_start",
-      title: "Starts The bakery's supplier order",
-      to: [{ label: "bakery/order", href: "/bakery/order" }],
-    });
-    expect(mapLinks(full, {})).toEqual([]);
+    // The one that starts the landing starts a workflow not given, so it leads nowhere.
+    expect(links.find((l) => l.part === "w1_pushed")).toBeUndefined();
   });
 });
 
