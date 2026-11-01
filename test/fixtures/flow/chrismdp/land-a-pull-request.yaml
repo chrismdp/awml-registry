@@ -1,78 +1,94 @@
+# A factory pull request lands once CI has judged its head commit. GitHub starts this when CI's
+# pull_request run finishes on a build/issue-* branch. People merge their own pull requests. It reads everything from GitHub and git at that moment: the head
+# commit's checks, the reviews' findings and Classify's verdict among them, the branch's commits
+# since main, and the build rule run on that commit. The rule can only move Classify's verdict
+# towards ask. Ship merges, pinned to the commit judged. Show merges the same way, then tells the
+# person who added the label what to look at. Ask requests their review and doesn't merge: they
+# merge from their own account, which is their yes. Nothing sets a pull request to merge by itself
+# later, and main's own rule holds every merge until CI has passed.
 awml: "0.10"
 title: A pull request lands once CI has run
 description: |
-  A pull request the app opened lands once CI has run on it. If CI fails, it goes to
-  retry-a-build. If CI passes, a code rule decides whether the change is straightforward, by rules
-  the maintainer wrote down, reading the reviews' findings and the classifier's verdict, which can
-  send a change to review but never skip one. A straightforward change the app sets to merge by
-  itself. Otherwise the person who added the label is asked to review it, and merges it from their
-  own account, which is their yes. Main's own rule holds every merge until CI has passed.
+  The factory's landing: when CI finishes on a factory branch, a code rule reads the head commit's
+  checks and the commit itself, and ships, shows or asks.
 scopes:
   - { id: public, label: "public: anyone who reads the repository", processing: any }
 parts:
-  - { id: pushed, kind: trigger, label: "The app pushes the pull request's branch" }
+  - { id: cidone, kind: trigger, label: "CI's pull_request run finishes on a build/issue-* branch of this repository", wait: PT1H }
   - { id: token, kind: connector, label: "The repository, through its own Actions token", in: public, ref: chrismdp/issue-to-pull-request#token }
   - { id: app, kind: connector, label: "The repository, through its own GitHub App", in: public, ref: chrismdp/issue-to-pull-request#app }
-  - { id: patch, kind: context, label: "The change, as a patch, with its pictures, Claude's note and its description for the pull request", in: public, ref: chrismdp/issue-to-pull-request#patch }
-  - { id: findings, kind: context, label: "The reviews' findings, each Important, Nit or Pre-existing", in: public, ref: chrismdp/issue-to-pull-request#findings }
-  - { id: risk, kind: context, label: "The classifier's verdict and its reasons", in: public, ref: chrismdp/issue-to-pull-request#risk }
-  - { id: ci, kind: code, op: check, label: "CI runs every check on the branch", in: public }
-  - { id: retry, kind: code, op: do, label: "Start a retry", in: public }
-  - { id: tryfailed, kind: outside, label: "Start a retry: Allow", ref: chrismdp/retry-a-build#tryfailed, in: public }
-  - { id: rules, kind: context, label: "The build rules: what needs a review", in: public }
-  - { id: judge, kind: code, op: sort, label: "Sort by rule: does the change touch a path that needs review, delete a test, change over 400 lines, leave a finding open, or did the classifier ask for review?", in: public }
-  - { id: automerge, kind: code, op: do, label: "Set the pull request to merge, saying in its message why it was straightforward", in: public }
-  - { id: ask, kind: code, op: do, label: "Ask the person who added the label to review the pull request", in: public }
-  - { id: askout, kind: outside, label: "Request a review: Allow", in: public }
-  - { id: update, kind: code, op: do, label: "Edit the status comment: whether it merges by itself or waits for review", in: public }
-  - { id: status, kind: outside, label: "Edit the build's status comment: Allow", in: public }
-  - { id: merge, kind: person, op: do, label: "Review the pull request, whose CI has passed, and merge it", in: public }
+  - { id: checks, kind: context, label: "The review checks: Bug review, Security review and Classify, with their findings and verdict", in: public, ref: chrismdp/ci-a-commit#checks }
+  - { id: tested, kind: context, label: "The test check, carrying output from the change's own code", in: public, ref: chrismdp/ci-a-commit#tested, untrusted: true }
+  - { id: commits, kind: context, label: "The pull request's head commit and the branch's commits since main, from git", in: public, untrusted: true }
+  - { id: rules, kind: context, label: "The build rule, from main: what moves a verdict towards ask", in: public }
+  - { id: ready, kind: code, op: sort, label: "Sort by GitHub's record: is the pull request open, its head still the commit CI ran on, and has every required check on it finished and passed, with both reviews done? Find who last added the issue's build label", in: public }
+  - { id: judge, kind: code, op: sort, cleans: true, label: "Sort by rule, passing on only the commit's sha, the outcome, the labeller's login and the rule's own reasons from fixed text: Classify's verdict, ship, show or ask, moved towards ask by the rule's tests, a commit that isn't the factory's, a fix commit or Nits left unfixed", in: public }
+  - { id: ship, kind: code, op: do, label: "Merge now, pinned with --match-head-commit to the commit judged, saying in its message that it shipped", in: public }
+  - { id: showmerge, kind: code, op: do, label: "Merge now, pinned with --match-head-commit to the commit judged, saying in its message that it's shown", in: public }
+  - { id: mainauto, kind: outside, label: "Merge a change the rule passes into main: Allow", in: public }
+  - { id: show, kind: code, op: do, label: "Post a new comment for the person who added the label, saying what to look at, from the rule's reasons and a link to Classify's check", in: public }
+  - { id: showout, kind: outside, label: "Comment on the merged pull request: Allow", in: public }
+  - { id: ask, kind: code, op: do, label: "Request a review from the person who added the label, with the rule's reasons and a link to Classify's check, and don't merge", in: public }
+  - { id: askout, kind: outside, label: "Request a review, in a new comment: Allow", in: public }
+  - { id: person, kind: person, op: do, label: "Review the pull request, whose CI has passed, and merge it", in: public }
   - { id: account, kind: connector, label: "The repository, through the reviewer's own account", in: public }
-  - { id: held, kind: code, op: sort, label: "Sort by main's rule: has CI passed on the commit the app set to merge?", in: public }
-  - { id: landauto, kind: code, op: do, label: "Merge the change the app set to merge", in: public }
-  - { id: mainauto, kind: outside, label: "Merge a straightforward change into main: Allow", in: public }
-  - { id: main, kind: outside, label: "Merge a change that needed review into main: Ask", in: public }
-  - { id: afterci, kind: comment, label: "CI finishing on a pull request the app opened starts land.yml, so no review is asked for and nothing merges until CI has a result" }
-  - { id: terms, kind: comment, label: "Allow, because a merge is undone with git revert, everything in it is already public on its branch, and the maintainer would not be surprised by a change the rule finds straightforward. One the rule sends to review is where they would be, so that merge is Ask" }
-  - { id: escalate, kind: comment, label: "The classifier can send a change to review but can't skip one, and the agent that wrote the change has no say. The rule reads the patch itself: what it touches, its size and whether it deletes a test (awml #20, #26)" }
+  - { id: main, kind: outside, label: "Merge a change that was asked about into main: Ask", in: public }
+  - { id: afterci, kind: comment, label: "GitHub starts land.yml on workflow_run when CI finishes on a factory branch. It runs main's code, never checks out the branch, and reads the commit with git as data. Its reading has no concurrency group, so nothing cancels it: a run started by someone else's pull request from a branch of the same name could otherwise cancel the real reading. The land job has a group of its own, keyed on the branch, which never cancels a land that has started (#153)" }
+  - { id: wait, kind: comment, label: "A required check that failed or hasn't finished, or a head that moved, means it exits quietly. Failed tests and Important review findings go to the fixer, which posts a new comment when it gives up after two fix commits (#108, awml#212)" }
+  - { id: factoryonly, kind: comment, label: "Decided in #160's follow-up: only build/issue-* branches, and only pull_request runs, which run once per commit. People merge their own pull requests" }
+  - { id: unlabelled, kind: comment, label: "If the issue no longer carries the build label, the build label was taken off the issue, so a person decides: it asks, whatever Classify and the rule say. It tells or asks whoever last added the label only if they may write, and otherwise the owner" }
+  - { id: towards, kind: comment, label: "The rule can only move a verdict towards ask, never away: the rule's own tests on paths, size, binaries and symlinks, a commit since main that isn't the factory's, or Classify saying ask means ask; a fix commit on the branch, or Nits left unfixed, means at least show (#160)" }
+  - { id: derived, kind: comment, label: "Whether it may merge is derived, not stored: the head commit's checks and the build rule run on that commit, read when CI finishes. No record line, digest or artifact from the build is read (#160 rules 2 and 3)" }
+  - { id: nobody, kind: comment, label: "Decided by the maintainer: ship and show merge with no person, once both reviews have finished and Classify says ship or show. This rule step is what cleans the reviews' and Classify's text before the merge" }
+  - { id: stop, kind: comment, label: "The commits and test check can carry text from the change's code. Only the rule's outcome and fixed reasons pass on; Classify's reasons are linked" }
+  - { id: pinned, kind: comment, label: "The merge names the commit it judged, so GitHub refuses it if anyone pushed since. No auto-merge anywhere in the factory, so nothing set for an older commit can carry over to a new one (#153, #160)" }
+  - { id: terms, kind: comment, label: "Allow, because a merge is undone with git revert, everything in it is already public on its branch, and the maintainer would not be surprised by a change the rule ships or shows. One the rule asks about is where they would be, so that merge is Ask" }
+  - { id: notice, kind: comment, label: "A new comment, since a person must act, with any text escaped: < escaped, mentions broken, length capped (#160 rule 5)" }
   - { id: noskip, kind: comment, label: "Main's rule holds every merge, the app's and the maintainer's, until CI passes. Only the maintainer may skip it, to push a release; the app may not" }
-  - { id: whoasked, kind: comment, label: "The build carries the name of the person who added the label. A build whose label the app added, with no such person, asks the repository's owner" }
 lines:
-  - { from: retry, to: tryfailed, kind: start }
-  - { from: pushed, to: ci, kind: start, label: "the branch" }
-  - { from: ci, to: retry, kind: start, label: "[a check fails]" }
-  - { from: ci, to: judge, kind: start, label: "[all pass]" }
-  - { from: patch, to: judge, kind: data }
-  - { from: findings, to: judge, kind: data }
-  - { from: risk, to: judge, kind: data }
+  - { from: cidone, to: ready, kind: start, label: "CI's run and its commit" }
+  - { from: token, to: ready, kind: data, label: "the pull request, its head and the issue's label events" }
+  - { from: checks, to: ready, kind: data }
+  - { from: tested, to: ready, kind: data }
+  - { from: ready, to: judge, kind: start, label: "[open, at CI's commit, every required check passed]" }
+  - { from: checks, to: judge, kind: data }
+  - { from: commits, to: judge, kind: data }
   - { from: rules, to: judge, kind: data }
-  - { from: judge, to: automerge, kind: start, label: "[straightforward]" }
-  - { from: judge, to: ask, kind: start, label: "[needs a review]" }
-  - { from: automerge, to: update, kind: start, label: "merges by itself" }
-  - { from: ask, to: update, kind: start, label: "waits for review" }
-  - { from: update, to: status, kind: data }
-  - { from: status, to: token, kind: data }
+  - { from: judge, to: ship, kind: start, label: "[ship]" }
+  - { from: ship, to: mainauto, kind: data }
+  - { from: judge, to: showmerge, kind: start, label: "[show]" }
+  - { from: showmerge, to: mainauto, kind: data }
+  - { from: mainauto, to: app, kind: data }
+  - { from: showmerge, to: show, kind: start, label: "[merged]" }
+  - { from: show, to: showout, kind: data }
+  - { from: showout, to: token, kind: data }
+  - { from: judge, to: ask, kind: start, label: "[ask]" }
   - { from: ask, to: askout, kind: data }
   - { from: askout, to: token, kind: data }
-  - { from: ask, to: merge, kind: start, label: "the review request" }
-  - { from: account, to: merge, kind: data, label: "the pull request and CI's result" }
-  - { from: merge, to: main, kind: data }
+  - { from: ask, to: person, kind: start, label: "the review request" }
+  - { from: account, to: person, kind: data, label: "the pull request and CI's result" }
+  - { from: person, to: main, kind: data }
   - { from: main, to: account, kind: data }
-  - { from: automerge, to: held, kind: start, label: "the merge, set" }
-  - { from: held, to: landauto, kind: start, label: "[passed]" }
-  - { from: landauto, to: mainauto, kind: data }
-  - { from: mainauto, to: app, kind: data }
-  - { from: afterci, to: ci, kind: tie }
+  - { from: afterci, to: cidone, kind: tie }
+  - { from: factoryonly, to: cidone, kind: tie }
+  - { from: wait, to: ready, kind: tie }
+  - { from: towards, to: judge, kind: tie }
+  - { from: unlabelled, to: judge, kind: tie }
+  - { from: nobody, to: judge, kind: tie }
+  - { from: derived, to: rules, kind: tie }
+  - { from: stop, to: commits, kind: tie }
+  - { from: pinned, to: ship, kind: tie }
   - { from: terms, to: mainauto, kind: tie }
-  - { from: escalate, to: judge, kind: tie }
-  - { from: noskip, to: held, kind: tie }
-  - { from: whoasked, to: ask, kind: tie }
+  - { from: notice, to: show, kind: tie }
+  - { from: noskip, to: main, kind: tie }
 implementations:
   actions:
-    label: "GitHub Actions, ci.yml and land.yml"
+    label: "GitHub Actions, land.yml"
     blocks:
-      - { id: github, label: "GitHub: pull requests, and main's rule", parts: [pushed, token, app, patch, findings, risk, rules, tryfailed, retry, status, askout, held, landauto, mainauto, account, main] }
-      - { id: cijob, label: "ci.yml: CI, with a read-only token", platform: actions-code, parts: [ci] }
-      - { id: findjob, label: "land.yml: apply the rule, with a read-only token", platform: actions-code, parts: [judge] }
-      - { id: landjob, label: "land.yml: set the merge or ask for review, running nothing from the change", platform: actions-code, parts: [automerge, ask, update] }
-      - { id: browser, label: "The maintainer's browser", parts: [merge] }
+      - { id: github, label: "GitHub: pull requests, checks, and main's rule", parts: [cidone, token, app, checks, tested, commits, mainauto, showout, askout, account, main] }
+      - { id: findjob, label: "land.yml: read the checks and the commit and apply the rule, with a token that only reads", platform: actions-code, parts: [ready, rules, judge] }
+      - { id: landjob, label: "land.yml: ship, show or ask, running nothing from the change", platform: actions-code, parts: [ship, showmerge, show, ask] }
+      - { id: browser, label: "The reviewer's browser", parts: [person] }
+    comments:
+      - { id: pushed_commit, label: "The rule judges the head commit itself, read with git into a worktree at its merge-base with main, not a patch from an artifact. It asks when Classify's check is missing. Only the sha, the outcome, the login and the reasons pass to the land job, as job outputs (#153)", in: findjob, ties: [judge] }
+      - { id: scoped, label: "The app's token is minted in the land job only, scoped to this repository (#153)", in: landjob, ties: [ship, showmerge] }

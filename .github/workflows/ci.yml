@@ -7,7 +7,7 @@
 # repository, or the build's app, the tests, Bug review and Security review run side by side as jobs
 # of one run, and on a factory branch, build/issue-*, Classify runs once both reviews have passed.
 # Each job's result is its own check on the commit, so the commit as pushed has one judge, and
-# land.yml, fix.yml and retry.yml read that judge's verdict from GitHub when this run finishes. On a
+# land.yml and fix.yml read that judge's verdict from GitHub when this run finishes. On a
 # fork's pull request, or one a stranger opened, the reviews fail without starting a session, since
 # its author could steer the sessions, which hold the maintainer's login token, and a person reviews
 # it.

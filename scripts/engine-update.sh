@@ -73,11 +73,12 @@ cp "$src/examples/live/red-line.yaml" "$fixtures/red-line.yaml"
 (cd "$fixtures" && "$tmp/awml" graph bakery-stock.yaml bakery-order.yaml > bakery-map.graph.json)
 
 # The registry's own factory, kept in fixtures/flow/chrismdp: an issue becomes
-# a pull request, which lands once CI has run, and a failed build tries again,
-# each at the path the registry gives it, so the refs between them are
-# followed. The graph of the first, and of the map of the three.
+# a pull request, which lands once CI has run; CI checks the commit, and the
+# fixer fixes failed tests and review findings on the existing pull request.
+# Each has the path the registry gives it, so refs are followed. The graph
+# of the first, and of the map of all four.
 (cd "$fixtures/flow" && "$tmp/awml" graph chrismdp/issue-to-pull-request.yaml > issue-to-pull-request.graph.json)
-(cd "$fixtures/flow" && "$tmp/awml" graph chrismdp/issue-to-pull-request.yaml chrismdp/land-a-pull-request.yaml chrismdp/retry-a-build.yaml > factory-map.graph.json)
+(cd "$fixtures/flow" && "$tmp/awml" graph chrismdp/issue-to-pull-request.yaml chrismdp/land-a-pull-request.yaml chrismdp/fix-review-findings.yaml chrismdp/ci-a-commit.yaml > factory-map.graph.json)
 
 # Versions stored in an AWML the registry no longer takes, kept in
 # fixtures/older as they were pushed: a 0.4 workflow, a 0.5 one, a 0.5

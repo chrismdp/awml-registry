@@ -97,13 +97,13 @@ describe("a part's notes (#60)", () => {
     const { full } = laidOut(await layOut(issue));
     const svg = renderToStaticMarkup(<StaticDrawing drawing={full} id="t" />);
     const marked = [...svg.matchAll(/<g class="flow-note" transform="[^"]+" data-note="([^"]+)"><title>([^<]*)<\/title>/g)];
-    // Eight notes, on eight parts, one icon each.
-    expect(marked.map((m) => m[1]).sort()).toEqual(["fresh", "label", "layout", "onecomment", "seen", "starts", "strangers", "verdict"]);
+    // Nine parts have notes, one icon each; a part can have more than one note.
+    expect(marked.map((m) => m[1]).sort()).toEqual(["label", "layout reused", "nochecks", "ownfiles", "pinned", "seen", "startcomment", "starts", "strangers"]);
     expect(svg).toContain(
-      "<title>Anyone can comment, but the bring-in step passes on only the comments of the owner, members and collaborators, so strangers&#x27; text never reaches the draft step. AWML can&#x27;t mark this yet (awml #5)</title>",
+      "<title>Anyone can open an issue or comment. The issue reaches Claude only as the text a person with write access approved by adding the label, and only the comments of those GitHub says may write are passed on</title>",
     );
     // No note is drawn as a part, or as text of its own.
-    expect(svg).not.toMatch(/<tspan[^>]*>Anyone can comment/);
+    expect(svg).not.toMatch(/<tspan[^>]*>Anyone can open/);
     expect(full.parts.map((p) => p.id)).not.toContain("strangers");
   });
 

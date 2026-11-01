@@ -5,7 +5,7 @@ import { parse } from "yaml";
 import { flowOnly, graphOf, readGraph, type EngineGraph, type Graph } from "@/components/flow/graph";
 import { engine } from "@/engine";
 
-// The graph AWML 0.10.0's native `awml graph` prints, as the registry gets it from the engine
+// The graph AWML 0.10.1's native `awml graph` prints, as the registry gets it from the engine
 // (npm run engine:update writes them): the security view of the registry's own factory,
 // chrismdp/issue-to-pull-request, the map of the factory system it is in, the dinners example's
 // security view and its home implementation, and the bakery's map, where one workflow starts
@@ -51,7 +51,7 @@ describe("reading a drawing's graph from the engine", () => {
   it("reads a step's kind of work, and an outside action's tier apart from its label", () => {
     for (const p of doc(issueFile).parts.filter((p) => ["ai", "code", "person"].includes(p.kind)))
       expect(part(issue, p.id)?.verb, p.id).toBe(p.op);
-    expect(part(issue, "status")).toMatchObject({ kind: "outside", label: "Post or edit the build's status comment", tier: "Allow" });
+    expect(part(issue, "startnote")).toMatchObject({ kind: "outside", label: "Comment on the issue", tier: "Allow" });
     // A tier with words after it keeps them.
     const g = readGraph({
       view: "security",
@@ -184,14 +184,15 @@ describe("reading a drawing's graph from the engine", () => {
     expect(map.scopes.map((s) => [s.id, s.label, s.dashed, s.workflow])).toEqual([
       ["w1", "An issue becomes a pull request", false, "chrismdp/issue-to-pull-request"],
       ["w2", "A pull request lands once CI has run", false, "chrismdp/land-a-pull-request"],
-      ["w3", "A failed build tries again", false, "chrismdp/retry-a-build"],
+      ["w3", "A failed pull request is fixed", false, "chrismdp/fix-review-findings"],
+      ["w4", "A commit is checked", false, "chrismdp/ci-a-commit"],
     ]);
     expect(part(map, "w1_comment")).toMatchObject({ kind: "trigger" });
     expect(part(map, "w1_comment")?.scope).toBeUndefined();
     expect(line(map, "w1_comment", "w1")).toMatchObject({ style: "solid", arrowEnd: true });
     // A line between a workflow and a part it shares points each way it leads.
-    expect(line(map, "w1", "s1")).toMatchObject({ style: "dotted", arrowStart: true, arrowEnd: true });
-    expect(line(map, "w2", "s1")).toMatchObject({ style: "dotted", arrowStart: false, arrowEnd: true });
+    expect(line(map, "w1", "s1")).toMatchObject({ style: "dotted", arrowStart: false, arrowEnd: true });
+    expect(line(map, "w2", "s1")).toMatchObject({ style: "dotted", arrowStart: true, arrowEnd: true });
   });
 
   it("draws an outside action that starts another workflow in its own box, with a line to the trigger it starts", () => {
@@ -201,9 +202,7 @@ describe("reading a drawing's graph from the engine", () => {
     expect(line(bakery, "w2_low", "w2")).toMatchObject({ style: "solid", arrowEnd: true });
     // The engine is given each file at a path ending owner/slug.yaml: here the file's own name.
     expect(bakery.scopes.map((s) => s.workflow)).toEqual([undefined, undefined]);
-    // On the factory's map, each try that fails starts a retry.
-    expect(line(map, "w1_tryfailed", "w3_tryfailed")).toMatchObject({ style: "solid", arrowEnd: true });
-    expect(line(map, "w2_tryfailed", "w3_tryfailed")).toMatchObject({ style: "solid", arrowEnd: true });
+
   });
 });
 
@@ -215,7 +214,7 @@ describe("Flow only", () => {
     // Connections are reached only by dotted lines, so none is left.
     expect(flow.parts.filter((p) => p.kind === "connection")).toEqual([]);
     // Every step stays, and every trigger and outside action with a line.
-    const steps = doc(issueFile).parts.filter((p) => ["ai", "code", "person"].includes(p.kind));
+    const steps = doc(issueFile).parts.filter((p) => ["ai", "code", "person", "review", "approval"].includes(p.kind));
     expect(flow.parts.filter((p) => ["ai", "code", "person"].includes(p.kind))).toHaveLength(steps.length);
     expect(part(flow, "pr")).toBeDefined();
     expect(part(flow, "comment")).toBeDefined();
@@ -224,7 +223,7 @@ describe("Flow only", () => {
 
   it("keeps the notes of the parts it keeps", () => {
     // The GitHub App's note goes with it; the kitchen screen's gap goes with the screen.
-    expect(flowOnly(issue).notes.map((n) => n.on).sort()).toEqual(["bring", "build", "comment", "gate", "open", "review", "started"]);
+    expect(flowOnly(issue).notes.map((n) => n.on).sort()).toEqual(["build", "comment", "guard", "keep", "open", "open", "push", "started"]);
     expect(flowOnly(dinners).notes).toEqual([]);
   });
 

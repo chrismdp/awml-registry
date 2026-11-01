@@ -1,109 +1,122 @@
+# An issue the maintainer labels build becomes a pull request. The repository is public, so
+# everything here sits in one scope: what matters is who may act. Someone who may only triage can
+# add a label too, so the label is the decision only when GitHub says whoever last added it may
+# write to the repository, or it's the repository's own app; otherwise the build says so on the
+# issue and stops. The build says on the issue that it has started. Claude drafts with a read-only token, and as part of its draft
+# names the pages the change alters, which a job of their own pictures, before and after. The app then
+# pushes the branch and the pictures and opens the pull request. The build runs no checks of its
+# own: CI judges the commit when the pull request opens, as it judges every pull request, and
+# land-a-pull-request and fix-review-findings each wake on CI finishing, reading
+# GitHub rather than anything this workflow writes.
 awml: "0.10"
 title: An issue becomes a pull request
 description: |
-  An issue the maintainer labels build becomes a pull request. The repository is public, so
-  everything here sits in one scope: what matters is who may act. Only people with write access,
-  and the repository's own app, can add a label, so the label is the decision. Claude drafts with a
-  read-only token, and as part of its draft redraws the examples the change alters and pictures
-  those that look different. The checks run where Claude can't reach. Two fresh Claude sessions
-  that didn't write the change review it, one for bugs and one for security, and a third classifies
-  its risk. The app then pushes the branch and the pictures and opens the pull request, which
-  lands by land-a-pull-request once CI has run. A failed check, or an Important finding before the
-  third try, goes to retry-a-build.
+  The factory's build: a labelled issue becomes a draft, and the app pushes it and opens a pull
+  request. CI, not the build, judges it.
 scopes:
   - { id: public, label: "public: anyone who reads the repository", processing: any }
 parts:
   - { id: comment, kind: trigger, label: "The build label is added to an issue", wait: PT1H }
-  - { id: dispatch, kind: trigger, label: "A failed try starts the build again" }
+  - { id: thread, kind: connector, label: "The issue and its comments, which anyone can open or write", in: public, untrusted: true }
+  - { id: who, kind: code, op: sort, label: "Sort by rule: is the label build?", in: public }
+  - { id: approve, kind: review, label: "The build label is the yes of someone with write access to the issue as it reads then", in: public }
+  - { id: still, kind: code, op: sort, cleans: true, label: "Sort by GitHub's record, passing on only the issue's number: does the issue still carry the build label, and is its lastEditedAt, from GraphQL, older than the label's last labelled event?", in: public }
   - { id: token, kind: connector, label: "The repository, through its own Actions token", in: public }
   - { id: app, kind: connector, label: "The repository, through its own GitHub App", in: public }
-  - { id: who, kind: code, op: sort, label: "Sort by rule: is the label build?", in: public }
-  - { id: started, kind: code, op: do, label: "Post the build's status comment on the issue, or on a retry edit it with the try and why the last one failed", in: public }
-  - { id: status, kind: outside, label: "Post or edit the build's status comment: Allow", in: public }
-  - { id: bring, kind: code, op: bring-in, label: "Bring in the issue and the comments of the repository's own people", in: public }
-  - { id: repo, kind: context, label: "The spec, guide, code, AGENTS.md and REVIEW.md, which says what failure looks like here", in: public }
-  - { id: failed, kind: context, label: "Why the last try failed", in: public, ref: chrismdp/retry-a-build#failed }
-  - { id: build, kind: ai, op: draft, label: "Write the change test first, then redraw the examples it alters and picture, before and after, those that look different", in: public }
+  - { id: writer, kind: code, op: sort, cleans: true, label: "Sort by GitHub's record: did whoever last added the build label have a role, or a role's base permission, of admin, maintain or write, or are they the app, by its exact login and type? It passes on only the answer", in: public }
+  - { id: refused, kind: code, op: do, cleans: true, label: "Post a new comment on the issue, from fixed text, that the label was added by someone who may not write here, so the build won't start, and only someone with write access, or the app, can start it", in: public }
+  - { id: started, kind: code, op: do, label: "Post a new comment on the issue that the build has started, linking the run", in: public }
+  - { id: startnote, kind: outside, label: "Comment on the issue: Allow", in: public }
+  - { id: keep, kind: code, op: sort, cleans: true, label: "Keep the issue as approved by the last build label, writers' comments, and the app's comments posted before that label and unedited since. A rebuild reads the referral beside the maintainer's answer", in: public }
+  - { id: bring, kind: code, op: bring-in, label: "Bring in the approved text and comments", in: public }
+  - { id: asked, kind: context, label: "The approved issue and comments, including earlier app referrals", in: public }
+  - { id: repo, kind: context, label: "The spec, guide, code, AGENTS.md and REVIEW.md, from main", in: public }
+  - { id: build, kind: ai, op: draft, label: "Write the change test first, and name the pages it alters, to be pictured before and after", in: public }
+  - { id: pictures, kind: code, op: do, label: "Picture each page the change names, on main and with the change, at desktop and phone widths, with main's picture script", in: public }
   - { id: patch, kind: context, label: "The change, as a patch, with its pictures, Claude's note and its description for the pull request", in: public }
-  - { id: gate, kind: code, op: check, label: "Run the tests, vet, the examples and wasm parity", in: public }
-  - { id: review, kind: ai, op: check, label: "Review the patch for bugs, with fresh context, keeping only the findings that survive a second look", in: public }
-  - { id: secreview, kind: ai, op: check, label: "Review the patch for security, in a separate session, alongside the bug review", in: public }
-  - { id: weigh, kind: code, op: sort, label: "Once both reviews are done, sort their findings by rule: is one Important, and is this the third try?", in: public }
-  - { id: findings, kind: context, label: "The reviews' findings, each Important, Nit or Pre-existing", in: public }
-  - { id: classify, kind: ai, op: sort, label: "Sort by risk: does a person need to look at this change?", in: public }
-  - { id: risk, kind: context, label: "The classifier's verdict and its reasons", in: public }
-  - { id: open, kind: code, op: do, label: "Push the branch and the pictures, and open a pull request that closes the issue", in: public }
-  - { id: pr, kind: outside, label: "Push the branch and pictures, and open the pull request: Allow", in: public }
-  - { id: retry, kind: code, op: do, label: "Start a retry", in: public }
-  - { id: tryfailed, kind: outside, label: "Start a retry: Allow", ref: chrismdp/retry-a-build#tryfailed, in: public }
-  - { id: pushed, kind: outside, label: "The app pushes the pull request's branch: Allow", ref: chrismdp/land-a-pull-request#pushed, in: public }
-  - { id: strangers, kind: comment, label: "Anyone can comment, but the bring-in step passes on only the comments of the owner, members and collaborators, so strangers' text never reaches the draft step. AWML can't mark this yet (awml #5)" }
-  - { id: label, kind: comment, label: "Only people with write access and the repository's app can add a label, and GitHub holds that, not a prompt, so a stranger's comment starts nothing. The draft step's token can only read, so it can't push (awml #26)" }
-  - { id: verdict, kind: comment, label: "The checks run where the draft step can't reach, and their verdict is in their own record (awml #13, #20)" }
-  - { id: seen, kind: comment, label: "Only a change to what a drawing or a page shows is pictured, and a picture that looks the same before and after is left out. A moving image only for something that moves" }
-  - { id: fresh, kind: comment, label: "The reviewers and the classifier never see the drafting session, and read the patch, not the issue's thread. Their read-only token can't push, comment or merge" }
-  - { id: layout, kind: comment, label: "The description opens with the classifier's reasons and any open findings, then Claude's note as written, then what changed, the decisions the issue didn't settle, the pictures, and the issue it closes" }
-  - { id: onecomment, kind: comment, label: "One status comment per build. It carries a hidden marker, so a retry finds it again without passing anything between runs" }
-  - { id: starts, kind: comment, label: "GitHub starts other workflows from the app's pushes, merges and labels, but not from the Actions token's, so CI runs on the pull request" }
+  - { id: guard, kind: code, op: sort, label: "Sort by git alone: does the draft touch .github/ or Claude Code's own files?", in: public }
+  - { id: offer, kind: code, op: do, cleans: true, label: "Offer the draft in a new comment on the issue from fixed text: gh run download <run> -n change, the git apply command, and that the artifact lasts 30 days, quoting none of it", in: public }
+  - { id: offered, kind: outside, label: "Comment on the issue with the commands: Allow", in: public }
+  - { id: push, kind: code, op: do, label: "Push the branch and its pictures as the app", in: public }
+  - { id: standing, kind: approval, label: "The maintainer's standing approval: the app's pushes to the issue's own branch only, for a build started by the label. Automatic rebuilds removed in #108 following awml#212", in: public }
+  - { id: branch, kind: outside, label: "Push the issue's branch and its pictures: Ask", in: public }
+  - { id: open, kind: code, op: do, label: "Open a pull request that says Closes #n, unless one is open from the branch already", in: public }
+  - { id: standingpr, kind: approval, label: "The maintainer's standing approval: one open pull request an issue, from its own branch, accepted by the maintainer in #160, under rule 4", in: public }
+  - { id: pr, kind: outside, label: "Open the pull request: Ask", in: public }
+  - { id: listed, kind: surface, label: "The repository's branches and pull requests, where each push is listed with its commit", in: public }
+  - { id: strangers, kind: comment, label: "Anyone can open an issue or comment. The issue reaches Claude only as the text a person with write access approved by adding the label, and only the comments of those GitHub says may write are passed on" }
+  - { id: label, kind: comment, label: "Someone who may only triage can add a label too, so the start job asks GitHub about whoever last added it, and GitHub holds that, not a prompt, so a stranger's comment starts nothing. The draft step's token can only read, so it can't push (awml #26)" }
+  - { id: pinned, kind: comment, label: "Decided in #160's follow-up: a try drafts from the issue's text as it reads now, only if it hasn't been edited since the build label was last added, by comparing the issue's last edit with the label event. An edited issue waits for a person to add the label again (awml #120)" }
+  - { id: nochecks, kind: comment, label: "The build runs no checks of its own. It pushes and opens the pull request, CI judges it, and the fixer wakes for failed tests or Important review findings, fixing that pull request within its two-commit cap (#108, awml#212)" }
+  - { id: startcomment, kind: comment, label: "Decided in #160's follow-up: one new comment when the build starts, linking the run. It's never edited or parsed. The pull request links to the issue by Closes #n (#160 rule 5)" }
+  - { id: seen, kind: comment, label: "Only a page the change alters is pictured, in a registry filled by scripts/seed-pictures.ts, and the push job checks every picture. A moving image only for something that moves" }
+  - { id: layout, kind: comment, label: "The description is Claude's note, escaped, then what changed, the decisions the issue didn't settle, the pictures, and Closes #n. No record line and no digests: nothing reads the description back (#160)" }
+  - { id: reused, kind: comment, label: "The branch is reused, so a new try's push updates the open pull request, and no earlier one needs closing (#160's follow-up)" }
+  - { id: ownfiles, kind: comment, label: "The build works as the fixer does. A draft touching .github/ or Claude Code's own settings, .claude/, .mcp.json or a CLAUDE.md, isn't pushed: it's offered in a new comment, and the build stops, since nothing is pushed for CI to judge. No session loads settings or servers from the tree" }
+  - { id: starts, kind: comment, label: "GitHub starts other workflows from the app's pull request, but not from the Actions token's, so CI runs when the pull request opens" }
 lines:
-  - { from: retry, to: tryfailed, kind: start }
   - { from: comment, to: who, kind: start, label: "the label" }
-  - { from: who, to: started, kind: start, label: "[build]" }
-  - { from: dispatch, to: started, kind: start, label: "the issue" }
-  - { from: started, to: status, kind: data }
-  - { from: status, to: token, kind: data }
-  - { from: started, to: bring, kind: start }
-  - { from: token, to: bring, kind: data, label: "the issue's thread" }
-  - { from: bring, to: build, kind: start, label: "the issue and its people's comments" }
+  - { from: who, to: approve, kind: start, label: "[build]" }
+  - { from: thread, to: approve, kind: data, label: "the issue" }
+  - { from: approve, to: still, kind: start, label: "[yes]" }
+  - { from: thread, to: writer, kind: data, label: "who last added the label" }
+  - { from: writer, to: started, kind: start, label: "[added with write access, or by the app]" }
+  - { from: writer, to: refused, kind: start, label: "[added without write access]" }
+  - { from: refused, to: startnote, kind: data }
+  - { from: thread, to: still, kind: data, label: "the issue's labels and last edit" }
+  - { from: still, to: writer, kind: start, label: "[labelled, unedited since]" }
+  - { from: started, to: startnote, kind: data }
+  - { from: startnote, to: token, kind: data }
+  - { from: started, to: keep, kind: start }
+  - { from: thread, to: keep, kind: data, label: "the issue's text and comments" }
+  - { from: keep, to: bring, kind: start, label: "the approved text and its people's comments" }
+  - { from: bring, to: asked, kind: data }
+  - { from: bring, to: build, kind: start }
+  - { from: asked, to: build, kind: data }
   - { from: repo, to: build, kind: data }
-  - { from: failed, to: build, kind: data, label: "why the last try failed" }
-  - { from: findings, to: build, kind: data, label: "what the reviews found" }
   - { from: build, to: patch, kind: data }
-  - { from: build, to: gate, kind: start, label: "the change" }
-  - { from: patch, to: gate, kind: data }
-  - { from: gate, to: retry, kind: start, label: "[a check fails]" }
-  - { from: gate, to: review, kind: start, label: "[all pass]" }
-  - { from: gate, to: secreview, kind: start, label: "[all pass]" }
-  - { from: patch, to: review, kind: data }
-  - { from: repo, to: review, kind: data }
-  - { from: patch, to: secreview, kind: data }
-  - { from: repo, to: secreview, kind: data }
-  - { from: review, to: weigh, kind: start, label: "its findings" }
-  - { from: secreview, to: weigh, kind: start, label: "its findings" }
-  - { from: weigh, to: findings, kind: data }
-  - { from: weigh, to: retry, kind: start, label: "[an Important finding, before the third try]" }
-  - { from: weigh, to: classify, kind: start, label: "[none Important, or the third try]" }
-  - { from: patch, to: classify, kind: data }
-  - { from: repo, to: classify, kind: data }
-  - { from: findings, to: classify, kind: data }
-  - { from: classify, to: risk, kind: data }
-  - { from: classify, to: open, kind: start }
-  - { from: patch, to: open, kind: data }
-  - { from: findings, to: open, kind: data }
-  - { from: risk, to: open, kind: data }
-  - { from: open, to: pr, kind: data }
+  - { from: build, to: pictures, kind: start, label: "[names pages]" }
+  - { from: patch, to: pictures, kind: data, label: "the change" }
+  - { from: pictures, to: push, kind: data, label: "the pictures, checked" }
+  - { from: build, to: guard, kind: start, label: "the change" }
+  - { from: patch, to: guard, kind: data }
+  - { from: guard, to: offer, kind: start, label: "[touches .github/ or Claude's files]" }
+  - { from: offer, to: offered, kind: data }
+  - { from: offered, to: token, kind: data }
+  - { from: guard, to: push, kind: start, label: "[touches neither]" }
+  - { from: patch, to: push, kind: data }
+  - { from: push, to: standing, kind: start }
+  - { from: standing, to: branch, kind: data, label: "[within limits]" }
+  - { from: branch, to: app, kind: data }
+  - { from: standing, to: listed, kind: data, label: "each push, as made" }
+  - { from: push, to: open, kind: start, label: "[pushed]" }
+  - { from: patch, to: open, kind: data, label: "the description" }
+  - { from: open, to: standingpr, kind: start }
+  - { from: standingpr, to: pr, kind: data, label: "[within limits]" }
   - { from: pr, to: app, kind: data }
-  - { from: open, to: pushed, kind: start, label: "the branch" }
-  - { from: strangers, to: bring, kind: tie }
+  - { from: standingpr, to: listed, kind: data, label: "each pull request, as opened" }
+  - { from: strangers, to: keep, kind: tie }
   - { from: label, to: comment, kind: tie }
-  - { from: verdict, to: gate, kind: tie }
+  - { from: pinned, to: asked, kind: tie }
+  - { from: nochecks, to: push, kind: tie }
+  - { from: startcomment, to: started, kind: tie }
   - { from: seen, to: build, kind: tie }
-  - { from: fresh, to: review, kind: tie }
   - { from: layout, to: open, kind: tie }
-  - { from: onecomment, to: started, kind: tie }
+  - { from: reused, to: open, kind: tie }
+  - { from: ownfiles, to: guard, kind: tie }
   - { from: starts, to: app, kind: tie }
 implementations:
   actions:
     label: "GitHub Actions, build.yml"
     blocks:
-      - { id: github, label: "GitHub: issues, branches and pull requests", parts: [comment, dispatch, token, app, status, repo, failed, patch, findings, risk, pr, tryfailed, retry, pushed, who] }
-      - { id: startjob, label: "Actions job: post the status, running nothing from the issue", platform: actions-code, parts: [started] }
-      - { id: draftjob, label: "Actions job: draft, with a read-only token", platform: actions-code, parts: [bring] }
+      - { id: github, label: "GitHub: issues, branches and pull requests", parts: [comment, thread, who, approve, token, app, repo, startnote, offered, standing, branch, standingpr, pr, listed] }
+      - { id: startjob, label: "Actions job: post the start comment, checking out nothing and running only gh", platform: actions-code, parts: [still, writer, refused, started] }
+      - { id: draftjob, label: "Actions job: draft, with a read-only token", platform: actions-code, parts: [keep, bring, asked] }
       - { id: agentjob, label: "Claude Code, claude-opus-5-5, on the maintainer's subscription", platform: actions-agent, in: draftjob, parts: [build] }
-      - { id: checkjob, label: "Actions job: checks, with a read-only token", platform: actions-code, parts: [gate] }
-      - { id: reviewjob, label: "Actions job: review and classify, with a read-only token", platform: actions-code, parts: [weigh] }
-      - { id: reviewagent, label: "Claude Code, claude-opus-5-5, a fresh session for each review and the classifier", platform: actions-agent, in: reviewjob, parts: [review, secreview, classify] }
-      - { id: openjob, label: "Actions job: push and open, running nothing from the change", platform: actions-code, parts: [open] }
+      - { id: picturejob, label: "Actions job: picture the pages, running the change's code with no secret and a token that only reads", platform: actions-code, parts: [pictures] }
+      - { id: openjob, label: "Actions job: push and open, running nothing from the change", platform: actions-code, parts: [patch, guard, offer, push, open] }
     comments:
-      - { id: scrub, label: "Claude Code holds the maintainer's login token for its own calls, and strips it, with any other credential, from the commands it runs, so text that steers Claude can't send it anywhere. A command running as the same user could still read Claude Code's own environment (awml #121)", in: agentjob, ties: [build] }
-      - { id: scrubreview, label: "The same here: each session keeps the login token from the commands it runs (awml #121)", in: reviewagent, ties: [review, secreview, classify] }
+      - { id: scrub, label: "Claude Code holds the maintainer's login token for its own calls, and strips it, with any other credential, from the commands it runs, which run in its sandbox, tests included. The job runs nothing of its own beside the secret (awml #121, #160)", in: agentjob, ties: [build] }
+      - { id: reads, label: "Read is limited to the workspace and the session's own input folder, with Read(//proc/**) denied, and Edit is denied on .git/**, which covers every file edit; Claude Code reads no Write deny rule. Git after the session runs with core.hooksPath=/dev/null and core.fsmonitor=false (#160)", in: agentjob, ties: [build] }
+      - { id: hashed, label: "The patch is an artifact within this run only, because the job split keeps the app's token away from the change's code. The draft job gives its sha256 as an output, the open job checks it, and everything the session wrote is scanned for a token before it's uploaded. It's uploaded with retention-days: 30, so an offered draft can be downloaded for 30 days (#160 rule 6)", in: openjob, ties: [patch] }
+      - { id: runname, label: "Each run's name carries the issue's number so a person can find its builds. Removing and re-adding the build label starts a fresh build; failed tests go to the fixer (#108, awml#212)", in: startjob, ties: [started] }
