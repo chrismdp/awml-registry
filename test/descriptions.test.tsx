@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { Drawing } from "@/components/Drawing";
 import { EmbeddedDrawing } from "@/components/Embed";
 import { DESCRIPTION, LABEL, lineRoutes, PADDING, partText, type Rect } from "@/components/flow/drawing";
-import { NODE_TYPES, nodesOf } from "@/components/flow/FlowCanvas";
+import { flipsOf, NODE_TYPES, nodesOf } from "@/components/flow/FlowCanvas";
 import { flowOnly, graphOf, readGraph, type EngineGraph } from "@/components/flow/graph";
 import { atServer, MARGIN, startPhysics, type Body } from "@/components/flow/physics";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
@@ -279,6 +279,18 @@ describe("opening one part", () => {
     const route = lineRoutes([line], new Map([["a", grown], ["b", t]]), served).get("l")!;
     expect(route.server).toBe(false);
     expect(route.points[0].y).toBe(100);
+  });
+});
+
+describe("the descriptions the reader has opened", () => {
+  it("are the drawing's own: a switch to another layout and back shows it as the server laid it out", async () => {
+    const d = laidOut(await layOut(await engine.graph(file)));
+    const opened = flipsOf({ of: d.full, ids: new Set() }, d.full, "plan");
+    expect([...flipsOf(opened, d.full).ids]).toEqual(["plan"]);
+    const away = flipsOf(opened, d.flow);
+    expect([...away.ids]).toEqual([]);
+    expect([...flipsOf(away, d.full).ids]).toEqual([]);
+    expect([...flipsOf(flipsOf(opened, d.full, "plan"), d.full).ids]).toEqual([]);
   });
 });
 

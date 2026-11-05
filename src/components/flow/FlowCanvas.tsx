@@ -112,6 +112,18 @@ export type FlowCanvasProps = {
 
 const NONE = new Set<string>();
 
+type Flips = { of: Drawing; ids: Set<string> };
+
+// The flips for the drawing shown, with `id` flipped if given. Flips made in
+// another drawing are dropped, so a drawing a switch brings back starts as
+// the server laid it out, as its physics does.
+export function flipsOf(flips: Flips, drawing: Drawing, id?: string): Flips {
+  const ids = new Set(flips.of === drawing ? flips.ids : NONE);
+  if (id === undefined) return flips.of === drawing ? flips : { of: drawing, ids };
+  if (!ids.delete(id)) ids.add(id);
+  return { of: drawing, ids };
+}
+
 export default function FlowCanvas(p: FlowCanvasProps) {
   return (
     <ReactFlowProvider>
@@ -133,9 +145,12 @@ function Canvas(p: FlowCanvasProps) {
 
   // The parts whose descriptions the reader has opened, or closed in a
   // drawing laid out with them open (#114), for the drawing shown: a new
-  // drawing, from a switch, starts as the server laid it out.
-  const [flips, setFlips] = useState({ of: drawing, ids: NONE });
-  const flipped = flips.of === drawing ? flips.ids : NONE;
+  // drawing, from a switch, starts as the server laid it out, and so does
+  // the one before when a switch brings it back.
+  const [kept, setFlips] = useState<Flips>({ of: drawing, ids: NONE });
+  const flips = flipsOf(kept, drawing);
+  if (flips !== kept) setFlips(flips);
+  const flipped = flips.ids;
   const open = useMemo(
     () =>
       p.descriptions
@@ -149,12 +164,10 @@ function Canvas(p: FlowCanvasProps) {
     (id: string) => {
       const part = drawing.parts.find((q) => q.id === id);
       if (!part?.description) return;
-      const ids = new Set(flipped);
-      if (!ids.delete(id)) ids.add(id);
-      setFlips({ of: drawing, ids });
+      setFlips(flipsOf(flips, drawing, id));
       physics.current?.resize(id, open.has(id) ? part.description.closed : part.description.opened);
     },
-    [drawing, flipped, open],
+    [drawing, flips, open],
   );
   const shared = useMemo(
     () => ({
