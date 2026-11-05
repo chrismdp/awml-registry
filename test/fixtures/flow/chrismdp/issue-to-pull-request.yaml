@@ -1,4 +1,4 @@
-awml: "0.10"
+awml: "0.11"
 title: An issue becomes a pull request
 description: |
   An issue the maintainer labels build becomes a pull request. The repository is public, so

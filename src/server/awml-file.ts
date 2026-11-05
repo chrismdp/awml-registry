@@ -1,18 +1,18 @@
 // What the registry reads from an AWML file itself: the AWML it says it is,
-// and a workflow's implementations. The registry takes only AWML 0.10 files;
+// and a workflow's implementations. The registry takes only AWML 0.11 files;
 // versions stored before stay as they were, and are converted when read
 // (see ./as-read.ts).
 import { parse, parseDocument } from "yaml";
 
 export const WORKFLOW_IS_TOO_OLD =
-  "This registry takes AWML 0.10 files. Upgrade yours with `awml convert workflow.yaml > upgraded.yaml`, " +
+  "This registry takes AWML 0.11 files. Upgrade yours with `awml convert workflow.yaml > upgraded.yaml`, " +
   "or join a 0.3 pair with `awml convert security.yaml platform.yaml > upgraded.yaml`, and push that.";
 
 export const PLATFORM_IS_TOO_OLD =
-  "This registry takes AWML 0.10 platform descriptions. Upgrade yours with `awml convert description.yaml > upgraded.yaml` and push that.";
+  "This registry takes AWML 0.11 platform descriptions. Upgrade yours with `awml convert description.yaml > upgraded.yaml` and push that.";
 
 // The AWML the registry takes, the one its engine reads.
-export const CURRENT_AWML = "0.10";
+export const CURRENT_AWML = "0.11";
 
 // The file as YAML, or null when it isn't YAML or isn't a map.
 export function readYaml(text: string): Record<string, unknown> | null {
@@ -24,9 +24,9 @@ export function readYaml(text: string): Record<string, unknown> | null {
   }
 }
 
-// Whether a file says it is some AWML other than 0.10. A file that says
+// Whether a file says it is some AWML other than 0.11. A file that says
 // nothing, or isn't YAML, is left to `awml check`, whose messages say what is
-// wrong with it; an unquoted 0.10 is too.
+// wrong with it; an unquoted 0.11 is too.
 export function isOlderAwml(text: string) {
   const awml = awmlOf(text);
   return awml !== null && awml !== CURRENT_AWML;
