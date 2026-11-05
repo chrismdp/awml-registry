@@ -61,11 +61,12 @@ const nobody = async () => ({ db: await getDb(), viewer: null });
 
 const host = () => new URL(ownUrl("/")).host;
 
-// A drawing, or why there is none, said as the item's page says it.
+// A drawing, or why there is none, said as the item's page says it. An embed
+// shows labels only (#114), so it is sent no layout with descriptions open.
 function drawn(drawing: Drawings | Undrawn | null | undefined, what: "workflow" | "map", none: string) {
   if (!drawing) return { drawing: null, message: none };
   if ("undrawn" in drawing) return { drawing: null, message: undrawnText(drawing, what) };
-  return { drawing };
+  return { drawing: { full: drawing.full, flow: drawing.flow } };
 }
 
 // A public workflow's version, `n` or "latest", drawn as `options` ask; null

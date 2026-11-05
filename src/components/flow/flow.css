@@ -126,6 +126,15 @@
 .react-flow.flow-lit :is(.flow-edge, .flow-label-svg):not(.lit) { opacity: 0.25; }
 @media (prefers-reduced-motion: reduce) { .flow-canvas :is(.flow-part, .flow-scope, .flow-note-mark, .flow-edge, .flow-label-svg) { transition: none; } }
 
+/* A part's description (#114): a chevron by its label opens it, folded under the
+   rest of the part, in the site's soft ink. */
+.flow-description { fill: var(--ink-soft); }
+.flow-description-mark { position: absolute; padding: 0; border: none; border-radius: 999px; background: none; cursor: pointer; line-height: 0; }
+.flow-description-mark path { fill: none; stroke: var(--ink-soft); stroke-width: 1.8px; stroke-linecap: round; stroke-linejoin: round; }
+.flow-description-mark:hover { background: var(--wash); }
+.flow-description-mark:hover path, .flow-description-mark[aria-expanded="true"] path { stroke: var(--ink); }
+.flow-description-mark:focus-visible { outline: 3px solid var(--ink); outline-offset: 1px; }
+
 /* A part's notes (#60): an icon at its bottom right, its text on hover, and in a
    small modal on a click or a tap. */
 .flow-note-icon circle { fill: var(--paper); stroke: var(--edge); stroke-width: 1px; }

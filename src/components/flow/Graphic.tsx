@@ -3,6 +3,7 @@ import {
   BOX,
   BOX_NAME,
   CAPTION,
+  DESCRIPTION,
   LABEL,
   LINE_LABEL,
   outline,
@@ -27,10 +28,14 @@ import { baseline, textWidth } from "./text";
 // A part: its outline, its kind and verb small above its label, an outside
 // action's tier, and the mark of a part linked to other workflows (#55). A
 // part untrusted text comes from has a thick outline (#83), and a code step a
-// model carries out a dashed one (AWML 0.10.1), in its class.
-export function PartGraphic({ part, link }: { part: DrawnPart; link?: PartLink }) {
+// model carries out a dashed one (AWML 0.10.1), in its class. Only React
+// Flow draws a part `open`, its description under the rest (#114): the
+// server's SVG shows labels only.
+export function PartGraphic({ part, link, open = false }: { part: DrawnPart; link?: PartLink; open?: boolean }) {
   const { d, extra } = outline(part.kind, part.width, part.height);
-  const [top, , , left] = PADDING[part.kind];
+  const [top, , bottom, left] = PADDING[part.kind];
+  const said = open ? part.description : undefined;
+  const saidTop = said ? said.closed.height - bottom + DESCRIPTION.gap : 0;
   let y = top;
   const caption = part.caption ? (
     <text className="flow-caption" x={left} y={y + baseline(CAPTION.size, CAPTION.line)} fontSize={CAPTION.size}>
@@ -60,6 +65,15 @@ export function PartGraphic({ part, link }: { part: DrawnPart; link?: PartLink }
             {part.tier}
           </text>
         </g>
+      )}
+      {said && (
+        <text className="flow-description" fontSize={DESCRIPTION.size}>
+          {said.lines.map((line, i) => (
+            <tspan key={i} x={left} y={saidTop + i * DESCRIPTION.line + baseline(DESCRIPTION.size, DESCRIPTION.line)}>
+              {line}
+            </tspan>
+          ))}
+        </text>
       )}
       {link && <LinkMark x={part.width - 10} y={10} off={link.to.length === 0} />}
     </g>

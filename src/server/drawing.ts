@@ -97,11 +97,17 @@ function headings(g: Graph, holding: Set<string>, widthOf: (id: string) => numbe
 }
 
 // Lays a graph out: every part's and scope's box, every line's route and its
-// label's, in the drawing's own coordinates.
-export async function layOutGraph(g: Graph): Promise<Drawing> {
+// label's, in the drawing's own coordinates. `opened`, each part with a
+// description is laid out with it open (#114).
+export async function layOutGraph(g: Graph, opened = false): Promise<Drawing> {
   const holding = containers(g);
   const depth = depths(g);
-  const parts = new Map(g.parts.map((p) => [p.id, { part: p, ...partText(p) }]));
+  const parts = new Map(
+    g.parts.map((p) => {
+      const t = partText(p);
+      return [p.id, { ...t, ...(opened && t.description ? t.description.opened : {}) }];
+    }),
+  );
   const boxes = new Map(g.scopes.filter((s) => !holding.has(s.id)).map((s) => [s.id, boxText(s)]));
   const labels = new Map(g.lines.flatMap((l) => (l.label ? [[l.id, lineLabel(l.label)] as const] : [])));
   const headingOf = headings(g, holding, (id) => parts.get(id)?.width ?? boxes.get(id)?.width ?? 0);
@@ -171,6 +177,7 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
       ...(p.scope ? { scope: p.scope } : {}),
       ...(p.unstopped ? { outline: "unstopped" as const } : p.untrusted ? { outline: "untrusted" as const } : {}),
       ...(p.agentRun ? { agentRun: true as const } : {}),
+      ...(t.description ? { description: t.description } : {}),
       ...at.get(p.id)!,
     };
   });
@@ -219,6 +226,7 @@ export async function layOutGraph(g: Graph): Promise<Drawing> {
     lines: drawnLines,
     notes: g.notes,
     ...(strip ? { notesAt: { x: 24, y: -strip / 2 + 4 } } : {}),
+    ...(opened ? { opened: true as const } : {}),
   };
 }
 
@@ -238,8 +246,12 @@ const NOTES_STRIP = 36;
 // whole drawing and Flow only one after the other, and they are the same size
 // when Flow only leaves nothing out, so at these limits a page's first view
 // takes about 5 s at worst, on a graph made to be slow; its layouts are kept
-// after that. Real graphs cost far less, as the map does. The gallery lays
-// out many at once, so its cards keep lower limits (CARD_LIMITS). A note isn't laid out,
+// after that. A drawing with a part's description is laid out twice more,
+// with every description open (#114): measured in Node on 2026-11-05, each
+// open layout took as long as a closed one, so its page's first view takes
+// about twice as long. Real graphs cost far less, as the map does. The
+// gallery lays out many at once, so its cards keep lower limits
+// (CARD_LIMITS), and lay out one. A note isn't laid out,
 // but each counts as a part, and each part or scope it is on as a line. The
 // limits also bound what the kept layouts hold. `depth` is how deep scopes
 // nest: 1 when none is inside another.
@@ -253,14 +265,14 @@ export const LIMITS = { parts: 150, lines: 250, characters: 20_000, depth: 8 };
 export const CARD_LIMITS = { ...LIMITS, parts: 80, lines: 120 };
 
 // Whether a graph is beyond `limits`: its parts, scopes and notes, its lines
-// and the notes' ties, the characters of every label in it, and how deep its
-// scopes nest.
+// and the notes' ties, the characters of every label and description in it,
+// and how deep its scopes nest.
 export function tooBig(g: Graph, limits = LIMITS) {
   const notes = new Set(g.notes.map((n) => n.id)).size;
   const ties = g.notes.filter((n) => n.on).length;
   const characters =
     [...g.parts, ...g.scopes, ...g.notes].reduce((n, x) => n + ("label" in x ? x.label : x.text).length, 0) +
-    g.parts.reduce((n, p) => n + (p.tier?.length ?? 0), 0) +
+    g.parts.reduce((n, p) => n + (p.tier?.length ?? 0) + (p.description?.length ?? 0), 0) +
     g.lines.reduce((n, l) => n + (l.label?.length ?? 0), 0);
   return (
     g.parts.length + g.scopes.length + notes > limits.parts ||
@@ -313,32 +325,38 @@ export function mapLinks(d: Drawing, given: Record<string, { title: string; addr
   });
 }
 
-// One drawing of the engine's graph, the whole of it or Flow only, kept by
-// the SHA-256 of the graph's JSON, the switch, and the engine that gave the
-// graph (see memo.ts), for the 200 drawings used last. A drawing too big to
-// lay out, or one whose layout fails, is kept as that, so it isn't tried
-// again; LIMITS also bounds what the 200 hold.
-const drawingOf = memoise(async (json: string, flow: boolean, _engine: string): Promise<Drawing | Undrawn> => {
+// One drawing of the engine's graph, the whole of it or Flow only, with its
+// descriptions closed or open, kept by the SHA-256 of the graph's JSON, the
+// switches, and the engine that gave the graph (see memo.ts), for the 200
+// drawings used last. A drawing too big to lay out, or one whose layout
+// fails, is kept as that, so it isn't tried again; LIMITS also bounds what
+// the 200 hold.
+const drawingOf = memoise(async (json: string, flow: boolean, opened: boolean, _engine: string): Promise<Drawing | Undrawn> => {
   try {
     const graph = graphOf(json);
     if (tooBig(graph)) return { undrawn: "too big" };
-    return await layOutGraph(flow ? flowOnly(graph) : graph);
+    return await layOutGraph(flow ? flowOnly(graph) : graph, opened);
   } catch (e) {
     console.error(`[awml] a drawing could not be laid out: ${(e as Error).message}`);
     return { undrawn: "failed" };
   }
 });
 
-// Both drawings a page may show of the engine's graph, given as its JSON: the
-// whole drawing, and Flow only. Both are laid out here, so the switch needs
-// nothing more from the server. Never throws: a drawing that can't be laid
-// out says why.
+// Every drawing a page may show of the engine's graph, given as its JSON: the
+// whole drawing, and Flow only, and when a part has a description, both
+// again with every description open (#114). All are laid out here, so the
+// switches need nothing more from the server. Never throws: a drawing that
+// can't be laid out says why.
 export async function layOut(json: string): Promise<Drawings | Undrawn> {
   const version = JSON.stringify(engine.version);
-  const [full, flow] = await Promise.all([drawingOf(json, false, version), drawingOf(json, true, version)]);
+  const [full, flow] = await Promise.all([drawingOf(json, false, false, version), drawingOf(json, true, false, version)]);
   if ("undrawn" in full) return full;
   if ("undrawn" in flow) return flow;
-  return { full, flow };
+  if (!full.parts.some((p) => p.description)) return { full, flow };
+  const [fullOpen, flowOpen] = await Promise.all([drawingOf(json, false, true, version), drawingOf(json, true, true, version)]);
+  if ("undrawn" in fullOpen) return fullOpen;
+  if ("undrawn" in flowOpen) return flowOpen;
+  return { full, flow, open: { full: fullOpen, flow: flowOpen } };
 }
 
 // The whole drawing alone, as the gallery's cards show it, within
@@ -349,5 +367,5 @@ export async function layOutWhole(json: string): Promise<Drawing | Undrawn> {
   } catch {
     // drawingOf says why, and keeps the answer.
   }
-  return drawingOf(json, false, JSON.stringify(engine.version));
+  return drawingOf(json, false, false, JSON.stringify(engine.version));
 }

@@ -96,6 +96,12 @@ export function tapOf(tapped: string | undefined, on: string | undefined, follow
   return { lit: on, follow: follows && tapped === on };
 }
 
+// What a click on a part does (#114): follows it when its link leads to a
+// page, or else opens or closes its description when it has one and
+// descriptions open here, or nothing.
+export const clickOf = (link: { to: unknown[] } | undefined, description: unknown, opens: boolean): "follow" | "open" | null =>
+  link?.to.length ? "follow" : opens && description ? "open" : null;
+
 // A pointer's event, as the drawing's frame sees it.
 type PointerAt = { pointerType: string; isPrimary: boolean; clientX: number; clientY: number };
 

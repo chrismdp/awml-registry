@@ -21,7 +21,9 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { PartLink } from "@/server/part-links";
 import {
+  chevronAt,
   connections,
+  DESCRIPTION,
   lineRoutes,
   pointAlong,
   type Connected,
@@ -36,7 +38,7 @@ import {
 } from "./drawing";
 import { LabelGraphic, LineGraphic, NoteIcon, NOTE_R, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import { startPhysics, type Body, type Physics } from "./physics";
-import { DRAG, Gesture, hrefOf, Press, tapOf } from "../links";
+import { clickOf, DRAG, Gesture, hrefOf, Press, tapOf } from "../links";
 import { notesBy, wholeNotes } from "./StaticDrawing";
 
 // React Flow drawing what the server laid out, so a dragged part takes its
@@ -46,7 +48,8 @@ import { notesBy, wholeNotes } from "./StaticDrawing";
 // (physics.ts) then tidies the drawing from there, and nudges what a dragged
 // part overlaps out of its way (#78). Nothing dragged is kept. The part the
 // pointer is over, or the keyboard is on, or a tap lit, is lit, and everything
-// not connected to it is knocked back.
+// not connected to it is knocked back. A part's description opens under its
+// label from the chevron by it, growing the part where it is (#114).
 
 // What the page's controls and keyboard ask of the drawing.
 export type FlowApi = {
@@ -67,6 +70,10 @@ type Shared = {
   // The part whose menu is open.
   menuFor?: string;
   onNote: (title: string, notes: Note[]) => void;
+  // The parts whose descriptions are open, and what opens or closes one
+  // (#114): none where the drawing shows labels only, as an embed does.
+  open?: Set<string>;
+  onOpen?: (id: string) => void;
 };
 type PartData = Shared & { part: DrawnPart };
 type ScopeData = Shared & { scope: DrawnScope; hull?: boolean };
@@ -98,7 +105,24 @@ export type FlowCanvasProps = {
   // A press on a linked part, or a box on a system's map, that didn't drag.
   onFollow: (id: string, e: { ctrlKey: boolean; metaKey: boolean; button?: number }) => void;
   fitOf: (box: Rect) => Viewport;
+  // Whether a part's description may be opened (#114): not in an embed,
+  // which shows labels only.
+  descriptions: boolean;
 };
+
+const NONE = new Set<string>();
+
+type Flips = { of: Drawing; ids: Set<string> };
+
+// The flips for the drawing shown, with `id` flipped if given. Flips made in
+// another drawing are dropped, so a drawing a switch brings back starts as
+// the server laid it out, as its physics does.
+export function flipsOf(flips: Flips, drawing: Drawing, id?: string): Flips {
+  const ids = new Set(flips.of === drawing ? flips.ids : NONE);
+  if (id === undefined) return flips.of === drawing ? flips : { of: drawing, ids };
+  if (!ids.delete(id)) ids.add(id);
+  return { of: drawing, ids };
+}
 
 export default function FlowCanvas(p: FlowCanvasProps) {
   return (
@@ -118,6 +142,33 @@ function Canvas(p: FlowCanvasProps) {
   const flow = useReactFlow<FlowNode, FlowEdge>();
   const initialised = useNodesInitialized();
   const ready = useRef(false);
+
+  // The parts whose descriptions the reader has opened, or closed in a
+  // drawing laid out with them open (#114), for the drawing shown: a new
+  // drawing, from a switch, starts as the server laid it out, and so does
+  // the one before when a switch brings it back.
+  const [kept, setFlips] = useState<Flips>({ of: drawing, ids: NONE });
+  const flips = flipsOf(kept, drawing);
+  if (flips !== kept) setFlips(flips);
+  const flipped = flips.ids;
+  const open = useMemo(
+    () =>
+      p.descriptions
+        ? new Set(drawing.parts.filter((q) => q.description && Boolean(drawing.opened) !== flipped.has(q.id)).map((q) => q.id))
+        : NONE,
+    [p.descriptions, drawing, flipped],
+  );
+  // Opens or closes a part's description, growing or shrinking it where it
+  // is, and nudging what it then overlaps out of its way.
+  const onOpen = useCallback(
+    (id: string) => {
+      const part = drawing.parts.find((q) => q.id === id);
+      if (!part?.description) return;
+      setFlips(flipsOf(flips, drawing, id));
+      physics.current?.resize(id, open.has(id) ? part.description.closed : part.description.opened);
+    },
+    [drawing, flips, open],
+  );
   const shared = useMemo(
     () => ({
       id: p.id,
@@ -127,8 +178,10 @@ function Canvas(p: FlowCanvasProps) {
       target: p.target,
       menuFor: p.menuFor,
       onNote: p.onNote,
+      open,
+      ...(p.descriptions ? { onOpen } : {}),
     }),
-    [p.id, p.links, p.hrefs, drawing.notes, p.target, p.menuFor, p.onNote],
+    [p.id, p.links, p.hrefs, drawing.notes, p.target, p.menuFor, p.onNote, open, p.descriptions, onOpen],
   );
   const latest = useRef(shared);
   const follow = useRef(p.onFollow);
@@ -284,17 +337,24 @@ function Canvas(p: FlowCanvasProps) {
 
   const centre = (n: Node) => ({ x: n.position.x + (n.width ?? 0) / 2, y: n.position.y + (n.height ?? 0) / 2 });
   // React Flow gives every node this handler, so it is the same one each render, and a
-  // render that changes no node redraws none. A click follows a linked part; a tap lights
-  // it, and a second tap follows it. A drag, a pan or a pinch is neither.
+  // render that changes no node redraws none. A click follows a linked part, or opens the
+  // description of a part that leads nowhere (#114); a tap lights it, and a second tap does
+  // what a click does. A drag, a pan or a pinch is neither.
   const onNodeClick = useCallback<NodeMouseHandler<FlowNode>>(
     (e, node) => {
-      const { links, hrefs } = latest.current;
+      const { links, hrefs, onOpen } = latest.current;
       const { touch, tap } = gesture.current.ended();
       if (!press.current.followsClick() || (touch && !tap) || (e.target as Element).closest("button, a")) return;
-      const follows = node.type === "part" ? links.has(node.id) : Boolean(hrefOf(hrefs, node.id));
-      const t = tapOf(lights.current.tap, node.id, follows, touch);
+      const does =
+        node.type === "part"
+          ? clickOf(links.get(node.id), node.data.part.description, Boolean(onOpen))
+          : hrefOf(hrefs, node.id)
+            ? "follow"
+            : null;
+      const t = tapOf(lights.current.tap, node.id, does !== null, touch);
       light({ tap: t.lit });
-      if (t.follow) follow.current(node.id, e);
+      if (t.follow && does === "open") onOpen?.(node.id);
+      else if (t.follow) follow.current(node.id, e);
     },
     [light],
   );
@@ -581,18 +641,45 @@ export function NoteTip({ notes }: { notes: Note[] }) {
   );
 }
 
-function PartNodeView({ data }: NodeProps<PartNode>) {
-  const { part } = data;
+// The chevron by a part's label that opens its description, and closes it
+// (#114): a button a keyboard reaches, saying whether it is open.
+export function DescriptionButton({ title, open, at, onOpen }: { title: string; open: boolean; at: Point; onOpen: () => void }) {
+  const r = DESCRIPTION.chevron / 2;
+  return (
+    <button
+      type="button"
+      className="flow-description-mark nodrag nopan"
+      style={{ left: at.x - r, top: at.y - r, width: 2 * r, height: 2 * r }}
+      aria-label={`Description of ${title}`}
+      aria-expanded={open}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      <svg width={2 * r} height={2 * r} viewBox={`${-r} ${-r} ${2 * r} ${2 * r}`} aria-hidden>
+        <path d={open ? "M -4 -2 L 0 2 L 4 -2" : "M -2 -4 L 2 0 L -2 4"} />
+      </svg>
+    </button>
+  );
+}
+
+function PartNodeView({ data, width, height }: NodeProps<PartNode>) {
+  const open = Boolean(data.open?.has(data.part.id));
+  // The part at the size it is now, which its description opening changes.
+  const part = { ...data.part, width: width ?? data.part.width, height: height ?? data.part.height };
   const notes = data.notes.get(part.id);
   const label = part.lines.join(" ");
+  const { onOpen } = data;
   return (
     <div className={`flow-node${data.target === part.id ? " part-target" : ""}${data.links.get(part.id)?.to.length ? " part-linked" : ""}`} style={{ width: part.width, height: part.height }}>
       <svg className="flow-node-svg" width={part.width} height={part.height}>
         {data.links.get(part.id) && <title>{data.links.get(part.id)!.title}</title>}
-        <PartGraphic part={part} link={data.links.get(part.id)} />
+        <PartGraphic part={part} link={data.links.get(part.id)} open={open} />
       </svg>
       <Handle type="target" position={Position.Top} isConnectable={false} className="flow-handle" />
       <Handle type="source" position={Position.Bottom} isConnectable={false} className="flow-handle" />
+      {part.description && onOpen && <DescriptionButton title={label} open={open} at={chevronAt(part)} onOpen={() => onOpen(part.id)} />}
       {notes && <NoteButton title={label} notes={notes} at={{ x: part.width - 3, y: part.height - 3 }} onNote={data.onNote} />}
     </div>
   );
