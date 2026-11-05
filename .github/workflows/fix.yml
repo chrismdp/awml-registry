@@ -177,7 +177,8 @@ jobs:
     concurrency:
       group: fix-session-${{ needs.decide.outputs.pr }}
       cancel-in-progress: false
-    runs-on: ubuntu-latest
+    # Ubuntu 26.04 stops the sandbox making the user namespace it needs, so every command fails.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       actions: read
