@@ -1,6 +1,6 @@
 {
-  "tag": "v0.11.0",
-  "commit": "d33494fb59b7162cb143ba8b48b1364735480781",
+  "tag": "v0.11.1",
+  "commit": "c1ef7b67072e4749f9c918f518eb09432eb51320",
   "go": {
     "version": "go1.22.12",
     "sha256": {
@@ -12,7 +12,7 @@
   },
   "sha256": {
     "awml.js": "390bd97cc624c2df180acf33bf1fa4f71e892adfd2053553d9c1b622bf3dc83a",
-    "awml.wasm": "bf0f4ded039102501b7650e8c331a7dc58b2d346d2bc6866716587e436ae0609",
+    "awml.wasm": "cfaea0edcf22d0bc72bde4ecbb501f107548ef581b0a8b86a936846a81823320",
     "wasm_exec.js": "45ce9dfe7211247544ab6f4268eb8cb5b6f3d5ae602dc3b51447b7eada99c229"
   }
 }
