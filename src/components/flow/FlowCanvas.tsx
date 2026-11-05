@@ -334,7 +334,7 @@ function Canvas(p: FlowCanvasProps) {
       if (!press.current.followsClick() || (touch && !tap) || (e.target as Element).closest("button, a")) return;
       const does =
         node.type === "part"
-          ? clickOf(Boolean(links.get(node.id)?.to.length), Boolean(onOpen && node.data.part.description))
+          ? clickOf(links.get(node.id), node.data.part.description, Boolean(onOpen))
           : hrefOf(hrefs, node.id)
             ? "follow"
             : null;

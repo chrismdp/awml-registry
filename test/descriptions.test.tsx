@@ -211,12 +211,27 @@ describe("a part's description in React Flow", () => {
   });
 });
 
+// What a click on a part chooses to do, from what the canvas gives it: its link, its
+// description and whether descriptions open here. The canvas's own wiring, a tap doing it only
+// on the second tap and a click on the chevron or a note's button left to the button, needs a
+// browser, so it isn't tested here.
 describe("a click on a part", () => {
+  const to = [{ label: "acme/plan", href: "/acme/plan" }];
   it("follows a part's link, opens a part's description when it leads nowhere, and otherwise does nothing", () => {
-    expect(clickOf(true, true)).toBe("follow");
-    expect(clickOf(true, false)).toBe("follow");
-    expect(clickOf(false, true)).toBe("open");
-    expect(clickOf(false, false)).toBeNull();
+    expect(clickOf({ to }, plan, true)).toBe("follow");
+    expect(clickOf({ to }, undefined, true)).toBe("follow");
+    expect(clickOf(undefined, plan, true)).toBe("open");
+    expect(clickOf(undefined, undefined, true)).toBeNull();
+  });
+
+  it("takes a link to no page as leading nowhere", () => {
+    expect(clickOf({ to: [] }, plan, true)).toBe("open");
+    expect(clickOf({ to: [] }, undefined, true)).toBeNull();
+  });
+
+  it("opens nothing where descriptions don't open, as in an embed", () => {
+    expect(clickOf(undefined, plan, false)).toBeNull();
+    expect(clickOf({ to }, plan, false)).toBe("follow");
   });
 });
 
