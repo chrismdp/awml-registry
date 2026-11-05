@@ -10,7 +10,7 @@ import type { EngineGraph } from "@/components/flow/graph";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
 import { textWidth, wrap } from "@/components/flow/text";
 import { engine } from "@/engine";
-import { LIMITS, layOut, layOutWhole, nesting } from "@/server/drawing";
+import { CARD_LIMITS, LIMITS, layOut, layOutWhole, nesting } from "@/server/drawing";
 import { expected, laidOut } from "./drawn";
 import { example } from "./helpers";
 
@@ -96,15 +96,16 @@ describe("a drawing too big to lay out", () => {
         })),
       });
     // The chain's steps, its trigger and its scope, and a note: the limit of parts.
+    expect(LIMITS.parts).toBe(150);
     const steps = LIMITS.parts - 3;
     expect("undrawn" in (await layOut(noted(steps, 1, 1, "k")))).toBe(false);
     expect(await layOut(noted(steps, 2, 1, "l"))).toEqual({ undrawn: "too big" });
-    // A chain of sixty steps has sixty lines, and a note on each step is sixty more: the
-    // limit of lines. One more step is one line, and too many.
-    expect(LIMITS.lines).toBe(120);
-    expect("undrawn" in (await layOut(noted(60, 1, 60, "m")))).toBe(false);
-    expect(await layOut(noted(61, 1, 60, "o"))).toEqual({ undrawn: "too big" });
-    expect("undrawn" in (await layOut(noted(61, 1, 0, "p")))).toBe(false);
+    // A chain of 125 steps has 125 lines, and a note on each step is 125 more: the limit of
+    // lines. One more step is one line, and too many.
+    expect(LIMITS.lines).toBe(250);
+    expect("undrawn" in (await layOut(noted(125, 1, 125, "m")))).toBe(false);
+    expect(await layOut(noted(126, 1, 125, "o"))).toEqual({ undrawn: "too big" });
+    expect("undrawn" in (await layOut(noted(126, 1, 0, "p")))).toBe(false);
   });
 
   it("is kept as too big, so its graph isn't read again", async () => {
@@ -137,6 +138,24 @@ describe("the gallery's drawing, the whole of it alone", () => {
     // The same drawing a page shows, kept for it.
     expect(laidOut(await layOut(text)).full).toEqual(whole);
     expect(layout).toHaveBeenCalledTimes(2);
+  });
+
+  it("is laid out within the gallery's own limits, lower than a page's, as it lays out many at once", async () => {
+    expect(CARD_LIMITS).toEqual({ parts: 80, lines: 120, characters: LIMITS.characters, depth: LIMITS.depth });
+    const layout = vi.spyOn(ELK.prototype, "layout");
+    // The scope and the trigger are two of the parts.
+    expect("undrawn" in (await layOutWhole(chain(CARD_LIMITS.parts - 2, 8, "q")))).toBe(false);
+    layout.mockClear();
+    const past = chain(CARD_LIMITS.parts - 1, 8, "r");
+    expect(await layOutWhole(past)).toEqual({ undrawn: "too big" });
+    // Lines past the limit too: a chain of ten steps has ten lines, and these are 111 more.
+    const lined = chained(10, 8, "s");
+    expect(
+      await layOutWhole(json({ ...lined, lines: [...lined.lines, ...Array.from({ length: CARD_LIMITS.lines - 9 }, () => start("s0", "s1"))] })),
+    ).toEqual({ undrawn: "too big" });
+    expect(layout).not.toHaveBeenCalled();
+    // Its page still draws it, within LIMITS.
+    expect("undrawn" in (await layOut(past))).toBe(false);
   });
 });
 
