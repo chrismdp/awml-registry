@@ -243,36 +243,201 @@ export function connections(d: Pick<Drawing, "parts" | "scopes" | "lines" | "not
   return of;
 }
 
-// A square route from box `s` to box `t`, as the server's routes are (#67):
-// out of the side of `s` that faces `t`, across halfway between them, and into
-// `t`, with its label halfway along. Boxes far enough across from each other
-// to share a stretch are joined by one straight line within it, with no jog.
-// One above the other is joined top to bottom, unless there is less than TURN
-// between them that way and at least that side by side: then side to side, so
-// a line never runs along the edge of a box it joins (#78).
+// How a line runs, end to end, and where its label sits on it; `server`
+// when it is the server's own route.
+export type Route = { points: Point[]; label: Point; server: boolean };
+
+// The four sides of a box. A point on a side is measured from its start, its
+// left or top corner, along it; a top or bottom side is level, and a line
+// leaves it plumb.
+type Side = "top" | "bottom" | "left" | "right";
+const OPPOSITE: Record<Side, Side> = { top: "bottom", bottom: "top", left: "right", right: "left" };
+const plumbSide = (side: Side) => side === "top" || side === "bottom";
+const sideStart = (r: Rect, side: Side) => (plumbSide(side) ? r.x : r.y);
+const sideLength = (r: Rect, side: Side) => (plumbSide(side) ? r.width : r.height);
+const sideAt = (r: Rect, side: Side) => ({ top: r.y, bottom: r.y + r.height, left: r.x, right: r.x + r.width })[side];
+const pointOn = (r: Rect, side: Side, offset: number): Point => (plumbSide(side) ? { x: r.x + offset, y: sideAt(r, side) } : { x: sideAt(r, side), y: r.y + offset });
+
+// The side of `s` that faces `t`, as the server's routes leave a box (#67):
+// one above the other, the bottom of the upper and the top of the lower,
+// unless there is less than TURN between them that way and at least that
+// side by side; then side to side, so a line never runs along the edge of a
+// box it joins (#78).
 const TURN = 24;
-export function squareRoute(s: Rect, t: Rect): { points: Point[]; label: Point } {
+function facing(s: Rect, t: Rect): Side {
   const above = Math.max(t.y - (s.y + s.height), s.y - (t.y + t.height));
   const beside = Math.max(t.x - (s.x + s.width), s.x - (t.x + t.width));
-  const plumb = above >= 0 && (above >= TURN || beside < TURN);
-  // One above the other, from the bottom of the upper to the top of the lower,
-  // or else side by side, from the side of one facing the other: `along` the
-  // way between them, `across` the other way.
-  const [along, across, size] = plumb ? (["y", "x", "height"] as const) : (["x", "y", "width"] as const);
-  const breadth = plumb ? "width" : "height";
-  const ahead = t[along] >= s[along];
-  const a = ahead ? s[along] + s[size] : s[along];
-  const b = ahead ? t[along] : t[along] + t[size];
-  const mid = (a + b) / 2;
-  const at = (u: number, v: number): Point => (plumb ? { x: v, y: u } : { x: u, y: v });
-  const shared = [Math.max(s[across], t[across]) + 12, Math.min(s[across] + s[breadth], t[across] + t[breadth]) - 12];
-  if (shared[0] <= shared[1]) {
-    const v = Math.min(shared[1], Math.max(shared[0], (s[across] + s[breadth] / 2 + t[across] + t[breadth] / 2) / 2));
-    return { points: [at(a, v), at(b, v)], label: at(mid, v) };
+  if (above >= 0 && (above >= TURN || beside < TURN)) return t.y >= s.y ? "bottom" : "top";
+  return t.x >= s.x ? "right" : "left";
+}
+
+// The side of `r` that `p` is on, and how far along it, or undefined when it
+// is on none.
+function sideOf(r: Rect, p: Point | undefined): { side: Side; offset: number } | undefined {
+  if (!p) return undefined;
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.5;
+  const within = (v: number, a: number, l: number) => v >= a - 0.5 && v <= a + l + 0.5;
+  for (const side of ["bottom", "top", "right", "left"] as const) {
+    const [u, v] = plumbSide(side) ? [p.y, p.x] : [p.x, p.y];
+    if (near(u, sideAt(r, side)) && within(v, sideStart(r, side), sideLength(r, side))) return { side, offset: v - sideStart(r, side) };
   }
-  const sv = s[across] + s[breadth] / 2;
-  const tv = t[across] + t[breadth] / 2;
-  return { points: [at(a, sv), at(mid, sv), at(mid, tv), at(b, tv)], label: at(mid, (sv + tv) / 2) };
+  return undefined;
+}
+
+// The server's edge spacing (elk.layered.spacing.edgeEdgeBetweenLayers in
+// src/server/drawing.ts): how far apart lines in the same gap run.
+const LANE = 14;
+// How far from a side's corners a line that shares a stretch with the box
+// it goes to runs straight into it.
+const CORNER = 12;
+
+const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5;
+
+// How every line runs with its ends' boxes where they are now, `boxes`, as
+// the server's ELK layout runs them, `served` being where the server put
+// each box (#116). A line whose ends haven't moved, or have moved together,
+// keeps the server's route exactly. Any other is routed square between the
+// sides of its ends that face each other (facing): each end where the
+// server's route attached it, as far along that box's side, while that side
+// still faces the other end; the other ends on a side spread evenly along it,
+// between the ones kept, in the order of where their other ends lie, so they
+// don't cross; and lines whose middle stretch runs in the same gap LANE apart,
+// side by side. A line's label is halfway along its middle stretch. Each line
+// is looked at a few times, and each pair that may share a gap once.
+export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served: Map<string, Rect>): Map<string, Route> {
+  const routes = new Map<string, Route>();
+  // One end of a line on a side of a box: how far along the side, once
+  // known, the box at its other end, and where that lies along the side.
+  type End = { line: number; box: Rect; side: Side; offset?: number; far: Rect; other: number };
+  const routed: { line: number; ends: [End, End] }[] = [];
+  // The ends on each side of each box.
+  const sides = new Map<string, End[]>();
+  const end = (line: number, id: string, box: Rect, side: Side, other: Rect, offset?: number) => {
+    const e: End = { line, box, side, offset, far: other, other: plumbSide(side) ? other.x + other.width / 2 : other.y + other.height / 2 };
+    const key = `${side} ${id}`;
+    if (!sides.has(key)) sides.set(key, []);
+    sides.get(key)!.push(e);
+    return e;
+  };
+  for (const [i, line] of lines.entries()) {
+    const [s, t] = [boxes.get(line.from), boxes.get(line.to)];
+    if (!s || !t) continue;
+    const [was, wasT] = [served.get(line.from), served.get(line.to)];
+    const ds = was && { x: s.x - was.x, y: s.y - was.y };
+    if (line.points.length >= 2 && wasT && ds && near(ds, { x: t.x - wasT.x, y: t.y - wasT.y })) {
+      const moved = (p: Point) => ({ x: p.x + ds.x, y: p.y + ds.y });
+      const points = line.points.map(moved);
+      routes.set(line.id, { points, label: line.label ? moved(line.label) : pointAlong(points, 0.5), server: true });
+      // Its ends stay where they are, for the lines spread along their sides to keep clear of.
+      for (const [id, box, p, other] of [
+        [line.from, s, points[0], t],
+        [line.to, t, points.at(-1)!, s],
+      ] as const) {
+        const on = sideOf(box, p);
+        if (on) end(i, id, box, on.side, other, on.offset);
+      }
+      continue;
+    }
+    if (line.from === line.to) continue;
+    const side = facing(s, t);
+    // Where the server attached an end, as far along the side, if it is the side that faces now.
+    const port = (at: Rect | undefined, p: Point | undefined, want: Side, box: Rect) => {
+      const on = at && sideOf(at, p);
+      return on?.side === want ? Math.max(0, Math.min(sideLength(box, want), on.offset)) : undefined;
+    };
+    routed.push({
+      line: i,
+      ends: [
+        end(i, line.from, s, side, t, port(was, line.points[0], side, s)),
+        end(i, line.to, t, OPPOSITE[side], s, port(wasT, line.points.at(-1), OPPOSITE[side], t)),
+      ],
+    });
+  }
+
+  // On each side, the ends with no place yet spread evenly between those
+  // with one, in the order of where their other ends lie, then of the lines.
+  for (const all of sides.values()) {
+    if (all.every((e) => e.offset !== undefined)) continue;
+    let run: End[] = [];
+    let lo = 0;
+    const place = (hi: number) => {
+      const [only] = run;
+      // A line alone on its stretch of a side, to a box it shares a stretch
+      // with, runs straight into it, as the server's do.
+      const straight = run.length === 1 ? straightAt(only) : undefined;
+      if (straight !== undefined && straight >= lo + LANE / 2 && straight <= hi - LANE / 2) only.offset = straight;
+      else for (const [k, e] of run.entries()) e.offset = lo + ((hi - lo) * (k + 1)) / (run.length + 1);
+      run = [];
+    };
+    for (const e of [...all].sort((a, b) => a.other - b.other || a.line - b.line)) {
+      if (e.offset === undefined) {
+        run.push(e);
+        continue;
+      }
+      if (run.length) place(e.offset);
+      lo = e.offset;
+    }
+    if (run.length) place(sideLength(all[0].box, all[0].side));
+  }
+
+  // Each re-routed line from its port on one end to its port on the other,
+  // `u` the way between them and `v` across it, its middle stretch at `mid`.
+  type Shape = { line: number; plumb: boolean; u0: number; u1: number; v0: number; v1: number; mid: number };
+  const shapes = routed.map(({ line, ends }): Shape => {
+    const [a, b] = ends.map((e) => pointOn(e.box, e.side, e.offset!));
+    const plumb = plumbSide(ends[0].side);
+    const [u0, u1, v0, v1] = plumb ? [a.y, b.y, a.x, b.x] : [a.x, b.x, a.y, b.y];
+    return { line, plumb, u0, u1, v0, v1, mid: (u0 + u1) / 2 };
+  });
+  // The lines that jog, in groups whose middle stretches run in the same gap,
+  // their spans both ways overlapping.
+  const jogs = shapes.filter((r) => Math.abs(r.v0 - r.v1) >= 0.5);
+  const overlaps = (a0: number, a1: number, b0: number, b1: number) => Math.min(Math.max(a0, a1), Math.max(b0, b1)) > Math.max(Math.min(a0, a1), Math.min(b0, b1));
+  const shares = (p: Shape, q: Shape) => p.plumb === q.plumb && overlaps(p.u0, p.u1, q.u0, q.u1) && overlaps(p.v0, p.v1, q.v0, q.v1);
+  const group = jogs.map((_, i) => i);
+  const root = (i: number): number => (group[i] === i ? i : (group[i] = root(group[i])));
+  for (let i = 0; i < jogs.length; i++) for (let j = i + 1; j < jogs.length; j++) if (shares(jogs[i], jogs[j])) group[root(j)] = root(i);
+  const groups = new Map<number, Shape[]>();
+  for (const [i, r] of jogs.entries()) {
+    if (!groups.has(root(i))) groups.set(root(i), []);
+    groups.get(root(i))!.push(r);
+  }
+  for (const lanes of groups.values()) {
+    if (lanes.length < 2) continue;
+    // The gap they all run in, with a lane each across it, LANE apart, or
+    // closer if it is too narrow. From its near side, the first lane is the
+    // line that starts furthest the way it turns, so none crosses another.
+    const lo = Math.max(...lanes.map((r) => Math.min(r.u0, r.u1)));
+    const hi = Math.min(...lanes.map((r) => Math.max(r.u0, r.u1)));
+    const centre = hi > lo ? (lo + hi) / 2 : lanes.reduce((a, r) => a + r.mid, 0) / lanes.length;
+    const step = hi > lo ? Math.min(LANE, (hi - lo) / lanes.length) : LANE;
+    const turn = (r: Shape) => {
+      const [from, to] = r.u0 <= r.u1 ? [r.v0, r.v1] : [r.v1, r.v0];
+      return Math.sign(to - from) * from;
+    };
+    const sorted = [...lanes].sort((p, q) => turn(q) - turn(p) || p.line - q.line);
+    for (const [k, r] of sorted.entries()) r.mid = centre + (k - (sorted.length - 1) / 2) * step;
+  }
+
+  for (const r of shapes) {
+    const at = (u: number, v: number): Point => (r.plumb ? { x: v, y: u } : { x: u, y: v });
+    const points = Math.abs(r.v0 - r.v1) < 0.5 ? [at(r.u0, r.v0), at(r.u1, r.v0)] : [at(r.u0, r.v0), at(r.mid, r.v0), at(r.mid, r.v1), at(r.u1, r.v1)];
+    routes.set(lines[r.line].id, { points, label: at(r.mid, (r.v0 + r.v1) / 2), server: false });
+  }
+  return routes;
+}
+
+// Where along its side a line's end runs straight into the box at its other
+// end, when the two share a stretch CORNER clear of their corners: halfway
+// between their middles, within it.
+function straightAt(e: { box: Rect; side: Side; far: Rect }) {
+  const other = e.far;
+  const start = (r: Rect) => sideStart(r, e.side);
+  const length = (r: Rect) => sideLength(r, e.side);
+  const shared = [Math.max(start(e.box), start(other)) + CORNER, Math.min(start(e.box) + length(e.box), start(other) + length(other)) - CORNER];
+  if (shared[0] > shared[1]) return undefined;
+  const v = Math.min(shared[1], Math.max(shared[0], (start(e.box) + length(e.box) / 2 + start(other) + length(other) / 2) / 2));
+  return v - start(e.box);
 }
 
 // How long each stretch of a line through `points` is.

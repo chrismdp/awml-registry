@@ -6,8 +6,7 @@
 // scope is only drawn round its parts. Nothing moves once a part is dropped, and nothing overlaps.
 import { describe, expect, it } from "vitest";
 import type { Drawing, Point, Rect } from "@/components/flow/drawing";
-import { headHeight, headWidth } from "@/components/flow/drawing";
-import { lineRoute } from "@/components/flow/FlowCanvas";
+import { headHeight, headWidth, lineRoutes, pointAlong } from "@/components/flow/drawing";
 import { MARGIN, OPENING_REACH, startPhysics, type Body } from "@/components/flow/physics";
 import { layOut } from "@/server/drawing";
 import { laidOut } from "./drawn";
@@ -28,14 +27,16 @@ const bound = (rs: Rect[]) => {
 type State = { bodies: Body[]; hulls: Map<string, Rect>; opened: number; along: Map<string, number> };
 
 // Each line's label where the page draws it with the boxes where they are (FlowCanvas.tsx's
-// LineView): on the server's route while its ends are where the server put them, on its square
-// route once they have moved, and where the physics slid it along it, if it did.
+// LineView): on its route from lineRoutes, the server's while its ends are where the server put
+// them, and where the physics slid it along it, if it did.
 function labelsOf(d: Drawing, s: State) {
   const byId = new Map(s.bodies.map((b) => [b.id, boxOf(b)]));
-  const server = new Map<string, Point>([...d.parts, ...d.scopes].map((b) => [b.id, { x: b.x, y: b.y }]));
+  const routes = lineRoutes(d.lines, new Map([...s.hulls, ...byId]), new Map([...d.parts, ...d.scopes].map((b) => [b.id, b])));
   return d.lines.flatMap((l) => {
-    if (!l.label || l.from === l.to || !byId.has(l.from) || !byId.has(l.to)) return [];
-    const { label: at } = lineRoute(l, byId.get(l.from)!, byId.get(l.to)!, server.get(l.from), server.get(l.to), s.along.get(l.id));
+    const route = routes.get(l.id);
+    if (!l.label || l.from === l.to || !byId.has(l.from) || !byId.has(l.to) || !route) return [];
+    const along = s.along.get(l.id);
+    const at = along === undefined ? route.label : pointAlong(route.points, along);
     return [{ line: l, text: l.label.lines.join(" "), box: { x: at.x - l.label.width / 2, y: at.y - l.label.height / 2, width: l.label.width, height: l.label.height } }];
   });
 }
