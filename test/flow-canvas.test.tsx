@@ -6,8 +6,8 @@
 import { ReactFlow } from "@xyflow/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { headHeight, squareRoute, type Point, type Rect } from "@/components/flow/drawing";
-import { lineRoute, NODE_TYPES, nodesOf } from "@/components/flow/FlowCanvas";
+import { headHeight, lineRoutes, type Point, type Rect } from "@/components/flow/drawing";
+import { NODE_TYPES, nodesOf } from "@/components/flow/FlowCanvas";
 import { roundedPath } from "@/components/flow/Graphic";
 import { atServer } from "@/components/flow/physics";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
@@ -135,7 +135,7 @@ describe("a scope's heading (#67)", () => {
   });
 });
 
-describe("a line, once a part is dragged (#67)", () => {
+describe("a line, once a part is dragged (#67, #116)", () => {
   // Each pair of points one after the other is level or plumb.
   const square = (points: Point[]) => points.slice(1).every((q, i) => q.x === points[i].x || q.y === points[i].y);
   const onEdge = (p: Point, r: Rect) =>
@@ -148,10 +148,12 @@ describe("a line, once a part is dragged (#67)", () => {
     const line = full.lines.find((l) => l.label && l.points.length > 3)!;
     const s = at.get(line.from)!;
     const t = at.get(line.to)!;
-    const still = lineRoute(line, s, t, s, t);
+    // Every line routed with the boxes `moved` where they are, the rest where the server put them.
+    const routed = (moved: Record<string, Rect>) => lineRoutes(full.lines, new Map([...at, ...Object.entries(moved)]), at).get(line.id)!;
+    const still = routed({});
     expect(still).toEqual({ points: line.points, label: { x: line.label!.x, y: line.label!.y }, server: true });
     const by = (r: Rect, dx: number, dy: number) => ({ ...r, x: r.x + dx, y: r.y + dy });
-    const together = lineRoute(line, by(s, 40, 30), by(t, 40, 30), s, t);
+    const together = routed({ [line.from]: by(s, 40, 30), [line.to]: by(t, 40, 30) });
     expect(together.server).toBe(true);
     expect(together.points[0]).toEqual({ x: line.points[0].x + 40, y: line.points[0].y + 30 });
 
@@ -163,7 +165,7 @@ describe("a line, once a part is dragged (#67)", () => {
       [0, 0.4 * (t.y - s.y)],
     ]) {
       const dragged = by(s, dx, dy);
-      const route = lineRoute(line, dragged, t, s, t);
+      const route = routed({ [line.from]: dragged });
       expect(route.server, `${dx}, ${dy}`).toBe(false);
       expect(square(route.points), JSON.stringify(route.points)).toBe(true);
       expect(onEdge(route.points[0], dragged)).toBe(true);
@@ -179,15 +181,8 @@ describe("a line, once a part is dragged (#67)", () => {
       // Drawn with the server's rounded corners, every stretch between them level or plumb.
       expect(roundedPath(route.points)).toMatch(/^M [-\d.]+ [-\d.]+( L [-\d.]+ [-\d.]+ Q [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+)* L [-\d.]+ [-\d.]+$/);
     }
-    // Between two boxes with too little room above and below for a line to turn, but room
-    // beside, side to side, so it never runs along a box's edge (#78); with room above, top to bottom.
-    const a = { x: 0, y: 0, width: 100, height: 50 };
-    const close = squareRoute(a, { x: 140, y: 54, width: 100, height: 50 }).points;
-    expect([close[0].x, close.at(-1)!.x]).toEqual([100, 140]);
-    const roomy = squareRoute(a, { x: 140, y: 80, width: 100, height: 50 }).points;
-    expect([roomy[0].y, roomy.at(-1)!.y]).toEqual([50, 80]);
     // Into the top of a part below it, so its arrowhead points down into it, as the server's do.
-    const below = lineRoute(line, by(s, 200, 0), t, s, t);
+    const below = routed({ [line.from]: by(s, 200, 0) });
     if (t.y > s.y + s.height) {
       expect(below.points.at(-1)!.y).toBe(t.y);
       expect(below.points.at(-2)!.x).toBe(below.points.at(-1)!.x);

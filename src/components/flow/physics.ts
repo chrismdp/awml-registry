@@ -1,4 +1,4 @@
-import { fractionAt, headHeight, headWidth, pointAlong, SCOPE_PAD, squareRoute, type Drawing, type DrawnLabel, type DrawnScope, type Point, type Rect } from "./drawing";
+import { fractionAt, headHeight, headWidth, lineRoutes, pointAlong, SCOPE_PAD, type Drawing, type DrawnLabel, type DrawnScope, type Point, type Rect, type Route } from "./drawing";
 
 // How the drawing moves once the page runs (#78). It starts just where the
 // server laid it out with ELK, which is spaced for it: the opening only tidies
@@ -123,29 +123,10 @@ export function atServer(g: Drawing): { bodies: Body[]; hulls: Map<string, Rect>
   };
 }
 
-// A line between two bodies, as the page draws it (FlowCanvas.tsx's
-// lineRoute): along the server's route while its ends are where the server
-// put them, or have moved together, and otherwise square between them. `at`
-// is where its label is along it, as a fraction of its length, once the label
-// has had to slide; until then it is where the server put it, or halfway.
-type Line = { id: string; from: Body; to: Body; label?: DrawnLabel; points: Point[]; ends: [Point, Point]; at?: number };
-
-const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5;
-function routeOf(l: Line): { points: Point[]; label: Point } {
-  const [s, t] = [boxOf(l.from), boxOf(l.to)];
-  const ds = { x: s.x - l.ends[0].x, y: s.y - l.ends[0].y };
-  if (l.points.length >= 2 && near(ds, { x: t.x - l.ends[1].x, y: t.y - l.ends[1].y })) {
-    const moved = (p: Point) => ({ x: p.x + ds.x, y: p.y + ds.y });
-    const points = l.points.map(moved);
-    return { points, label: l.label ? moved(l.label) : pointAlong(points, 0.5) };
-  }
-  return squareRoute(s, t);
-}
-function labelBox(l: Line): Rect {
-  const route = routeOf(l);
-  const p = l.at === undefined ? route.label : pointAlong(route.points, l.at);
-  return { x: p.x - l.label!.width / 2, y: p.y - l.label!.height / 2, width: l.label!.width, height: l.label!.height };
-}
+// A line between two bodies. `at` is where its label is along it, as a
+// fraction of its length, once the label has had to slide; until then it is
+// where its route puts it.
+type Line = { id: string; from: Body; to: Body; label?: DrawnLabel; at?: number };
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const lerpRect = (a: Rect, b: Rect, t: number): Rect => ({
@@ -183,9 +164,29 @@ export function startPhysics(
   const lines: Line[] = g.lines.flatMap((l) => {
     const [from, to] = [byId.get(l.from), byId.get(l.to)];
     if (!from || !to || from === to) return [];
-    return [{ id: l.id, from, to, label: l.label, points: l.points, ends: [boxOf(from), boxOf(to)] as [Point, Point] }];
+    return [{ id: l.id, from, to, label: l.label }];
   });
   const labelled = lines.filter((l) => l.label);
+
+  // Every line's route with the bodies where they are, as the page draws it
+  // (lineRoutes), so a label is judged and slid on the line as drawn (#116).
+  // Lines are routed together, so the routes are worked out again only once
+  // a body has moved, not for each label looked at.
+  const served = new Map<string, Rect>([...bodies.map((b) => [b.id, boxOf(b)] as const), ...server.hulls]);
+  let routed: { at: number[]; routes: Map<string, Route> } | undefined;
+  const routeOf = (l: Line) => {
+    const at = bodies.flatMap((b) => [b.x, b.y]);
+    if (!routed || at.some((v, i) => v !== routed!.at[i])) {
+      const boxes = new Map<string, Rect>([...hulls(), ...bodies.map((b) => [b.id, boxOf(b)] as const)]);
+      routed = { at, routes: lineRoutes(g.lines, boxes, served) };
+    }
+    return routed.routes.get(l.id)!;
+  };
+  const labelBox = (l: Line): Rect => {
+    const route = routeOf(l);
+    const p = l.at === undefined ? route.label : pointAlong(route.points, l.at);
+    return { x: p.x - l.label!.width / 2, y: p.y - l.label!.height / 2, width: l.label!.width, height: l.label!.height };
+  };
   const along = () => new Map(labelled.flatMap((l) => (l.at === undefined ? [] : [[l.id, l.at] as const])));
 
   // Slides each label in `which` that overlaps a part, or a label not in

@@ -8,13 +8,11 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
-  useInternalNode,
   useNodesInitialized,
   useNodesState,
   useReactFlow,
   type Edge,
   type EdgeProps,
-  type InternalNode,
   type Node,
   type NodeMouseHandler,
   type NodeProps,
@@ -24,8 +22,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import type { PartLink } from "@/server/part-links";
 import {
   connections,
+  lineRoutes,
   pointAlong,
-  squareRoute,
   type Connected,
   type Drawing,
   type DrawnLine,
@@ -34,6 +32,7 @@ import {
   type Note,
   type Point,
   type Rect,
+  type Route,
 } from "./drawing";
 import { LabelGraphic, LineGraphic, NoteIcon, NOTE_R, PartGraphic, roundedPath, ScopeGraphic } from "./Graphic";
 import { startPhysics, type Body, type Physics } from "./physics";
@@ -72,9 +71,10 @@ type Shared = {
 type PartData = Shared & { part: DrawnPart };
 type ScopeData = Shared & { scope: DrawnScope; hull?: boolean };
 type NotesData = Shared & { whole: Note[] };
-// `along`: where its label has slid to along it, as a fraction of its length;
-// `lit`: whether it is connected to the part lit.
-type LineData = { id: string; line: DrawnLine; from?: Point; to?: Point; along?: number; lit?: boolean };
+// `route`: how it runs, with its ends where they are; `along`: where its label
+// has slid to along it, as a fraction of its length; `lit`: whether it is
+// connected to the part lit.
+type LineData = { id: string; line: DrawnLine; route?: Route; along?: number; lit?: boolean };
 type PartNode = Node<PartData, "part">;
 type ScopeNode = Node<ScopeData, "scope">;
 type NotesNode = Node<NotesData, "notes">;
@@ -274,7 +274,8 @@ function Canvas(p: FlowCanvasProps) {
   const light = useCallback((change: Lights) => setLit(litOf(Object.assign(lights.current, change))), []);
   const near = lit === undefined ? undefined : connected.get(lit);
   const shownNodes = useMemo(() => litNodes(nodes, near), [nodes, near]);
-  const shownEdges = useMemo(() => litLines(edges, near), [edges, near]);
+  const served = useMemo(() => servedOf(drawing), [drawing]);
+  const shownEdges = useMemo(() => litLines(routedLines(edges, nodes, drawing, served), near), [edges, nodes, drawing, served, near]);
   // The part, or box that holds nothing, an element is in.
   const partAt = (el: EventTarget | null) => {
     const id = (el as Element | null)?.closest?.(".react-flow__node")?.getAttribute("data-id");
@@ -510,15 +511,29 @@ export function litLines(edges: FlowEdge[], near?: Connected): FlowEdge[] {
   return edges.map((e) => (near.lines.has(e.id) ? { ...e, data: { ...e.data!, lit: true } } : e));
 }
 
+// Where the server put each part and scope.
+const servedOf =(d: Drawing) => new Map<string, Rect>([...d.parts, ...d.scopes].map((b) => [b.id, b]));
+
+// The lines, each on the server's route.
 export function linesOf(d: Drawing, id: string): FlowEdge[] {
-  const at = new Map([...d.parts, ...d.scopes].map((b) => [b.id, { x: b.x, y: b.y }]));
+  const routes = lineRoutes(d.lines, servedOf(d), servedOf(d));
   return d.lines.map((line) => ({
     id: line.id,
     source: line.from,
     target: line.to,
     type: "line",
-    data: { id, line, from: at.get(line.from), to: at.get(line.to) },
+    data: { id, line, route: routes.get(line.id) },
   }));
+}
+
+// The lines on the routes they take with the nodes where they are (lineRoutes
+// in drawing.ts), which the physics judges labels by too. A line whose route
+// is as it was is left as it is, so React Flow redraws only those that moved.
+export function routedLines(edges: FlowEdge[], nodes: FlowNode[], d: Drawing, served: Map<string, Rect>): FlowEdge[] {
+  const boxes = new Map(nodes.map((n) => [n.id, { ...n.position, width: n.width ?? 0, height: n.height ?? 0 }]));
+  const routes = lineRoutes(d.lines, boxes, served);
+  const same = (a?: Route, b?: Route) => a === b || (a && b && a.points.length === b.points.length && a.points.every((p, i) => p.x === b.points[i].x && p.y === b.points[i].y) && a.label.x === b.label.x && a.label.y === b.label.y);
+  return edges.map((e) => (same(e.data?.route, routes.get(e.id)) ? e : { ...e, data: { ...e.data!, route: routes.get(e.id) } }));
 }
 
 // The note marks of a part or a scope: the same icon as the server's SVG, as a
@@ -598,53 +613,16 @@ function ScopeNodeView({ data, width = 0, height = 0 }: NodeProps<ScopeNode>) {
   );
 }
 
-// A node's box in the drawing's coordinates.
-function rectOf(n: InternalNode) {
-  const { x, y } = n.internals.positionAbsolute;
-  return { x, y, width: n.measured.width ?? n.width ?? 0, height: n.measured.height ?? n.height ?? 0 };
-}
-
-const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5;
-
-// How a line runs between the boxes of its ends, `s` and `t`: along the
-// server's route while neither end has moved from where the server put it,
-// `from` and `to` (or both have moved together), and otherwise square, as the
-// server's routes are (#67): out of the side of one that faces the other,
-// across halfway between them, and into the other, its label halfway along.
-// A label the physics has slid along its line is `along` of the way along it.
-// So the drawing first shows each line as the server's SVG does, and a line
-// stays square as the physics moves its ends.
-export function lineRoute(
-  line: DrawnLine,
-  s: Rect,
-  t: Rect,
-  from?: Point,
-  to?: Point,
-  along?: number,
-): { points: Point[]; label: Point; server: boolean } {
-  const placed = (route: { points: Point[]; label: Point }) => (along === undefined ? route.label : pointAlong(route.points, along));
-  if (line.points.length >= 2 && from && to) {
-    const ds = { x: s.x - from.x, y: s.y - from.y };
-    if (near(ds, { x: t.x - to.x, y: t.y - to.y })) {
-      const moved = (p: Point) => ({ x: p.x + ds.x, y: p.y + ds.y });
-      const points = line.points.map(moved);
-      return { points, label: placed({ points, label: line.label ? moved(line.label) : pointAlong(points, 0.5) }), server: true };
-    }
-  }
-  const route = squareRoute(s, t);
-  return { points: route.points, label: placed(route), server: false };
-}
-
-// A line, routed by lineRoute, so it follows a dragged part. Each label is
-// drawn above every line, as the server's SVG draws them, so no other line
-// crosses over it (#78). A line connected to the part lit is marked, with its
-// label, so flow.css knocks back the others, arrowheads and all.
-function LineView({ source, target, data }: EdgeProps<FlowEdge>) {
-  const s = useInternalNode(source);
-  const t = useInternalNode(target);
-  if (!s || !t || !data) return null;
+// A line along its route (lineRoutes in drawing.ts), so it follows a dragged
+// part, its label where the physics has slid it along it, `along` of the
+// way, if it has. Each label is drawn above every line, as the server's SVG
+// draws them, so no other line crosses over it (#78). A line connected to the
+// part lit is marked, with its label, so flow.css knocks back the others,
+// arrowheads and all.
+function LineView({ data }: EdgeProps<FlowEdge>) {
+  if (!data?.route) return null;
   const { line } = data;
-  const route = lineRoute(line, rectOf(s), rectOf(t), data.from, data.to, data.along);
+  const route = { points: data.route.points, label: data.along === undefined ? data.route.label : pointAlong(data.route.points, data.along) };
   const lit = data.lit ? " lit" : "";
   return (
     <>
