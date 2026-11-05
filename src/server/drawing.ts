@@ -228,18 +228,21 @@ const NOTES_STRIP = 36;
 // The most a drawing may hold for the server to lay it out. ELK holds the
 // Worker while it works, and takes longer the more it lays out: most of all
 // for lines that cross many layers, and for scopes nested deep. A drawing
-// beyond these isn't laid out at all. Measured in workerd on 2026-10-27, one
-// layout of 120 lines, each as long as it can be, took 350 ms with no nesting
-// and up to 410 ms with scopes nested 8 deep; the review measured 560 ms at 8
-// deep, 1.3 s at 16 and 6.5 s at 50. A page lays out the whole drawing and
-// Flow only one after the other, and they are the same size when Flow only
-// leaves nothing out, so at these limits a page's first view takes about a
-// second at worst; its layouts are kept after that. The largest workflow on
-// awml.io holds 53 parts and 73 lines, nested 2 deep. A note isn't laid out,
+// beyond these isn't laid out at all. Raised from 80 parts and 120 lines on
+// 2026-11-05 (issue #117), so the largest graph on awml.io, the
+// operating-model system's map, draws: 82 parts and 22 workflows' boxes, 104
+// against the limit of parts, and 167 lines, laid out in 0.65 s. Measured on
+// Node on 2026-11-05, one layout at these limits, 150 parts and scopes and
+// 250 lines, most of them crossing many layers, took about 1 s with no
+// nesting and up to 2.5 s with scopes nested 8 deep. A page lays out the
+// whole drawing and Flow only one after the other, and they are the same size
+// when Flow only leaves nothing out, so at these limits a page's first view
+// takes about 5 s at worst, on a graph made to be slow; its layouts are kept
+// after that. Real graphs cost far less, as the map does. A note isn't laid out,
 // but each counts as a part, and each part or scope it is on as a line. The
 // limits also bound what the kept layouts hold. `depth` is how deep scopes
 // nest: 1 when none is inside another.
-export const LIMITS = { parts: 80, lines: 120, characters: 20_000, depth: 8 };
+export const LIMITS = { parts: 150, lines: 250, characters: 20_000, depth: 8 };
 
 // Whether a graph is beyond LIMITS: its parts, scopes and notes, its lines
 // and the notes' ties, the characters of every label in it, and how deep its

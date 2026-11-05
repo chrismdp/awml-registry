@@ -96,15 +96,16 @@ describe("a drawing too big to lay out", () => {
         })),
       });
     // The chain's steps, its trigger and its scope, and a note: the limit of parts.
+    expect(LIMITS.parts).toBe(150);
     const steps = LIMITS.parts - 3;
     expect("undrawn" in (await layOut(noted(steps, 1, 1, "k")))).toBe(false);
     expect(await layOut(noted(steps, 2, 1, "l"))).toEqual({ undrawn: "too big" });
-    // A chain of sixty steps has sixty lines, and a note on each step is sixty more: the
-    // limit of lines. One more step is one line, and too many.
-    expect(LIMITS.lines).toBe(120);
-    expect("undrawn" in (await layOut(noted(60, 1, 60, "m")))).toBe(false);
-    expect(await layOut(noted(61, 1, 60, "o"))).toEqual({ undrawn: "too big" });
-    expect("undrawn" in (await layOut(noted(61, 1, 0, "p")))).toBe(false);
+    // A chain of 125 steps has 125 lines, and a note on each step is 125 more: the limit of
+    // lines. One more step is one line, and too many.
+    expect(LIMITS.lines).toBe(250);
+    expect("undrawn" in (await layOut(noted(125, 1, 125, "m")))).toBe(false);
+    expect(await layOut(noted(126, 1, 125, "o"))).toEqual({ undrawn: "too big" });
+    expect("undrawn" in (await layOut(noted(126, 1, 0, "p")))).toBe(false);
   });
 
   it("is kept as too big, so its graph isn't read again", async () => {
