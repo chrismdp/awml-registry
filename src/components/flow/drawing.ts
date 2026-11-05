@@ -302,8 +302,10 @@ const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y -
 // still faces the other end; the other ends on a side spread evenly along it,
 // between the ones kept, in the order of where their other ends lie, so they
 // don't cross; and lines whose middle stretch runs in the same gap LANE apart,
-// side by side. A line's label is halfway along its middle stretch. Each line
-// is looked at a few times, and each pair that may share a gap once.
+// side by side, and clear of the server's lines that run in it. A line's
+// label is halfway along its middle stretch. Each line is looked at a few
+// times, and each pair that may share a gap once, as is each group of lines
+// in a gap with each stretch of the server's routes kept.
 export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served: Map<string, Rect>): Map<string, Route> {
   const routes = new Map<string, Route>();
   // One end of a line on a side of a box: how far along the side, once
@@ -356,16 +358,15 @@ export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served:
 
   // On each side, the ends with no place yet spread evenly between those
   // with one, in the order of where their other ends lie, then of the lines.
+  // An end alone on its stretch of a side, `lo` to `hi`, is placed once the
+  // rest are.
+  const lone: { e: End; lo: number; hi: number }[] = [];
   for (const all of sides.values()) {
     if (all.every((e) => e.offset !== undefined)) continue;
     let run: End[] = [];
     let lo = 0;
     const place = (hi: number) => {
-      const [only] = run;
-      // A line alone on its stretch of a side, to a box it shares a stretch
-      // with, runs straight into it, as the server's do.
-      const straight = run.length === 1 ? straightAt(only) : undefined;
-      if (straight !== undefined && straight >= lo + LANE / 2 && straight <= hi - LANE / 2) only.offset = straight;
+      if (run.length === 1) lone.push({ e: run[0], lo, hi });
       else for (const [k, e] of run.entries()) e.offset = lo + ((hi - lo) * (k + 1)) / (run.length + 1);
       run = [];
     };
@@ -378,6 +379,17 @@ export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served:
       lo = e.offset;
     }
     if (run.length) place(sideLength(all[0].box, all[0].side));
+  }
+  // A line alone on its stretch of a side, to a box it shares a stretch
+  // with, runs straight into it, as the server's do: in line with its other
+  // end, if that has its place within the stretch they share, or else
+  // halfway between their middles.
+  const other = new Map(routed.flatMap(({ ends: [a, b] }) => [[a, b] as const, [b, a] as const]));
+  for (const { e, lo, hi } of lone) {
+    const far = other.get(e)!;
+    const clear = (v: number | undefined) => v !== undefined && v >= lo + LANE / 2 && v <= hi - LANE / 2;
+    const inLine = far.offset === undefined ? undefined : straightAt(e, sideStart(far.box, far.side) + far.offset);
+    e.offset = [inLine, straightAt(e)].find(clear) ?? (lo + hi) / 2;
   }
 
   // Each re-routed line from its port on one end to its port on the other,
@@ -402,13 +414,34 @@ export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served:
     if (!joins) groups.push({ lanes: [r], lo, hi });
     else Object.assign(joins, { lanes: [...joins.lanes, r], lo: Math.max(joins.lo, lo), hi: Math.min(joins.hi, hi) });
   }
+  // The level and plumb stretches of the lines that keep the server's route,
+  // `u` where each runs and `v0` to `v1` its length.
+  const kept = [...routes.values()].flatMap(({ points }) =>
+    points.slice(1).flatMap((q, i) => {
+      const p = points[i];
+      if (Math.abs(p.y - q.y) < 0.5) return [{ plumb: true, u: p.y, v0: p.x, v1: q.x }];
+      if (Math.abs(p.x - q.x) < 0.5) return [{ plumb: false, u: p.x, v0: p.y, v1: q.y }];
+      return [];
+    }),
+  );
   for (const { lanes, lo, hi } of groups) {
-    if (lanes.length < 2) continue;
-    // The gap they all run in, with a lane each across it, LANE apart, or
-    // closer if it is too narrow. From its near side, the first lane is the
-    // line that starts furthest the way it turns, so none crosses another.
-    const centre = (lo + hi) / 2;
-    const step = Math.min(LANE, (hi - lo) / lanes.length);
+    // The server's lines that run in the gap across any of these keep their
+    // lanes, which split it; these all run in the part of it that gives them
+    // the most room, nearest its middle if two give as much. Each part is
+    // `a` to `b`, `pa` and `pb` the lanes' room at either end: a whole lane
+    // beside a server's line, and half one at the gap's edge.
+    const fixed = [...new Set(kept.filter((k) => k.plumb === lanes[0].plumb && k.u > lo && k.u < hi && lanes.some((r) => overlaps(k.v0, k.v1, r.v0, r.v1))).map((k) => k.u))].sort((p, q) => p - q);
+    if (lanes.length < 2 && !fixed.length) continue;
+    const parts = [lo, ...fixed].map((a, i, all) => {
+      const b = [...fixed, hi][i];
+      const [pa, pb] = [i ? 1 : 0.5, i < fixed.length ? 1 : 0.5];
+      const step = Math.min(LANE, (b - a) / (lanes.length - 1 + pa + pb));
+      return { step, centre: (a + pa * step + b - pb * step) / 2 };
+    });
+    const { step, centre } = parts.reduce((p, q) => (q.step > p.step || (q.step === p.step && Math.abs(q.centre - (lo + hi) / 2) < Math.abs(p.centre - (lo + hi) / 2)) ? q : p));
+    // A lane each across it, LANE apart, or closer if it is too narrow. From
+    // its near side, the first lane is the line that starts furthest the way
+    // it turns, so none crosses another.
     const turn = (r: Shape) => {
       const [from, to] = r.u0 <= r.u1 ? [r.v0, r.v1] : [r.v1, r.v0];
       return Math.sign(to - from) * from;
@@ -426,14 +459,15 @@ export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served:
 }
 
 // Where along its side a line's end runs straight into the box at its other
-// end, when the two share a stretch CORNER clear of their corners: halfway
-// between their middles, within it.
-function straightAt(e: { box: Rect; side: Side; far: Rect }) {
+// end, when the two share a stretch CORNER clear of their corners: at `at`,
+// if given and within it, or else halfway between their middles, within it.
+function straightAt(e: { box: Rect; side: Side; far: Rect }, at?: number) {
   const other = e.far;
   const start = (r: Rect) => sideStart(r, e.side);
   const length = (r: Rect) => sideLength(r, e.side);
   const shared = [Math.max(start(e.box), start(other)) + CORNER, Math.min(start(e.box) + length(e.box), start(other) + length(other)) - CORNER];
   if (shared[0] > shared[1]) return undefined;
+  if (at !== undefined) return at >= shared[0] && at <= shared[1] ? at - start(e.box) : undefined;
   const v = Math.min(shared[1], Math.max(shared[0], (start(e.box) + length(e.box) / 2 + start(other) + length(other) / 2) / 2));
   return v - start(e.box);
 }

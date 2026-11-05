@@ -141,6 +141,48 @@ describe("a line whose ends have moved apart (#116)", () => {
     }
   });
 
+  it("runs a re-routed line's middle stretch apart from that of a line that kept the server's route in the same gap", () => {
+    // `k` is unmoved, its middle stretch halfway down the gap; `m`'s lower end is dragged right, so
+    // its middle stretch, halfway down the same gap, would lie on `k`'s.
+    const [a, c, b, d] = [
+      { x: 0, y: 0, width: 100, height: 60 },
+      { x: 150, y: 0, width: 100, height: 60 },
+      { x: 0, y: 200, width: 100, height: 60 },
+      { x: 300, y: 200, width: 100, height: 60 },
+    ];
+    const k = line("k", "c", "d", [
+      { x: 200, y: 60 },
+      { x: 200, y: 130 },
+      { x: 350, y: 130 },
+      { x: 350, y: 200 },
+    ]);
+    const m = line("m", "a", "b", [
+      { x: 50, y: 60 },
+      { x: 50, y: 200 },
+    ]);
+    const routes = lineRoutes([k, m], boxes({ a, c, b: by(b, 180, 0), d }), boxes({ a, c, b, d }));
+    const [kept, moved] = [routes.get("k")!, routes.get("m")!];
+    expect(kept.points).toEqual(k.points);
+    expect(moved.server).toBe(false);
+    expect(moved.points).toHaveLength(4);
+    for (const s of stretches(kept.points)) for (const t of stretches(moved.points)) expect(alongside(s, t), JSON.stringify([s, t])).toBe(false);
+    expect(Math.abs(moved.points[1].y - 130)).toBeGreaterThanOrEqual(14);
+    expect(moved.points[1].y).toBeGreaterThan(60);
+    expect(moved.points[1].y).toBeLessThan(200);
+  });
+
+  it("runs a line alone on its side straight from where its other end was spread along a busy side", () => {
+    // Two lines out of the bottom of `s`, spread along it; the one into `t` is alone on `t`'s top.
+    const s = { x: 0, y: 0, width: 300, height: 60 };
+    const t = { x: 0, y: 200, width: 160, height: 60 };
+    const u = { x: 220, y: 200, width: 100, height: 60 };
+    const routes = lineRoutes([line("st", "s", "t"), line("su", "s", "u")], boxes({ s, t, u }), new Map());
+    const st = routes.get("st")!.points;
+    expect(st, JSON.stringify(st)).toHaveLength(2);
+    expect(st[0]).toEqual({ x: 100, y: 60 });
+    expect(st[1]).toEqual({ x: 100, y: 200 });
+  });
+
   it("joins boxes with too little room above and below for a line to turn, but room beside, side to side (#78)", () => {
     const routes = (t: Rect) => lineRoutes([line("l", "a", "t")], boxes({ a: { x: 0, y: 0, width: 100, height: 50 }, t }), new Map()).get("l")!.points;
     const close = routes({ x: 140, y: 54, width: 100, height: 50 });
