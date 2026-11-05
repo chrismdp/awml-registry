@@ -121,6 +121,26 @@ describe("a line whose ends have moved apart (#116)", () => {
         for (const s of stretches(p)) for (const t of stretches(q)) expect(crossing(s, t) || alongside(s, t), JSON.stringify([s, t])).toBe(false);
   });
 
+  it("runs each line's middle stretch between its own ends, when a line shares a gap with two that share none", () => {
+    // `a` goes down into `x`, `c` out of the bottom of `x`, and `b` beside them both, its gap
+    // overlapping each of theirs: `a` and `c` mustn't be put in one gap with it and run through `x`.
+    const now = boxes({
+      p: { x: 0, y: 0, width: 100, height: 60 },
+      x: { x: 300, y: 200, width: 100, height: 60 },
+      y: { x: 0, y: 400, width: 100, height: 60 },
+      q: { x: 150, y: 40, width: 100, height: 60 },
+      r: { x: 500, y: 300, width: 100, height: 60 },
+    });
+    const routes = lineRoutes([line("a", "p", "x"), line("b", "q", "r"), line("c", "x", "y")], now, new Map());
+    for (const id of ["a", "b", "c"]) {
+      const { points } = routes.get(id)!;
+      expect(points).toHaveLength(4);
+      const [lo, hi] = [Math.min(points[0].y, points[3].y), Math.max(points[0].y, points[3].y)];
+      expect(points[1].y, `${id}: ${JSON.stringify(points)}`).toBeGreaterThan(lo);
+      expect(points[1].y, `${id}: ${JSON.stringify(points)}`).toBeLessThan(hi);
+    }
+  });
+
   it("joins boxes with too little room above and below for a line to turn, but room beside, side to side (#78)", () => {
     const routes = (t: Rect) => lineRoutes([line("l", "a", "t")], boxes({ a: { x: 0, y: 0, width: 100, height: 50 }, t }), new Map()).get("l")!.points;
     const close = routes({ x: 140, y: 54, width: 100, height: 50 });

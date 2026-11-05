@@ -389,28 +389,26 @@ export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served:
     const [u0, u1, v0, v1] = plumb ? [a.y, b.y, a.x, b.x] : [a.x, b.x, a.y, b.y];
     return { line, plumb, u0, u1, v0, v1, mid: (u0 + u1) / 2 };
   });
-  // The lines that jog, in groups whose middle stretches run in the same gap,
-  // their spans both ways overlapping.
+  // The lines that jog, in groups whose middle stretches run in the same gap:
+  // each overlapping another of its group across, and all their spans
+  // between their ends sharing one stretch, `lo` to `hi`, so every lane is
+  // between its own line's ends. A line joins the first group it can.
   const jogs = shapes.filter((r) => Math.abs(r.v0 - r.v1) >= 0.5);
   const overlaps = (a0: number, a1: number, b0: number, b1: number) => Math.min(Math.max(a0, a1), Math.max(b0, b1)) > Math.max(Math.min(a0, a1), Math.min(b0, b1));
-  const shares = (p: Shape, q: Shape) => p.plumb === q.plumb && overlaps(p.u0, p.u1, q.u0, q.u1) && overlaps(p.v0, p.v1, q.v0, q.v1);
-  const group = jogs.map((_, i) => i);
-  const root = (i: number): number => (group[i] === i ? i : (group[i] = root(group[i])));
-  for (let i = 0; i < jogs.length; i++) for (let j = i + 1; j < jogs.length; j++) if (shares(jogs[i], jogs[j])) group[root(j)] = root(i);
-  const groups = new Map<number, Shape[]>();
-  for (const [i, r] of jogs.entries()) {
-    if (!groups.has(root(i))) groups.set(root(i), []);
-    groups.get(root(i))!.push(r);
+  const groups: { lanes: Shape[]; lo: number; hi: number }[] = [];
+  for (const r of jogs) {
+    const [lo, hi] = [Math.min(r.u0, r.u1), Math.max(r.u0, r.u1)];
+    const joins = groups.find((g) => g.lanes[0].plumb === r.plumb && Math.min(g.hi, hi) > Math.max(g.lo, lo) && g.lanes.some((q) => overlaps(q.v0, q.v1, r.v0, r.v1)));
+    if (!joins) groups.push({ lanes: [r], lo, hi });
+    else Object.assign(joins, { lanes: [...joins.lanes, r], lo: Math.max(joins.lo, lo), hi: Math.min(joins.hi, hi) });
   }
-  for (const lanes of groups.values()) {
+  for (const { lanes, lo, hi } of groups) {
     if (lanes.length < 2) continue;
     // The gap they all run in, with a lane each across it, LANE apart, or
     // closer if it is too narrow. From its near side, the first lane is the
     // line that starts furthest the way it turns, so none crosses another.
-    const lo = Math.max(...lanes.map((r) => Math.min(r.u0, r.u1)));
-    const hi = Math.min(...lanes.map((r) => Math.max(r.u0, r.u1)));
-    const centre = hi > lo ? (lo + hi) / 2 : lanes.reduce((a, r) => a + r.mid, 0) / lanes.length;
-    const step = hi > lo ? Math.min(LANE, (hi - lo) / lanes.length) : LANE;
+    const centre = (lo + hi) / 2;
+    const step = Math.min(LANE, (hi - lo) / lanes.length);
     const turn = (r: Shape) => {
       const [from, to] = r.u0 <= r.u1 ? [r.v0, r.v1] : [r.v1, r.v0];
       return Math.sign(to - from) * from;
