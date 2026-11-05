@@ -3,7 +3,7 @@
 # tests' log is untrusted, read-only data. The opener gate, quiet exits for a moved head or closed
 # pull request, two-commit cap, guarded-file offer and referral back all stay. A finding or failing
 # test that conflicts with the issue's decisions is referred back; that session changes nothing.
-awml: "0.10"
+awml: "0.11"
 title: A failed pull request is fixed
 description: |
   One session fixes failed tests and both reviews' findings, or refers a decision back to the

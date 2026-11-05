@@ -5184,14 +5184,14 @@ describe("the factory's drawings", () => {
     expect(drawing("land-a-pull-request").parts.find(p => p.id === "tested")?.untrusted).toBe(true);
   });
 
-  it("passes AWML 0.10's checks for all five together", async () => {
+  it("passes AWML 0.11's checks for all five together", async () => {
     const { createAWML } = await import("../vendor/awml/awml.js");
     const engine = await createAWML(readFileSync(join(__dirname, "../vendor/awml/awml.wasm")));
     const files = readdirSync(join(github, "drawings")).filter(file => file.endsWith(".yaml")).map(file => ({
       file: `.github/drawings/${file}`, source: readFileSync(join(github, "drawings", file), "utf8"),
     }));
     expect(files).toHaveLength(5);
-    for (const file of files) expect((parse(file.source) as { awml: string }).awml).toBe("0.10");
+    for (const file of files) expect((parse(file.source) as { awml: string }).awml).toBe("0.11");
     const checked = engine.checks(files) as { checks: { result: string; mistakes: unknown[] }[] };
     expect(checked.checks.filter(c => c.result === "fail" || c.result === "error")).toEqual([]);
   });
