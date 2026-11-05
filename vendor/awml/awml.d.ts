@@ -39,8 +39,9 @@ export interface AWML {
   // Given several workflows, the map: one box per workflow, the parts they
   // share drawn once. The platform descriptions given, each paired with the
   // block that names its id, show which of a platform view's code steps a
-  // model carries out (AWML 0.10.1).
-  draw(source: Sources, implementation?: string, descriptions?: Sources): string;
+  // model carries out (AWML 0.10.1). With detail, each part that has a
+  // description gets a note tied to it, headed by its label (AWML 0.11).
+  draw(source: Sources, implementation?: string, descriptions?: Sources, detail?: boolean): string;
   // What draw draws, with nothing laid out, as awml graph does: one
   // workflow's view, or the map of several given together, as JSON. It takes
   // and throws what draw does. No text in it is escaped: every label is as
