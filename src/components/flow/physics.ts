@@ -10,7 +10,9 @@ import { fractionAt, headHeight, headWidth, lineRoutes, pointAlong, SCOPE_PAD, t
 // parts deep at most. A label is never pushed off its line: one that is
 // overlapped slides along its line to the nearest place clear. A scope is only
 // ever drawn round its parts, with its padding and heading: it never moves a
-// part and never pushes anything. Nothing moves once a part is dropped.
+// part and never pushes anything. Nothing moves once a part is dropped. A
+// part whose description opens grows where it is, and what it then overlaps
+// is nudged out of its way as for a drag (#114).
 
 // A box that moves: a part, or a scope with no parts, by its centre. `scopes`
 // are the scopes it is in, the nearest first.
@@ -29,6 +31,10 @@ export type Physics = {
   hold(id: string, at: Point): void;
   // Leaves it where it was dropped.
   drop(id: string): void;
+  // Gives a part a new size where it is, its top and its middle kept, as its
+  // description opens or closes (#114), and nudges what it then overlaps out
+  // of its way.
+  resize(id: string, size: { width: number; height: number }): void;
   stop(): void;
 };
 
@@ -175,7 +181,7 @@ export function startPhysics(
   const served = new Map<string, Rect>([...bodies.map((b) => [b.id, boxOf(b)] as const), ...server.hulls]);
   let routed: { at: number[]; routes: Map<string, Route> } | undefined;
   const routeOf = (l: Line) => {
-    const at = bodies.flatMap((b) => [b.x, b.y]);
+    const at = bodies.flatMap((b) => [b.x, b.y, b.width, b.height]);
     if (!routed || at.some((v, i) => v !== routed!.at[i])) {
       const boxes = new Map<string, Rect>([...hulls(), ...bodies.map((b) => [b.id, boxOf(b)] as const)]);
       routed = { at, routes: lineRoutes(g.lines, boxes, served) };
@@ -381,50 +387,70 @@ export function startPhysics(
       for (const l of labelled) l.at = before.labels.get(l);
       b.x = at.x;
       b.y = at.y;
-      let moved = nudge(b);
-      const touched = () => labelled.filter((l) => moved.includes(l.from) || moved.includes(l.to) || moved.some((m) => overlap(labelBox(l), boxOf(m), MARGIN.label)));
-      slide(touched());
-      // A label with nowhere clear on its line takes the space it needs: a
-      // part near the dragged one that covers it makes way, or, if the
-      // dragged part covers it, its line moves out of the way, ends and all,
-      // when both are near.
-      for (let round = 0; round < 2; round++) {
-        const makeWay: Body[] = [];
-        for (const l of touched()) {
-          const r = labelBox(l);
-          for (const q of bodies) {
-            if (!overlap(r, boxOf(q))) continue;
-            const ends = [l.from, l.to];
-            const near = (o: Body) => o !== b && gapOf(boxOf(o), boxOf(b)) <= REACH;
-            if (q !== b && !ends.includes(q) && near(q)) {
-              const by = clearOf(r, q, MARGIN.label, () => false);
-              if (by) {
-                q.x += by.x;
-                q.y += by.y;
-                makeWay.push(q);
-              }
-            } else if (q === b && ends.every(near)) {
-              const by = clearOf(boxOf(b), { ...l.from, ...r, x: r.x + r.width / 2, y: r.y + r.height / 2 }, MARGIN.label, () => false);
-              if (by)
-                for (const e of ends) {
-                  e.x += by.x;
-                  e.y += by.y;
-                  makeWay.push(e);
-                }
-            }
-          }
-        }
-        if (!makeWay.length) break;
-        moved = [...new Set([...moved, ...nudge(b, makeWay)])];
-        slide(touched());
-      }
+      makeRoom(b);
       told();
     },
     drop() {
       before = undefined;
     },
+    resize(id, size) {
+      const b = byId.get(id);
+      if (!b) return;
+      opened = true;
+      opening++;
+      before = undefined;
+      const top = b.y - b.height / 2;
+      b.width = size.width;
+      b.height = size.height;
+      b.y = top + size.height / 2;
+      makeRoom(b);
+      told();
+    },
     stop() {
       opening++;
     },
   };
+
+  // Makes room for `b` where it now is: what it overlaps is nudged out of its
+  // way, and each label it moved or covers slides along its line or takes the
+  // space it needs.
+  function makeRoom(b: Body) {
+    let moved = nudge(b);
+    const touched = () => labelled.filter((l) => moved.includes(l.from) || moved.includes(l.to) || moved.some((m) => overlap(labelBox(l), boxOf(m), MARGIN.label)));
+    slide(touched());
+    // A label with nowhere clear on its line takes the space it needs: a
+    // part near the moved one that covers it makes way, or, if the moved
+    // part covers it, its line moves out of the way, ends and all, when both
+    // are near.
+    for (let round = 0; round < 2; round++) {
+      const makeWay: Body[] = [];
+      for (const l of touched()) {
+        const r = labelBox(l);
+        for (const q of bodies) {
+          if (!overlap(r, boxOf(q))) continue;
+          const ends = [l.from, l.to];
+          const near = (o: Body) => o !== b && gapOf(boxOf(o), boxOf(b)) <= REACH;
+          if (q !== b && !ends.includes(q) && near(q)) {
+            const by = clearOf(r, q, MARGIN.label, () => false);
+            if (by) {
+              q.x += by.x;
+              q.y += by.y;
+              makeWay.push(q);
+            }
+          } else if (q === b && ends.every(near)) {
+            const by = clearOf(boxOf(b), { ...l.from, ...r, x: r.x + r.width / 2, y: r.y + r.height / 2 }, MARGIN.label, () => false);
+            if (by)
+              for (const e of ends) {
+                e.x += by.x;
+                e.y += by.y;
+                makeWay.push(e);
+              }
+          }
+        }
+      }
+      if (!makeWay.length) break;
+      moved = [...new Set([...moved, ...nudge(b, makeWay)])];
+      slide(touched());
+    }
+  }
 }

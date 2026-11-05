@@ -20,13 +20,16 @@ export const FRAME_LABEL = "Workflow drawing. Drag a part to move it; drag the b
 // (src/server/drawing.ts). The server's SVG shows it first, so it needs no
 // scripts; once the page runs, React Flow takes over from just where the SVG
 // was, to drag its parts, pan and zoom; a drag moves only what the dragged
-// part overlaps (#78). Its switch: Flow only (#51). A part's notes are behind an icon
-// (#60). A part linked to other workflows (#55), and a workflow's box on a
-// system's map (#61), opens what it leads to.
+// part overlaps (#78). Its switches: Flow only (#51), and Descriptions (#114),
+// when a part has one, which opens every part's description. A part's notes
+// are behind an icon (#60), and its description behind a chevron by its label.
+// A part linked to other workflows (#55), and a workflow's box on a system's
+// map (#61), opens what it leads to.
 //
 // A drawing embedded on another site (#75) may start with Flow only on, opens
 // every link in a new tab, never in its frame, and is `compact`: smaller
-// switches, leaving a small frame more of itself.
+// switches, leaving a small frame more of itself. It is given no layout with
+// descriptions open, so it shows labels only, with no Descriptions switch.
 export function Drawing({
   drawings,
   links = [],
@@ -47,13 +50,16 @@ export function Drawing({
   const id = "flow" + useId().replace(/[^a-zA-Z0-9]/g, "");
   const frame = useRef<HTMLDivElement>(null);
   const [flowOnly, setFlowOnly] = useState(startFlowOnly);
+  const [described, setDescribed] = useState(false);
   const [start, setStart] = useState<Viewport>();
   const [live, setLive] = useState(false);
   const [note, setNote] = useState<{ title: string; notes: Note[] }>();
   const [menu, setMenu] = useState<{ link: PartLink; node: Box }>();
   const [target, setTarget] = useState<string>();
   const api = useRef<FlowApi>(undefined);
-  const drawing = flowOnly ? drawings.flow : drawings.full;
+  // The Descriptions switch shows the layouts with every description open (#114).
+  const layouts = described && drawings.open ? drawings.open : drawings;
+  const drawing = flowOnly ? layouts.flow : layouts.full;
 
   // Once React Flow has loaded, it starts just where the server's SVG shows
   // the drawing, whichever drawing the switch shows by then.
@@ -119,7 +125,8 @@ export function Drawing({
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     const el = e.target as HTMLElement;
-    const node = el.closest?.(".react-flow__node");
+    // A key on a button in a part, such as its chevron or its note mark, is the button's.
+    const node = el.closest?.("button") ? null : el.closest?.(".react-flow__node");
     if (node && followsOnKey(e.key, node.getAttribute("role"))) {
       onFollow(node.getAttribute("data-id") ?? "", e);
       e.preventDefault();
@@ -199,10 +206,16 @@ export function Drawing({
             onNote={onNote}
             onFollow={onFollow}
             fitOf={fitOf}
+            descriptions={Boolean(drawings.open)}
           />
         </div>
       )}
       <div className="flow-controls flow-switches">
+        {drawings.open && (
+          <button type="button" className="flow-toggle" aria-pressed={described} onClick={() => setDescribed(!described)}>
+            Descriptions
+          </button>
+        )}
         <button type="button" className="flow-toggle" aria-pressed={flowOnly} onClick={() => setFlowOnly(!flowOnly)}>
           Flow only
         </button>

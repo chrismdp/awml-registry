@@ -27,6 +27,9 @@ export type Part = {
   // A code step a model carries out, in a platform view: its block names a
   // platform whose steps are an agent's (AWML 0.10.1).
   agentRun?: true;
+  // Its description: free text the file gives it beside its label, which is a
+  // short title (AWML 0.11), drawn folded away under the label (#114).
+  description?: string;
 };
 
 // A scope (dashed, who may see, its edge and label in the colours the engine
@@ -95,6 +98,7 @@ export type EngineGraph = {
     untrusted?: boolean;
     unstopped?: boolean;
     agentRun?: boolean;
+    description?: string;
   }[];
   lines: {
     from: string;
@@ -150,8 +154,8 @@ function workflowOf(group: EngineGraph["groups"][number]) {
 
 // The registry's graph of the engine's: its parts with their kinds, a step's
 // kind of work and an outside action's tier, whether untrusted text comes
-// from it, and reaches an outside action unstopped, and whether a model
-// carries out a code step; its scopes with their nesting, a security view's
+// from it, and reaches an outside action unstopped, whether a model carries
+// out a code step, and its description; its scopes with their nesting, a security view's
 // and a platform view's colours, and a map's workflows; the lines drawn,
 // each with its style, which ends have arrows and how it carries untrusted
 // text; and the comments as notes on what they are tied to. A tie and a
@@ -192,6 +196,8 @@ export function readGraph(g: EngineGraph): Graph {
     if (p.untrusted === true) part.untrusted = true;
     if (p.unstopped === true) part.unstopped = true;
     if (p.agentRun === true) part.agentRun = true;
+    const description = typeof p.description === "string" ? folded(p.description) : "";
+    if (description) part.description = description;
     return part;
   });
   const ends = new Set([...kinds.keys(), ...groups]);

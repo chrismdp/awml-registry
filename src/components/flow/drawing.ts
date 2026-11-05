@@ -25,7 +25,13 @@ export type DrawnPart = Rect & {
   outline?: "untrusted" | "unstopped";
   // The dashed outline of a code step a model carries out (AWML 0.10.1).
   agentRun?: true;
+  // Its description (#114), broken into lines, and the part's size with it
+  // closed and open. The part is laid out at one or the other, as the
+  // drawing is `opened` or not.
+  description?: { lines: string[]; closed: Size; opened: Size };
 };
+
+export type Size = { width: number; height: number };
 
 export type DrawnScope = Rect & {
   id: string;
@@ -66,10 +72,14 @@ export type Drawing = {
   notes: Note[];
   // Where the icon of the notes of the whole drawing goes, when it has any.
   notesAt?: Point;
+  // Laid out with every part's description open (#114).
+  opened?: true;
 };
 
-// Both layouts a page may show: the whole drawing, and Flow only (#51).
-export type Drawings = { full: Drawing; flow: Drawing };
+// The layouts a page may show: the whole drawing, and Flow only (#51), and
+// when a part has a description, both again with every description open
+// (#114), which the Descriptions switch shows.
+export type Drawings = { full: Drawing; flow: Drawing; open?: { full: Drawing; flow: Drawing } };
 
 // Why the server didn't lay a drawing out: it is beyond the limits it lays
 // out (src/server/drawing.ts), or its layout failed.
@@ -84,6 +94,9 @@ export const LABEL = { size: 14, line: 19 };
 export const CAPTION = { size: 12, line: 15, gap: 3 };
 export const TIER = { size: 12, height: 20, gap: 4, padding: 8 };
 export const LINE_LABEL = { size: 12, line: 16, padX: 9, padY: 3, max: 180 };
+// A part's description, under its label and any tier, and the room left by
+// its label for the chevron that opens it (#114).
+export const DESCRIPTION = { size: 12, line: 16, gap: 6, max: 220, chevron: 22 };
 export const SCOPE_TITLE = { size: 14, line: 18, top: 14, left: 20, height: 46 };
 // Who a scope is for, on lines of its own under its name, smaller. They are
 // never broken narrower than `min`, so a narrow scope is made wider rather
@@ -127,20 +140,40 @@ const CAPTIONS: Record<PartKind, string> = {
   part: "",
 };
 
-// A part's text, broken into lines, and the size of its box round them.
+// A part's text, broken into lines, and the size of its box round them. A
+// part with a description leaves room by its label for the chevron that
+// opens it, and has a second size, open, with the description under the rest.
 export function partText(p: Part) {
   const caption = [CAPTIONS[p.kind], p.verb, p.untrusted ? "untrusted" : ""].filter(Boolean).join(" · ");
   const lines = wrap(p.label, LABEL.size, TEXT_MAX);
   const [top, right, bottom, left] = PADDING[p.kind];
   const tierWidth = p.tier ? textWidth(p.tier, TIER.size) + 2 * TIER.padding : 0;
-  const inner = Math.max(textWidth(caption, CAPTION.size), widest(lines, LABEL.size), tierWidth) + SLACK;
+  const chevron = p.description ? DESCRIPTION.chevron : 0;
+  const inner = Math.max(textWidth(caption, CAPTION.size), widest(lines, LABEL.size) + chevron, tierWidth) + SLACK;
   const height =
     top +
     (caption ? CAPTION.line + CAPTION.gap : 0) +
     lines.length * LABEL.line +
     (p.tier ? TIER.gap + TIER.height : 0) +
     bottom;
-  return { caption, lines, width: Math.ceil(Math.max(MIN_WIDTH, inner + left + right)), height };
+  const width = Math.ceil(Math.max(MIN_WIDTH, inner + left + right));
+  if (!p.description) return { caption, lines, width, height };
+  const said = wrap(p.description, DESCRIPTION.size, Math.max(DESCRIPTION.max, width - left - right - SLACK));
+  const opened = {
+    width: Math.ceil(Math.max(width, widest(said, DESCRIPTION.size) + SLACK + left + right)),
+    height: height + DESCRIPTION.gap + said.length * DESCRIPTION.line,
+  };
+  return { caption, lines, width, height, description: { lines: said, closed: { width, height }, opened } };
+}
+
+// Where a part's chevron goes (#114): its middle, just after the widest line
+// of its label, level with the label's first line.
+export function chevronAt(part: Pick<DrawnPart, "kind" | "caption" | "lines">): Point {
+  const [top, , , left] = PADDING[part.kind];
+  return {
+    x: left + widest(part.lines, LABEL.size) + DESCRIPTION.chevron / 2 + 2,
+    y: top + (part.caption ? CAPTION.line + CAPTION.gap : 0) + LABEL.line / 2,
+  };
 }
 
 // A scope's name and who it is for, from its label.
@@ -326,7 +359,10 @@ export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served:
     if (!s || !t) continue;
     const [was, wasT] = [served.get(line.from), served.get(line.to)];
     const ds = was && { x: s.x - was.x, y: s.y - was.y };
-    if (line.points.length >= 2 && wasT && ds && near(ds, { x: t.x - wasT.x, y: t.y - wasT.y })) {
+    // Both ends must also still be the size the server gave them, as a part
+    // is not once its description opens (#114).
+    const sized = (r: Rect, at: Rect) => near({ x: r.width, y: r.height }, { x: at.width, y: at.height });
+    if (line.points.length >= 2 && was && wasT && ds && sized(s, was) && sized(t, wasT) && near(ds, { x: t.x - wasT.x, y: t.y - wasT.y })) {
       const moved = (p: Point) => ({ x: p.x + ds.x, y: p.y + ds.y });
       const points = line.points.map(moved);
       routes.set(line.id, { points, label: line.label ? moved(line.label) : pointAlong(points, 0.5), server: true });
