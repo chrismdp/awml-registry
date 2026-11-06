@@ -31,8 +31,10 @@ export function WhereItCanRun({ fit, title, checks }: { fit: FitTab; title: stri
     <div className="fit-panel" role="tabpanel" aria-label={`${title}, where it can run`}>
       <div>
         <h2 className="fit-headline">
-          {`Fits ${fit.fits} of the ${fit.seen} platforms you can see`}
-          {fit.newest !== null && `, judged against the ${fit.newest} newest public ones`}
+          {fit.gaps.length > 0
+            ? `The fit can't judge it yet against the ${count(fit.seen, "platform", "platforms")} you can see`
+            : `Fits ${fit.fits} of the ${count(fit.seen, "platform", "platforms")} you can see`}
+          {fit.gaps.length === 0 && fit.newest !== null && `, judged against the ${fit.newest} newest public ones`}
         </h2>
         <p className="fit-intro">
           Checked against each platform&apos;s description by AWML&apos;s engine, the same check as <code>awml fit</code>.

@@ -181,8 +181,19 @@ describe("the tab's label and what the other tabs cost", () => {
     await pushPlatform(bea.username, "worker", { token: bea.token }, { description: example("platforms/worker.yaml") });
     await pushWorkflow(nell.username, "client-email", { token: nell.token }, clientEmail);
     const page = await fitTab(nell.username);
-    expect(text(page.html)).toContain("Fits 0 of the 1 platforms you can see");
+    expect(text(page.html)).toContain("Fits 0 of the 1 platform you can see");
     expect(page.html).toMatch(/aria-selected="true"[^>]*>Where it can run<\/a>/);
+  });
+
+  it("claims no count in the headline when the fit can't judge the workflow", async () => {
+    const nell = await person("nell");
+    const bea = await person("bea");
+    await pushPlatform(bea.username, "worker", { token: bea.token }, { description: example("platforms/worker.yaml") });
+    await pushWorkflow(nell.username, "client-email", { token: nell.token }, example("dinners.yaml"));
+    const shown = text((await fitTab(nell.username)).html);
+    expect(shown).toContain("This workflow doesn't say all the fit needs");
+    expect(shown).toContain("The fit can't judge it yet against the 1 platform you can see");
+    expect(shown).not.toContain("Fits 0");
   });
 });
 
@@ -229,7 +240,7 @@ describe("the bound on public platforms", () => {
     const shown = text(page.html);
     expect(shown).toContain("Fits 0 of the 105 platforms you can see, judged against the 100 newest public ones");
     expect(shown).toContain("Worker 104");
-    expect(shown).toContain("Worker 5");
+    expect(shown).toContain("Worker 5 ");
     expect(shown).not.toContain("Worker 4 ");
     expect(page.html).not.toContain("worker-004");
   });

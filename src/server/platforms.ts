@@ -319,8 +319,9 @@ export async function visiblePlatforms(db: Db, viewer: Viewer, query = "") {
 
 // How many public platforms a workflow's "Where it can run" tab judges at
 // most, the newest (#1). Anyone signed in may publish a public platform, so
-// without it the tab's work would grow with every one published. Workflows
-// that fit a platform are bounded the same way (#125).
+// without it the tab's work would grow with every one published. When a
+// platform's page lists the workflows that fit it (#125, not built yet), it
+// will take the same bound.
 export const PUBLIC_JUDGED = 100;
 
 // The platforms the "Where it can run" tab judges for the viewer (#1): every
@@ -348,7 +349,7 @@ export async function judgedPlatforms(db: Db, viewer: Viewer) {
 }
 
 // The platforms the viewer may see whose label or slug has the query: public
-// ones, and their organisations' own.
+// ones, their own private ones and their organisations'.
 export async function searchPlatforms(db: Db, viewer: Viewer, query = "") {
   const rows = await visiblePlatforms(db, viewer, query);
   return rows.map(({ owner, slug, label, visibility, updatedAt }) => ({ owner, slug, label, visibility, updatedAt }));
