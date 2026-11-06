@@ -256,6 +256,9 @@ function Canvas(p: FlowCanvasProps) {
   // where the server laid it out, and is fitted to the frame as it settles.
   const first = useRef(true);
   const opening = useRef<{ from: Viewport; to: Viewport } | "done">(undefined);
+  // The lines routed again as a part moved, for this drawing (lineRoutes,
+  // #126): the physics and the lines drawn share them.
+  const rerouted = useMemo(() => new Set<string>(), [drawing]);
   useEffect(() => {
     let stopped = false;
     let drawn = false;
@@ -298,6 +301,7 @@ function Canvas(p: FlowCanvasProps) {
         if (opened >= 1) opening.current = "done";
       },
       () => {},
+      rerouted,
     );
     physics.current = sim;
     setEdges(linesOf(drawing, p.id));
@@ -308,7 +312,7 @@ function Canvas(p: FlowCanvasProps) {
       physics.current = undefined;
     };
     // `shared` changing (a fragment, say) restyles the nodes below, without laying out again.
-  }, [drawing, p.id, setNodes, flow, fitOf]);
+  }, [drawing, p.id, setNodes, flow, fitOf, rerouted]);
 
   // The outlined part, the open menu and the links change only what nodes
   // carry and what they are called.
@@ -328,7 +332,7 @@ function Canvas(p: FlowCanvasProps) {
   const near = lit === undefined ? undefined : connected.get(lit);
   const shownNodes = useMemo(() => litNodes(nodes, near), [nodes, near]);
   const served = useMemo(() => servedOf(drawing), [drawing]);
-  const shownEdges = useMemo(() => litLines(routedLines(edges, nodes, drawing, served), near), [edges, nodes, drawing, served, near]);
+  const shownEdges = useMemo(() => litLines(routedLines(edges, nodes, drawing, served, rerouted), near), [edges, nodes, drawing, served, rerouted, near]);
   // The part, or box that holds nothing, an element is in.
   const partAt = (el: EventTarget | null) => {
     const id = (el as Element | null)?.closest?.(".react-flow__node")?.getAttribute("data-id");
@@ -589,9 +593,9 @@ export function linesOf(d: Drawing, id: string): FlowEdge[] {
 // The lines on the routes they take with the nodes where they are (lineRoutes
 // in drawing.ts), which the physics judges labels by too. A line whose route
 // is as it was is left as it is, so React Flow redraws only those that moved.
-export function routedLines(edges: FlowEdge[], nodes: FlowNode[], d: Drawing, served: Map<string, Rect>): FlowEdge[] {
+export function routedLines(edges: FlowEdge[], nodes: FlowNode[], d: Drawing, served: Map<string, Rect>, rerouted: Set<string>): FlowEdge[] {
   const boxes = new Map(nodes.map((n) => [n.id, { ...n.position, width: n.width ?? 0, height: n.height ?? 0 }]));
-  const routes = lineRoutes(d.lines, boxes, served);
+  const routes = lineRoutes(d.lines, boxes, served, rerouted);
   const same = (a?: Route, b?: Route) => a === b || (a && b && a.points.length === b.points.length && a.points.every((p, i) => p.x === b.points[i].x && p.y === b.points[i].y) && a.label.x === b.label.x && a.label.y === b.label.y);
   return edges.map((e) => (same(e.data?.route, routes.get(e.id)) ? e : { ...e, data: { ...e.data!, route: routes.get(e.id) } }));
 }

@@ -329,17 +329,23 @@ const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y -
 // How every line runs with its ends' boxes where they are now, `boxes`, as
 // the server's ELK layout runs them, `served` being where the server put
 // each box (#116). A line whose ends haven't moved, or have moved together,
-// keeps the server's route exactly. Any other is routed square between the
-// sides of its ends that face each other (facing): each end where the
-// server's route attached it, as far along that box's side, while that side
-// still faces the other end; the other ends on a side spread evenly along it,
-// between the ones kept, in the order of where their other ends lie, so they
-// don't cross; and lines whose middle stretch runs in the same gap LANE apart,
-// side by side, and clear of the server's lines that run in it. A line's
-// label is halfway along its middle stretch. Each line is looked at a few
-// times, and each pair that may share a gap once, as is each group of lines
-// in a gap with each stretch of the server's routes kept.
-export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served: Map<string, Rect>): Map<string, Route> {
+// keeps the server's route exactly. One whose ends have moved apart keeps its
+// bends while it can (keptRoute, #126), and takes its lane among the others
+// as the server's routes do. `rerouted` holds the lines that couldn't, which
+// are routed again until their ends are back where the server put them, or
+// have moved together, so a line doesn't flick between the two as a part is
+// dragged. Any other is routed square between the sides of its ends that
+// face each other (facing): each end where the server's route attached it,
+// as far along that box's side, while that side still faces the other end;
+// the other ends on a side spread evenly along it, between the ones kept, in
+// the order of where their other ends lie, so they don't cross; and lines
+// whose middle stretch runs in the same gap LANE apart, side by side, and
+// clear of the server's lines that run in it. A line's label is halfway
+// along its middle stretch. Each line is looked at a few times, and each pair
+// that may share a gap once, as is each group of lines in a gap with each
+// stretch of the server's routes kept; a kept route's stretches are each
+// looked at once with every part's box.
+export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served: Map<string, Rect>, rerouted?: Set<string>): Map<string, Route> {
   const routes = new Map<string, Route>();
   // One end of a line on a side of a box: how far along the side, once
   // known, the box at its other end, and where that lies along the side.
@@ -354,18 +360,36 @@ export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served:
     sides.get(key)!.push(e);
     return e;
   };
+  // The boxes of parts, which a kept route mustn't cross: those that hold no
+  // other box, as a scope round its parts does. Worked out once, if needed.
+  let solid: Rect[] | undefined;
+  const partBoxes = () => (solid ??= [...boxes.values()].filter((r) => ![...boxes.values()].some((q) => q !== r && q.x >= r.x && q.y >= r.y && q.x + q.width <= r.x + r.width && q.y + q.height <= r.y + r.height)));
   for (const [i, line] of lines.entries()) {
     const [s, t] = [boxes.get(line.from), boxes.get(line.to)];
     if (!s || !t) continue;
     const [was, wasT] = [served.get(line.from), served.get(line.to)];
-    const ds = was && { x: s.x - was.x, y: s.y - was.y };
     // Both ends must also still be the size the server gave them, as a part
     // is not once its description opens (#114).
     const sized = (r: Rect, at: Rect) => near({ x: r.width, y: r.height }, { x: at.width, y: at.height });
-    if (line.points.length >= 2 && was && wasT && ds && sized(s, was) && sized(t, wasT) && near(ds, { x: t.x - wasT.x, y: t.y - wasT.y })) {
-      const moved = (p: Point) => ({ x: p.x + ds.x, y: p.y + ds.y });
-      const points = line.points.map(moved);
-      routes.set(line.id, { points, label: line.label ? moved(line.label) : pointAlong(points, 0.5), server: true });
+    let route: Route | undefined;
+    if (line.points.length >= 2 && was && wasT && sized(s, was) && sized(t, wasT)) {
+      const [ds, dt] = [
+        { x: s.x - was.x, y: s.y - was.y },
+        { x: t.x - wasT.x, y: t.y - wasT.y },
+      ];
+      if (near(ds, dt)) {
+        const moved = (p: Point) => ({ x: p.x + ds.x, y: p.y + ds.y });
+        const points = line.points.map(moved);
+        route = { points, label: line.label ? moved(line.label) : pointAlong(points, 0.5), server: true };
+        rerouted?.delete(line.id);
+      } else if (!rerouted?.has(line.id)) {
+        route = keptRoute(line, [was, wasT], [ds, dt], partBoxes);
+        if (!route) rerouted?.add(line.id);
+      }
+    }
+    if (route) {
+      const { points } = route;
+      routes.set(line.id, route);
       // Its ends stay where they are, for the lines spread along their sides to keep clear of.
       for (const [id, box, p, other] of [
         [line.from, s, points[0], t],
@@ -492,6 +516,55 @@ export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served:
     routes.set(lines[r.line].id, { points, label: at(r.mid, (r.v0 + r.v1) / 2), server: false });
   }
   return routes;
+}
+
+// The server's route of a line whose ends have moved apart from where the
+// server put their boxes, `at`, by `moves` (#126): each end moved with its
+// box, and the bend next to it with it, across that end's stretch only, so
+// every stretch stays level or plumb; every other bend is where the server
+// put it. Its label stays where the server put it, unless the stretch it is on
+// has moved across, and then moves with that, kept on it. None once the route
+// no longer holds: an end on no side of its box, a stretch that would turn
+// or reverse, or be cut shorter than CORNER, or a stretch through a part's box.
+function keptRoute(line: DrawnLine, at: [Rect, Rect], moves: [Point, Point], parts: () => Rect[]): Route | undefined {
+  const from = line.points;
+  const n = from.length;
+  const points = from.map((p) => ({ ...p }));
+  for (const [end, bend, box, move] of [
+    [0, 1, at[0], moves[0]],
+    [n - 1, n - 2, at[1], moves[1]],
+  ] as const) {
+    if (!sideOf(box, from[end])) return undefined;
+    points[end] = { x: from[end].x + move.x, y: from[end].y + move.y };
+    // A straight line has no bend: its other end is the next point.
+    if (bend === 0 || bend === n - 1) continue;
+    if (Math.abs(from[end].x - from[bend].x) < 0.5) points[bend].x += move.x;
+    else points[bend].y += move.y;
+  }
+  const level = (k: number) => Math.abs(from[k].y - from[k + 1].y) < 0.5;
+  const through = (p: Point, q: Point, r: Rect) =>
+    Math.max(p.x, q.x) > r.x + 0.5 && Math.min(p.x, q.x) < r.x + r.width - 0.5 && Math.max(p.y, q.y) > r.y + 0.5 && Math.min(p.y, q.y) < r.y + r.height - 0.5;
+  for (let k = 0; k < n - 1; k++) {
+    const [a, b, p, q] = [from[k], from[k + 1], points[k], points[k + 1]];
+    const [was, now, across] = level(k) ? [b.x - a.x, q.x - p.x, q.y - p.y] : [b.y - a.y, q.y - p.y, q.x - p.x];
+    if (Math.abs(across) >= 0.5 || Math.sign(now) !== Math.sign(was)) return undefined;
+    if (Math.abs(now) < Math.min(CORNER, Math.abs(was))) return undefined;
+    if (parts().some((r) => through(p, q, r))) return undefined;
+  }
+  if (!line.label) return { points, label: pointAlong(points, 0.5), server: true };
+  // The stretch the label is on: the one nearest it.
+  const gap = (k: number) => {
+    const [a, b] = [from[k], from[k + 1]];
+    const clamp = (v: number, u: number, w: number) => Math.max(Math.min(u, w), Math.min(Math.max(u, w), v));
+    return Math.hypot(line.label!.x - clamp(line.label!.x, a.x, b.x), line.label!.y - clamp(line.label!.y, a.y, b.y));
+  };
+  let on = 0;
+  for (let k = 1; k < n - 1; k++) if (gap(k) < gap(on)) on = k;
+  const [a, p, q] = [from[on], points[on], points[on + 1]];
+  const label = level(on)
+    ? { x: Math.max(Math.min(p.x, q.x), Math.min(Math.max(p.x, q.x), line.label.x)), y: line.label.y + p.y - a.y }
+    : { x: line.label.x + p.x - a.x, y: Math.max(Math.min(p.y, q.y), Math.min(Math.max(p.y, q.y), line.label.y)) };
+  return { points, label, server: true };
 }
 
 // Where along its side a line's end runs straight into the box at its other

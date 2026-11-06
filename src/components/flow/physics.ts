@@ -149,11 +149,15 @@ const clock = () => (typeof performance === "object" ? performance.now() : Date.
 // Starts the drawing where the server laid it out. `tick` is told each time
 // the boxes move, with the box of each scope that holds parts, how far the
 // drawing has opened, eased, from 0 to 1, and where each label that has slid
-// is along its line; `settled` once it has opened.
+// is along its line; `settled` once it has opened. `rerouted` is the lines
+// whose server's route no longer held as a part moved (lineRoutes, #126),
+// which the page routes its lines with too, so a label is judged on the line
+// the page draws.
 export function startPhysics(
   g: Drawing,
   tick: (bodies: Body[], hulls: Map<string, Rect>, opened: number, along: Map<string, number>) => void,
   settled: () => void,
+  rerouted = new Set<string>(),
 ): Physics {
   const server = atServer(g);
   const { bodies } = server;
@@ -177,14 +181,16 @@ export function startPhysics(
   // Every line's route with the bodies where they are, as the page draws it
   // (lineRoutes), so a label is judged and slid on the line as drawn (#116).
   // Lines are routed together, so the routes are worked out again only once
-  // a body has moved, not for each label looked at.
+  // a body has moved, or the page has routed a line again, not for each
+  // label looked at.
   const served = new Map<string, Rect>([...bodies.map((b) => [b.id, boxOf(b)] as const), ...server.hulls]);
-  let routed: { at: number[]; routes: Map<string, Route> } | undefined;
+  let routed: { at: number[]; again: string; routes: Map<string, Route> } | undefined;
   const routeOf = (l: Line) => {
     const at = bodies.flatMap((b) => [b.x, b.y, b.width, b.height]);
-    if (!routed || at.some((v, i) => v !== routed!.at[i])) {
+    if (!routed || routed.again !== [...rerouted].join("\n") || at.some((v, i) => v !== routed!.at[i])) {
       const boxes = new Map<string, Rect>([...hulls(), ...bodies.map((b) => [b.id, boxOf(b)] as const)]);
-      routed = { at, routes: lineRoutes(g.lines, boxes, served) };
+      const routes = lineRoutes(g.lines, boxes, served, rerouted);
+      routed = { at, again: [...rerouted].join("\n"), routes };
     }
     return routed.routes.get(l.id)!;
   };

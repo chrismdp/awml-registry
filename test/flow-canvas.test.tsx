@@ -142,7 +142,7 @@ describe("a line, once a part is dragged (#67, #116)", () => {
     ((p.x === r.x || p.x === r.x + r.width) && p.y >= r.y && p.y <= r.y + r.height) ||
     ((p.y === r.y || p.y === r.y + r.height) && p.x >= r.x && p.x <= r.x + r.width);
 
-  it("keeps the server's route while its ends haven't moved, or have moved together, and goes square once one has", async () => {
+  it("keeps the server's route while its ends haven't moved, or have moved together, its bends once one has moved a little, and goes square once that no longer holds", async () => {
     const { full } = laidOut(await layOut(example("flow/issue-to-pull-request.graph.json")));
     const at = new Map<string, Rect>([...full.parts, ...full.scopes].map((b) => [b.id, b]));
     const line = full.lines.find((l) => l.label && l.points.length > 3)!;
@@ -157,12 +157,22 @@ describe("a line, once a part is dragged (#67, #116)", () => {
     expect(together.server).toBe(true);
     expect(together.points[0]).toEqual({ x: line.points[0].x + 40, y: line.points[0].y + 30 });
 
-    // Dragged across and up: square, out of the dragged part's side or bottom and into the other.
+    // Dragged a little, it keeps the server's bends but the one by the dragged part (#126).
+    for (const [dx, dy] of [
+      [-300, 20],
+      [0, 0.4 * (t.y - s.y)],
+    ]) {
+      const route = routed({ [line.from]: by(s, dx, dy) });
+      expect(route.server, `${dx}, ${dy}`).toBe(true);
+      expect(route.points.slice(2)).toEqual(line.points.slice(2));
+    }
+
+    // Dragged so its route no longer holds: square, out of the dragged part's side or bottom and into the other.
     for (const [dx, dy] of [
       [260, -40],
-      [-300, 20],
+      [-300, 150],
       [500, s.y < t.y ? t.y - s.y : 0],
-      [0, 0.4 * (t.y - s.y)],
+      [0, 0.6 * (t.y - s.y)],
     ]) {
       const dragged = by(s, dx, dy);
       const route = routed({ [line.from]: dragged });
