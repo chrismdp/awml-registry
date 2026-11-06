@@ -4,12 +4,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import ELK from "elkjs/lib/elk.bundled.js";
+import type { ElkNode } from "elkjs/lib/elk-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { boxText, headHeight, headWidth, LABEL, partText, SCOPE_PAD, SCOPE_TITLE, SCOPE_WHO, type Drawing } from "@/components/flow/drawing";
-import { graphOf } from "@/components/flow/graph";
+import { graphOf, type Graph } from "@/components/flow/graph";
 import { textWidth, wrap } from "@/components/flow/text";
 import { getDb } from "@/db/client";
-import { drawingsOf, layOut, mapLinks } from "@/server/drawing";
+import { drawingsOf, layOut, layOutGraph, mapLinks } from "@/server/drawing";
 import { laidOut } from "./drawn";
 import { example, statements } from "./helpers";
 
@@ -203,6 +204,188 @@ describe("laying a drawing out on the server", () => {
     const box = boxText({ id: "w1", label: "An issue becomes a pull request", dashed: false });
     expect(box.lines).toEqual(["An issue becomes a pull", "request"]);
     for (const line of box.lines) expect(textWidth(line, 16)).toBeLessThan(box.width - 44);
+  });
+});
+
+// A workflow's graph as the engine gives it, for the triggers' tests (#127).
+type Built = { groups?: { id: string; label: string; in?: string }[]; parts: object[]; lines: [string, string][] };
+const built = ({ groups = [], parts, lines }: Built) =>
+  JSON.stringify({
+    view: "security",
+    groups,
+    parts,
+    lines: lines.map(([from, to]) => ({ from, to, kind: "start", points: "to" })),
+    comments: [],
+    places: [],
+  });
+const trigger = (id: string, scope?: string) => ({ id, kind: "trigger", label: `When ${id}`, ...(scope ? { in: scope } : {}) });
+const step = (id: string, scope?: string, description?: string) => ({
+  id,
+  kind: "code",
+  label: `Do ${id}`,
+  decider: "code",
+  op: "do",
+  ...(scope ? { in: scope } : {}),
+  ...(description ? { description } : {}),
+});
+// Three triggers, none in a scope: ELK, left to itself, puts t2 a layer down, beside the step
+// t3 starts, and t3 to the left of t1; in file order, t2's lines cross t1's or t3's.
+const three = (description?: string) =>
+  built({
+    parts: [trigger("t1"), step("a", undefined, description), step("b"), step("c"), trigger("t2"), trigger("t3")],
+    lines: [["t1", "a"], ["a", "b"], ["b", "c"], ["t2", "c"], ["t3", "a"], ["t2", "b"]],
+  });
+const named = (d: Drawing) => ({
+  part: (id: string) => d.parts.find((p) => p.id === id)!,
+  scope: (id: string) => d.scopes.find((s) => s.id === id)!,
+});
+// Every node ELK was asked to lay out, from the root down.
+const nodes = (n: ElkNode): ElkNode[] => (n.children ?? []).flatMap((c) => [c, ...nodes(c)]);
+// The graph ELK was given for each layout a spy on it saw.
+const asked = (layout: { mock: { calls: unknown[][] } }) => layout.mock.calls.map(([root]) => root as ElkNode);
+const FIRST = "elk.layered.layering.layerConstraint";
+
+describe("a workflow's triggers, laid out along the top (#127)", () => {
+  it("puts each trigger above every other part in its scope, where ELK put one lower", async () => {
+    const { full, flow } = await lay(three());
+    for (const d of [full, flow]) {
+      const triggers = d.parts.filter((p) => p.kind === "trigger");
+      expect(triggers.map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
+      const others = d.parts.filter((p) => p.kind !== "trigger");
+      for (const t of triggers) for (const o of others) expect(t.y + t.height, `${t.id} above ${o.id}`).toBeLessThan(o.y);
+    }
+  });
+
+  it("puts the triggers outside every scope at the same top, left to right in file order, though it adds a crossing", async () => {
+    const { full, flow } = await lay(three());
+    for (const d of [full, flow]) {
+      const { part } = named(d);
+      const [t1, t2, t3] = ["t1", "t2", "t3"].map(part);
+      expect(new Set([t1.y, t2.y, t3.y]).size).toBe(1);
+      expect(t1.x + t1.width).toBeLessThan(t2.x);
+      expect(t2.x + t2.width).toBeLessThan(t3.x);
+    }
+  });
+
+  it("puts the triggers inside a scope at the same top of it, left to right in file order, though it adds a crossing", async () => {
+    const inScope = (p: object) => ({ ...p, in: "team" });
+    const { full, flow } = await lay(
+      built({
+        groups: [{ id: "team", label: "team: the people who do it" }],
+        parts: [trigger("t1"), step("a"), step("b"), step("c"), trigger("t2"), trigger("t3")].map(inScope),
+        lines: [["t1", "a"], ["a", "b"], ["b", "c"], ["t2", "c"], ["t3", "a"], ["t2", "b"]],
+      }),
+    );
+    for (const d of [full, flow]) {
+      const { part, scope } = named(d);
+      const [t1, t2, t3] = ["t1", "t2", "t3"].map(part);
+      expect(new Set([t1.y, t2.y, t3.y, scope("team").y + headHeight(scope("team").who)]).size).toBe(1);
+      expect(t1.x + t1.width).toBeLessThan(t2.x);
+      expect(t2.x + t2.width).toBeLessThan(t3.x);
+    }
+    // As the triggers of a workflow on awml.io are, both in its one scope.
+    const { full: issued } = await lay(issue);
+    const [comment, dispatch] = ["comment", "dispatch"].map(named(issued).part);
+    expect(comment.y).toBe(dispatch.y);
+    expect(comment.x + comment.width).toBeLessThan(dispatch.x);
+  });
+
+  it("puts a trigger inside a scope at the top of that scope, and the scope level with the triggers outside every scope, in file order", async () => {
+    const { full } = await lay(
+      built({
+        groups: [{ id: "team", label: "team: the people who do it" }],
+        parts: [trigger("t0"), step("x"), trigger("st", "team"), step("sy", "team"), trigger("t9")],
+        lines: [["t0", "x"], ["x", "sy"], ["st", "sy"], ["t9", "x"]],
+      }),
+    );
+    const { part, scope } = named(full);
+    const team = scope("team");
+    expect(part("st").y - team.y).toBe(headHeight(team.who));
+    expect(part("sy").y).toBeGreaterThan(part("st").y + part("st").height);
+    expect(team.y).toBe(part("t0").y);
+    expect(part("t9").y).toBe(part("t0").y);
+    // The scope among the triggers outside it, by its first trigger in the file.
+    expect(part("t0").x + part("t0").width).toBeLessThan(team.x);
+    expect(team.x + team.width).toBeLessThan(part("t9").x);
+  });
+
+  it("puts a scope holding a trigger at the top of the scope it is in, and that scope at the top too", async () => {
+    const { full } = await lay(
+      built({
+        groups: [
+          { id: "outer", label: "outer: everyone" },
+          { id: "inner", label: "inner: the few", in: "outer" },
+        ],
+        parts: [trigger("t0"), step("c"), step("b", "outer"), trigger("it", "inner"), step("a", "inner")],
+        lines: [["t0", "c"], ["it", "a"], ["a", "b"], ["b", "c"]],
+      }),
+    );
+    const { part, scope } = named(full);
+    const [outer, inner] = [scope("outer"), scope("inner")];
+    expect(outer.y).toBe(part("t0").y);
+    expect(inner.y - outer.y).toBe(headHeight(outer.who));
+    expect(part("it").y - inner.y).toBe(headHeight(inner.who));
+    expect(part("b").y).toBeGreaterThan(inner.y + inner.height);
+  });
+
+  it("puts the triggers the same way in the layouts with descriptions open (#114)", async () => {
+    const drawn = await lay(three("A step that takes a long description, so its part is opened taller and wider than it was"));
+    expect(drawn.open).toBeDefined();
+    for (const d of [drawn.open!.full, drawn.open!.flow]) {
+      const { part } = named(d);
+      const [t1, t2, t3] = ["t1", "t2", "t3"].map(part);
+      expect(new Set([t1.y, t2.y, t3.y]).size).toBe(1);
+      expect(t1.x + t1.width).toBeLessThan(t2.x);
+      expect(t2.x + t2.width).toBeLessThan(t3.x);
+      for (const o of d.parts.filter((p) => p.kind !== "trigger")) expect(t1.y + t1.height).toBeLessThan(o.y);
+    }
+  });
+
+  it("asks ELK to keep the triggers first for every layout of a workflow, and never for a system's map", async () => {
+    const layout = vi.spyOn(ELK.prototype, "layout");
+    await layOut(three("Described, so all four layouts are made"));
+    expect(layout).toHaveBeenCalledTimes(4);
+    for (const root of asked(layout)) {
+      const constrained = nodes(root).filter((n) => n.layoutOptions?.[FIRST] === "FIRST").map((n) => n.id);
+      expect(constrained).toEqual(["t1", "t2", "t3"]);
+    }
+    layout.mockClear();
+    await layOut(map);
+    expect(layout).toHaveBeenCalled();
+    for (const root of asked(layout)) expect(nodes(root).some((n) => n.layoutOptions?.[FIRST])).toBe(false);
+  });
+
+  it("still draws when ELK refuses the triggers' places, laid out again without them, and logs why", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const layout = vi.spyOn(ELK.prototype, "layout");
+    // A trigger outside the scope starts a step in it, and the scope holds a trigger, so ELK
+    // can't have both the trigger and the scope in the first layer.
+    const json = built({
+      groups: [{ id: "team", label: "team: the people who do it" }],
+      parts: [trigger("t0"), trigger("st", "team"), step("sy", "team")],
+      lines: [["t0", "sy"], ["st", "sy"]],
+    });
+    const { full, flow } = await lay(json);
+    expect(full.parts.map((p) => p.id)).toEqual(["t0", "st", "sy"]);
+    expect(flow.parts.map((p) => p.id)).toEqual(["t0", "st", "sy"]);
+    // Each of the two drawings was tried with the triggers first, then without.
+    expect(layout).toHaveBeenCalledTimes(4);
+    const calls = asked(layout).map((root) => nodes(root).some((n) => n.layoutOptions?.[FIRST]));
+    expect(calls.filter(Boolean)).toHaveLength(2);
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[awml\] ELK could not lay a drawing out with its triggers along the top, so it is laid out again without them: /));
+  });
+
+  it("lays out a graph whose scopes are each inside the other without walking up them for ever", async () => {
+    const looped: Graph = {
+      parts: [{ id: "t", kind: "trigger", label: "When", scope: "a" }],
+      scopes: [
+        { id: "a", label: "a", dashed: true, scope: "b" },
+        { id: "b", label: "b", dashed: true, scope: "a" },
+      ],
+      lines: [],
+      notes: [],
+    };
+    await expect(layOutGraph(looped)).resolves.toBeDefined();
   });
 });
 
