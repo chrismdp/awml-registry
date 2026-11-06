@@ -7,7 +7,7 @@ import { ReactFlow } from "@xyflow/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { headHeight, lineRoutes, type Point, type Rect } from "@/components/flow/drawing";
-import { NODE_TYPES, nodesOf } from "@/components/flow/FlowCanvas";
+import { linesOf, NODE_TYPES, nodesOf, routedLines } from "@/components/flow/FlowCanvas";
 import { roundedPath } from "@/components/flow/Graphic";
 import { atServer } from "@/components/flow/physics";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
@@ -197,6 +197,25 @@ describe("a line, once a part is dragged (#67, #116)", () => {
       expect(below.points.at(-1)!.y).toBe(t.y);
       expect(below.points.at(-2)!.x).toBe(below.points.at(-1)!.x);
     }
+  });
+
+  it("is drawn by the lines the physics routed again, which drawing them never changes (#126)", async () => {
+    const { full } = laidOut(await layOut(example("flow/issue-to-pull-request.graph.json")));
+    const at = new Map<string, Rect>([...full.parts, ...full.scopes].map((b) => [b.id, b]));
+    const line = full.lines.find((l) => l.label && l.points.length > 3)!;
+    // The nodes with the line's part moved by (dx, dy), and the line as the page draws them.
+    const drawn = (dx: number, dy: number, rerouted: Set<string>) => {
+      const nodes = [...at].map(([id, r]) => ({ id, position: id === line.from ? { x: r.x + dx, y: r.y + dy } : { x: r.x, y: r.y }, width: r.width, height: r.height, data: {} }) as unknown as Parameters<typeof routedLines>[1][number]);
+      return routedLines(linesOf(full, "d"), nodes, full, at, rerouted).find((e) => e.id === line.id)!.data!.route!;
+    };
+    const none = new Set<string>();
+    expect(drawn(260, -40, none).server).toBe(false);
+    expect([...none]).toEqual([]);
+    const again = new Set([line.id]);
+    expect(drawn(-300, 20, again).server).toBe(false);
+    expect(drawn(0, 0, again).server).toBe(true);
+    expect([...again]).toEqual([line.id]);
+    expect(drawn(-300, 20, new Set()).server).toBe(true);
   });
 });
 

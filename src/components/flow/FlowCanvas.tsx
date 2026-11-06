@@ -257,7 +257,7 @@ function Canvas(p: FlowCanvasProps) {
   const first = useRef(true);
   const opening = useRef<{ from: Viewport; to: Viewport } | "done">(undefined);
   // The lines routed again as a part moved, for this drawing (lineRoutes,
-  // #126): the physics and the lines drawn share them.
+  // #126): the physics says which, and the lines drawn are routed by them.
   const rerouted = useMemo(() => new Set<string>(), [drawing]);
   useEffect(() => {
     let stopped = false;
@@ -593,9 +593,12 @@ export function linesOf(d: Drawing, id: string): FlowEdge[] {
 // The lines on the routes they take with the nodes where they are (lineRoutes
 // in drawing.ts), which the physics judges labels by too. A line whose route
 // is as it was is left as it is, so React Flow redraws only those that moved.
-export function routedLines(edges: FlowEdge[], nodes: FlowNode[], d: Drawing, served: Map<string, Rect>, rerouted: Set<string>): FlowEdge[] {
+// The lines routed again, `rerouted`, are the physics' to say, from where it
+// leaves the parts, so drawing them, in a render React may throw away, routes
+// them in a copy (#126).
+export function routedLines(edges: FlowEdge[], nodes: FlowNode[], d: Drawing, served: Map<string, Rect>, rerouted: ReadonlySet<string>): FlowEdge[] {
   const boxes = new Map(nodes.map((n) => [n.id, { ...n.position, width: n.width ?? 0, height: n.height ?? 0 }]));
-  const routes = lineRoutes(d.lines, boxes, served, rerouted);
+  const routes = lineRoutes(d.lines, boxes, served, new Set(rerouted));
   const same = (a?: Route, b?: Route) => a === b || (a && b && a.points.length === b.points.length && a.points.every((p, i) => p.x === b.points[i].x && p.y === b.points[i].y) && a.label.x === b.label.x && a.label.y === b.label.y);
   return edges.map((e) => (same(e.data?.route, routes.get(e.id)) ? e : { ...e, data: { ...e.data!, route: routes.get(e.id) } }));
 }

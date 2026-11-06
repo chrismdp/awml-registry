@@ -233,6 +233,12 @@ describe("a line whose part is moved a little (#126)", () => {
     expect(lineRoutes([{ ...l, label: { ...label, x: 60, y: 95 } }], moved, served).get("l")!.label).toEqual({ x: 70, y: 95 });
   });
 
+  it("slides its label along a stretch cut shorter by as little as keeps it on it, and not at all while it is still on it", () => {
+    const label = { x: 60, y: 95, width: 40, height: 22, lines: ["x"] };
+    expect(lineRoutes([{ ...l, label }], boxes({ a: by(a, 0, 50), b }), served).get("l")!.label).toEqual({ x: 60, y: 110 });
+    expect(lineRoutes([{ ...l, label }], boxes({ a: by(a, 0, 20), b }), served).get("l")!.label).toEqual({ x: 60, y: 95 });
+  });
+
   it("is routed again, as before, once its first stretch would reverse", () => {
     const r = lineRoutes([l], boxes({ a: by(a, 0, 80), b }), served).get("l")!;
     expect(r.server).toBe(false);

@@ -523,9 +523,11 @@ export function lineRoutes(lines: DrawnLine[], boxes: Map<string, Rect>, served:
 // box, and the bend next to it with it, across that end's stretch only, so
 // every stretch stays level or plumb; every other bend is where the server
 // put it. Its label stays where the server put it, unless the stretch it is on
-// has moved across, and then moves with that, kept on it. None once the route
-// no longer holds: an end on no side of its box, a stretch that would turn
-// or reverse, or be cut shorter than CORNER, or a stretch through a part's box.
+// has moved across, and then moves with that, kept on it; one on a stretch
+// cut shorter slides along it as little as keeps it on it. None once the
+// route no longer holds: an end on no side of its box, a stretch that would
+// turn or reverse, or be cut shorter than CORNER, or a stretch through a
+// part's box.
 function keptRoute(line: DrawnLine, at: [Rect, Rect], moves: [Point, Point], parts: () => Rect[]): Route | undefined {
   const from = line.points;
   const n = from.length;

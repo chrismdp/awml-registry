@@ -31,7 +31,7 @@ type State = { bodies: Body[]; hulls: Map<string, Rect>; opened: number; along: 
 // them, its bends while they hold, and where the physics slid it along it, if it did.
 function labelsOf(d: Drawing, s: State) {
   const byId = new Map(s.bodies.map((b) => [b.id, boxOf(b)]));
-  const routes = lineRoutes(d.lines, new Map([...s.hulls, ...byId]), new Map([...d.parts, ...d.scopes].map((b) => [b.id, b])), s.rerouted);
+  const routes = lineRoutes(d.lines, new Map([...s.hulls, ...byId]), new Map([...d.parts, ...d.scopes].map((b) => [b.id, b])), new Set(s.rerouted));
   return d.lines.flatMap((l) => {
     const route = routes.get(l.id);
     if (!l.label || l.from === l.to || !byId.has(l.from) || !byId.has(l.to) || !route) return [];
@@ -61,14 +61,15 @@ function overlaps(d: Drawing, s: State) {
 }
 
 // The physics of a drawing: its state each time it moves, and when it has opened.
-// The lines routed again as it moved are shared with the page, as FlowCanvas.tsx shares them.
+// The lines routed again as it moved are shared with the page, as FlowCanvas.tsx shares them,
+// and each state keeps them as they were when it was told.
 function physicsOf(d: Drawing) {
   const states: State[] = [];
   let rest: () => void = () => {};
   const rerouted = new Set<string>();
   const sim = startPhysics(
     d,
-    (bodies, hulls, opened, along) => states.push({ bodies: bodies.map((b) => ({ ...b })), hulls: new Map(hulls), opened, along: new Map(along), rerouted }),
+    (bodies, hulls, opened, along) => states.push({ bodies: bodies.map((b) => ({ ...b })), hulls: new Map(hulls), opened, along: new Map(along), rerouted: new Set(rerouted) }),
     () => rest(),
     rerouted,
   );
@@ -209,6 +210,30 @@ describe("a drag", () => {
     for (const id of labelled) expect(rerouted.has(id), id).toBe(true);
     expect(overlaps(full, now())).toEqual([]);
   });
+
+  for (const [name, text] of drawings)
+    it(`on ${name}, routes a line again only from where the parts are after each move, not from a nudge half done (#126)`, async () => {
+      const { full } = laidOut(await layOut(text));
+      const served = new Map([...full.parts, ...full.scopes].map((b) => [b.id, b]));
+      for (const part of full.parts.map((p) => p.id))
+        for (const [dx, dy] of [
+          [80, 0],
+          [0, 80],
+          [-80, 0],
+          [0, -80],
+        ]) {
+          const { sim, states } = opened(full);
+          const from = states.length;
+          drag(sim, part, dx, dy, 8);
+          // The lines the page routes again, told only where the parts were after each move.
+          const again = new Set<string>();
+          for (const s of states.slice(from)) {
+            lineRoutes(full.lines, new Map([...s.hulls, ...s.bodies.map((b) => [b.id, boxOf(b)] as const)]), served, again);
+            expect([...s.rerouted].sort(), `${part} ${dx},${dy}`).toEqual([...again].sort());
+          }
+          sim.stop();
+        }
+    }, 20_000);
 
   for (const [name, text] of drawings)
     it(`on ${name}, dragging each part by (300, 100) and by (-200, 150) moves nothing far from where it is dropped, leaves nothing overlapping, and nothing moves once it is dropped`, async () => {
