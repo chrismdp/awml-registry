@@ -1,6 +1,6 @@
 import { Gallery } from "@/components/Gallery";
 import { designGraph } from "@/server/as-read";
-import { layOutLater, storedDrawings } from "@/server/drawing";
+import { layOutLater, storedDrawing } from "@/server/drawing";
 import { pageContext } from "@/server/page";
 import { explore } from "@/server/registry";
 import { publicSystems } from "@/server/systems";
@@ -17,9 +17,9 @@ export default async function GalleryPage({ searchParams }: { searchParams: Prom
   const cards = await Promise.all(
     rows.map(async (r) => {
       const graph = await designGraph(r.drawn);
-      const drawings = graph ? await storedDrawings(db, graph) : null;
-      if (graph && !drawings) unstored.push(graph);
-      return { ...r, drawing: drawings && !("undrawn" in drawings) ? drawings.full : null };
+      const drawn = graph ? await storedDrawing(db, graph) : null;
+      if (graph && !drawn) unstored.push(graph);
+      return { ...r, drawing: drawn && !("undrawn" in drawn) ? drawn : null };
     }),
   );
   if (unstored.length) layOutLater(db, async () => unstored);

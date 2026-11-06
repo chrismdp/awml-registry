@@ -228,4 +228,52 @@ describe("the gallery", () => {
     expect(drawing(gallery.html)).toBeNull();
     expect(((await storedFor(await engine.graph(big)))[0].drawn as Undrawn).undrawn).toBe("too big");
   });
+
+  it("keeps nothing for the pages, so a page reads its own drawing from the database", async () => {
+    const ana = await person("ana");
+    const file = steps("Seen in the gallery first", "Seen", 2);
+    await storeVersion(ana.username, "seen", ana, { workflow: file });
+    const graph = await engine.graph(file);
+    await storeChanged(graph, LAYOUT_VERSION, "Read by the gallery");
+    const gallery = await renderPage(GalleryPage, {});
+    expect(words(gallery.html)).toContain("Read by the gallery");
+
+    // Replaced in the database after the gallery read it: a page that shows the new one read it
+    // there, not from what the gallery kept.
+    const db = await getDb();
+    await db.delete(stored).where(eq(stored.graph, await keyOf(graph)));
+    await storeChanged(graph, LAYOUT_VERSION, "Read by the page");
+    const page = await renderPage(WorkflowPage, { owner: ana.username, slug: "seen" });
+    expect(words(page.html)).toContain("Read by the page");
+    expect(words(page.html)).not.toContain("Read by the gallery");
+  });
+});
+
+describe("a stored drawing that can't be read", () => {
+  it("is laid out, and the page and the gallery show as before, never the database's error", async () => {
+    const ana = await person("ana");
+    const file = steps("Unreadable store", "Unreadable", 2);
+    await storeVersion(ana.username, "unreadable", ana, { workflow: file });
+    const db = await getDb();
+    const select = db.select.bind(db);
+    vi.spyOn(db, "select").mockImplementation(((...a: Parameters<typeof select>) => {
+      const query = select(...a);
+      const from = query.from.bind(query);
+      return Object.assign(query, {
+        from: (table: Parameters<typeof from>[0]) => {
+          if (table === stored) throw new Error("D1_ERROR: no such table: drawing");
+          return from(table);
+        },
+      });
+    }) as typeof select);
+    const page = await renderPage(WorkflowPage, { owner: ana.username, slug: "unreadable" });
+    expect(page.status).toBe(200);
+    expect(drawing(page.html)).toEqual(expected(file));
+    expect(page.html).not.toContain("no such table");
+
+    const gallery = await renderPage(GalleryPage, {});
+    expect(gallery.status).toBe(200);
+    expect(words(gallery.html)).toContain("Unreadable store");
+    expect(gallery.html).not.toContain("no such table");
+  });
 });

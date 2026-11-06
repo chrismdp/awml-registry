@@ -519,6 +519,6 @@ export const drawing = sqliteTable(
   (t) => [primaryKey({ columns: [t.graph, t.layout] })],
 );
 
-export type CheckResult ={ workflow?: string[]; security?: string[]; platform?: string[] };
+export type CheckResult = { workflow?: string[]; security?: string[]; platform?: string[] };
 
 export type CheckList = { awml: { tag: string; commit: string }; checks: ListedCheck[] };

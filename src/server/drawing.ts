@@ -4,7 +4,7 @@
 // page with every position worked out, so the browser never loads ELK. The
 // page draws it as plain SVG, which needs no scripts, and React Flow takes it
 // over to drag, pan and zoom.
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ElkExtendedEdge, ElkNode } from "elkjs/lib/elk-api";
 import { after } from "next/server";
@@ -397,15 +397,21 @@ function keep(key: string, drawn: Drawings | Undrawn) {
 }
 
 // The drawings stored for a graph under this layout, kept or read from the
-// database, or null when none are.
+// database, or null when none are, or when the database can't be read,
+// which the server logs, so the page lays them out as if none were stored.
 async function stored(db: Db, key: string): Promise<Drawings | Undrawn | null> {
   const here = kept.get(key);
   if (here) return keep(key, here);
-  const [row] = await db
-    .select({ drawn: drawing.drawn })
-    .from(drawing)
-    .where(and(eq(drawing.graph, key), eq(drawing.layout, LAYOUT_VERSION)));
-  return row ? keep(key, row.drawn) : null;
+  try {
+    const [row] = await db
+      .select({ drawn: drawing.drawn })
+      .from(drawing)
+      .where(and(eq(drawing.graph, key), eq(drawing.layout, LAYOUT_VERSION)));
+    return row ? keep(key, row.drawn) : null;
+  } catch (e) {
+    console.error(`[awml] a stored drawing could not be read: ${(e as Error).message}`);
+    return null;
+  }
 }
 
 // Every drawing a page may show of a graph: the stored ones, or when none
@@ -431,10 +437,29 @@ export async function drawingsOf(db: Db, json: string): Promise<Drawings | Undra
   return keep(key, drawn);
 }
 
-// The drawings stored for a graph, as the gallery's cards show them, which
-// never lay one out, or null when none are stored under this layout.
-export async function storedDrawings(db: Db, json: string) {
-  return stored(db, await keyOf(json));
+// The whole drawing stored for a graph, as the gallery's cards show it,
+// which never lay one out, or null when none is stored under this layout, or
+// the database can't be read. Only the whole drawing is read, and nothing is
+// kept, so up to 50 cards neither parse every layout of their graphs nor push
+// the pages' drawings out of `kept`.
+export async function storedDrawing(db: Db, json: string): Promise<Drawing | Undrawn | null> {
+  const key = await keyOf(json);
+  const here = kept.get(key);
+  if (here) return structuredClone("undrawn" in here ? here : here.full);
+  try {
+    const [row] = await db
+      .select({
+        full: sql<string | null>`json_extract(${drawing.drawn}, '$.full')`,
+        undrawn: sql<Undrawn["undrawn"] | null>`json_extract(${drawing.drawn}, '$.undrawn')`,
+      })
+      .from(drawing)
+      .where(and(eq(drawing.graph, key), eq(drawing.layout, LAYOUT_VERSION)));
+    if (!row) return null;
+    return row.undrawn ? { undrawn: row.undrawn } : (JSON.parse(row.full!) as Drawing);
+  } catch (e) {
+    console.error(`[awml] a stored drawing could not be read: ${(e as Error).message}`);
+    return null;
+  }
 }
 
 // Lays out and stores the drawings of the graphs `graphs` gives, one at a
