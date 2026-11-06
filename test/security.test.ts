@@ -13,6 +13,12 @@ import VersionPlatformPage from "@/app/[owner]/[slug]/v/[n]/platform/page";
 import VersionYamlPage from "@/app/[owner]/[slug]/v/[n]/yaml/page";
 import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
 import VersionChecksPage from "@/app/[owner]/[slug]/v/[n]/checks/page";
+import WorkflowFitPage from "@/app/[owner]/[slug]/fit/page";
+import VersionFitPage from "@/app/[owner]/[slug]/v/[n]/fit/page";
+import PlatformPage from "@/app/[owner]/platforms/[slug]/page";
+import PlatformVersionPage from "@/app/[owner]/platforms/[slug]/v/[n]/page";
+import OwnerPlatformsPage from "@/app/[owner]/platforms/page";
+import SharedPlatformsPage from "@/app/platforms/page";
 import OwnerPage from "@/app/[owner]/page";
 import InventoryPage from "@/app/[owner]/inventory/page";
 import OrgSettingsPage from "@/app/[owner]/settings/page";
@@ -57,6 +63,7 @@ const latestPages: Record<string, Page<{ owner: string; slug: string }>> = {
   platformView: WorkflowPlatformPage,
   yamlView: WorkflowYamlPage,
   checksView: WorkflowChecksPage,
+  fitView: WorkflowFitPage,
 };
 const versionPages: Record<string, Page<{ owner: string; slug: string; n: string }>> = {
   versionPage: VersionPage,
@@ -64,6 +71,7 @@ const versionPages: Record<string, Page<{ owner: string; slug: string; n: string
   versionPlatformView: VersionPlatformPage,
   versionYamlView: VersionYamlPage,
   versionChecksView: VersionChecksPage,
+  versionFitView: VersionFitPage,
 };
 
 async function everyRead(who: Who, owner = "acme", slug = "payroll") {
@@ -1107,16 +1115,13 @@ describe("A user's own private workflows", () => {
       expect((await push(ana.username, "diary", { token: ana.token })).status).toBe(201);
     });
 
-    it("private platforms still belong to organisations only", async () => {
+    it("a person may keep a private platform on their own account too (#1)", async () => {
       const { ana } = await anaDiary();
       const res = await pushPlatform(ana.username, "box", { token: ana.token }, {
         description: backOffice,
         visibility: "private",
       });
-      expect([res.status, (await res.json()).errors]).toEqual([
-        422,
-        ["Private platforms belong to organisations. Push it to one of yours."],
-      ]);
+      expect(res.status).toBe(201);
     });
   });
 
@@ -1174,6 +1179,188 @@ describe("A user's own private workflows", () => {
         const res = await push(ana.username, "diary", { token: ana.token }, "private");
         expect([res.status, (await res.json()).errors]).toEqual([403, [limitMessage(ana.username, 0, 0)]]);
       });
+    });
+  });
+});
+
+// A person's own private platforms (#1), by the rules of their own private
+// workflows. Ana keeps "home-box" private on her own account, which every
+// workflow here would fit, so a fit that used it would show it; Olive owns
+// organisation "acme", with Ana and Mo as members; Nell belongs to nothing.
+describe("A person's own private platforms", () => {
+  const homeBox = backOffice.replace("back-office", "home-box").replace("Acme's back office", "Ana's home box");
+
+  async function anaHomeBox() {
+    const ana = await person("ana");
+    const olive = await person("olive");
+    const mo = await person("mo");
+    const nell = await person("nell");
+    await orgWith("acme", olive, [ana, mo]);
+    const pushed = await pushPlatform(ana.username, "home-box", { token: ana.token }, {
+      description: homeBox,
+      recipe,
+      visibility: "private",
+    });
+    expect(pushed.status).toBe(201);
+    const open = await pushPlatform(ana.username, "open-box", { token: ana.token }, { description: example("platforms/worker.yaml") });
+    expect(open.status).toBe(201);
+    return { ana, olive, mo, nell };
+  }
+
+  const pages = async (owner: string, slug: string, as: Who) => ({
+    page: (await renderPage(PlatformPage, { owner, slug }, { as })).status,
+    versionPage: (await renderPage(PlatformVersionPage, { owner, slug, n: "1" }, { as })).status,
+  });
+
+  const fitted = async (as: Who) => {
+    const res = await request("POST", "/api/v1/fit", { as, json: { file: clientEmail } });
+    const text = await res.text();
+    return { status: res.status, text, platforms: (JSON.parse(text).results as { platform: string }[]).map((r) => r.platform).sort() };
+  };
+
+  const allAudit = async () => (await (await getDb()).select().from(auditEvent)).map((r) => `${r.action} ${r.target}`);
+
+  describe("Positive boundary", () => {
+    it("the person reads and pushes their private platform, at both API addresses and its pages, and nothing is recorded", async () => {
+      const { ana } = await anaHomeBox();
+      for (const as of [{ token: ana.token }, { cookie: ana.cookie }])
+        expect(await platformReads(ana.username, "home-box", as)).toEqual(allPlatformReads(200));
+      expect(await pages(ana.username, "home-box", { cookie: ana.cookie })).toEqual({ page: 200, versionPage: 200 });
+      const again = await pushPlatform(ana.username, "home-box", { token: ana.token }, { description: homeBox });
+      expect([again.status, (await again.json()).number]).toEqual([201, 2]);
+      expect((await allAudit()).filter((e) => e.includes("home-box"))).toEqual([]);
+    });
+
+    it("the person's fit uses their own private platform as well as the public ones, and records nothing", async () => {
+      const { ana } = await anaHomeBox();
+      const fit = await fitted({ token: ana.token });
+      expect(fit.platforms).toEqual([`${ana.username}/home-box`, `${ana.username}/open-box`]);
+      expect((await allAudit()).filter((e) => e.includes("platforms/"))).toEqual([]);
+    });
+
+    it("the person finds it on /platforms and on their own platforms page", async () => {
+      const { ana } = await anaHomeBox();
+      for (const html of [
+        (await renderPage(SharedPlatformsPage, {}, { as: { cookie: ana.cookie } })).html,
+        (await renderPage(OwnerPlatformsPage, { owner: ana.username }, { as: { cookie: ana.cookie } })).html,
+      ])
+        expect(html).toContain("Ana&#x27;s home box");
+    });
+  });
+
+  describe("Negative boundary", () => {
+    it("another person and a signed-out visitor get 404 on its API, versions, files and pages, exactly as for a missing one", async () => {
+      const { ana, nell } = await anaHomeBox();
+      for (const as of [{ token: nell.token }, { cookie: nell.cookie }, undefined]) {
+        expect(await platformReads(ana.username, "home-box", as)).toEqual(allPlatformReads(404));
+        expect(await pages(ana.username, "home-box", as)).toEqual({ page: 404, versionPage: 404 });
+        for (const [hidden, missing] of [
+          [`/api/v1/platforms/${ana.username}/home-box`, `/api/v1/platforms/${ana.username}/nothing-here`],
+          [`/api/v1/${ana.username}/platforms/home-box/v/1`, `/api/v1/${ana.username}/platforms/nothing-here/v/1`],
+          [`/${ana.username}/platforms/home-box/v/1/recipe.md`, `/${ana.username}/platforms/nothing-here/v/1/recipe.md`],
+        ]) {
+          const a = await request("GET", hidden, { as });
+          const b = await request("GET", missing, { as });
+          expect([a.status, await a.text()]).toEqual([b.status, await b.text()]);
+        }
+      }
+    });
+
+    it("it is listed to nobody else, and nobody else can push to it", async () => {
+      const { ana, nell } = await anaHomeBox();
+      for (const as of [{ cookie: nell.cookie }, undefined]) {
+        for (const html of [
+          (await renderPage(SharedPlatformsPage, {}, { as })).html,
+          (await renderPage(OwnerPlatformsPage, { owner: ana.username }, { as })).html,
+        ]) {
+          expect(html).not.toContain("home-box");
+          expect(html).not.toContain("Ana&#x27;s home box");
+        }
+      }
+      const refused = { status: 403, body: { errors: [`Only ${ana.username} can push here.`] } };
+      expect(await answer(pushPlatform(ana.username, "home-box", { token: nell.token }, { description: homeBox }))).toEqual(refused);
+      expect(await answer(pushPlatform(ana.username, "nothing-here", { token: nell.token }, { description: homeBox }))).toEqual(
+        refused,
+      );
+    });
+  });
+
+  describe("Cross-tenant boundary", () => {
+    it("the owner and a member of an organisation the person belongs to can neither read nor push it", async () => {
+      const { ana, olive, mo } = await anaHomeBox();
+      for (const who of [olive, mo]) {
+        expect(await platformReads(ana.username, "home-box", { token: who.token })).toEqual(allPlatformReads(404));
+        expect(await pages(ana.username, "home-box", { cookie: who.cookie })).toEqual({ page: 404, versionPage: 404 });
+        expect((await pushPlatform(ana.username, "home-box", { token: who.token }, { description: homeBox })).status).toBe(403);
+      }
+    });
+
+    it("another person's fit never uses or reveals it, and naming it answers as a missing platform does", async () => {
+      const { ana, olive, nell } = await anaHomeBox();
+      for (const who of [olive, nell]) {
+        const fit = await fitted({ token: who.token });
+        expect(fit.platforms).toEqual([`${ana.username}/open-box`]);
+        for (const secret of ["home-box", "Ana's home box"]) expect(fit.text).not.toContain(secret);
+        const named = await request("POST", "/api/v1/fit", {
+          as: { token: who.token },
+          json: { file: clientEmail, platforms: [`${ana.username}/home-box`] },
+        });
+        const missing = await request("POST", "/api/v1/fit", {
+          as: { token: who.token },
+          json: { file: clientEmail, platforms: [`${ana.username}/nothing-here`] },
+        });
+        expect(named.status).toBe(404);
+        expect((await named.text()).replace("home-box", "nothing-here")).toBe(await missing.text());
+      }
+    });
+
+    it("nobody can keep a private platform on another person's account", async () => {
+      const { ana, nell } = await anaHomeBox();
+      expect((await pushPlatform(nell.username, "box", { token: ana.token }, { description: homeBox, visibility: "private" })).status).toBe(
+        403,
+      );
+      expect((await request("GET", `/api/v1/platforms/${nell.username}/box`, { as: { token: nell.token } })).status).toBe(404);
+    });
+  });
+
+  describe("Roles boundary", () => {
+    it("a role in an organisation gives nothing on a person's own platforms, while the organisation's own private platforms still work", async () => {
+      const { ana, olive } = await anaHomeBox();
+      expect(await platformReads(ana.username, "home-box", { token: olive.token })).toEqual(allPlatformReads(404));
+      const org = await pushPlatform("acme", "back-office", { token: ana.token }, {
+        description: backOffice,
+        recipe,
+        visibility: "private",
+      });
+      expect(org.status).toBe(201);
+      expect(await platformReads("acme", "back-office", { token: olive.token })).toEqual(allPlatformReads(200));
+      expect(await allAudit()).toContain("push platforms/acme/back-office v1");
+      expect((await allAudit()).filter((e) => e.includes("home-box"))).toEqual([]);
+    });
+  });
+
+  describe("A token that is not valid", () => {
+    it("gets the same 401 for the person's private, public and missing platform, on reads, a push and a fit", async () => {
+      const { ana } = await anaHomeBox();
+      const madeUp = ana.token.slice(0, -2) + "xx";
+      const read = async (slug: string, token: string) => {
+        const res = await request("GET", `/api/v1/platforms/${ana.username}/${slug}`, { as: { token } });
+        return { status: res.status, body: await res.text() };
+      };
+      const hidden = await read("home-box", madeUp);
+      expect(hidden.status).toBe(401);
+      expect(hidden.body).toMatch(/token is not valid/);
+      expect(await read("open-box", madeUp)).toEqual(hidden);
+      expect(await read("nothing-here", madeUp)).toEqual(hidden);
+      await revoke(ana);
+      expect(await read("home-box", ana.token)).toEqual(hidden);
+      const pushed = await pushPlatform(ana.username, "home-box", { token: ana.token }, { description: homeBox });
+      expect([pushed.status, await pushed.text()]).toEqual([401, hidden.body]);
+      const fit = await request("POST", "/api/v1/fit", {
+        as: { token: ana.token },
+        json: { file: clientEmail, platforms: [`${ana.username}/home-box`] },
+      });
+      expect([fit.status, await fit.text()]).toEqual([401, hidden.body]);
     });
   });
 });

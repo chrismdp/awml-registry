@@ -1,6 +1,6 @@
 import { notFound, permanentRedirect } from "next/navigation";
 import { errorsIn, mistakesIn, type CheckedFile, type CheckRow } from "@/components/Checks";
-import type { VersionViewProps } from "@/components/VersionView";
+import type { FitGroup, FitTab, VersionViewProps } from "@/components/VersionView";
 import type { Db } from "@/db/client";
 import { engine, type ListedCheck } from "@/engine";
 import { asRead } from "@/server/as-read";
@@ -8,9 +8,10 @@ import { refPath, refsAsSeen } from "@/server/refs";
 import { awmlOf, implementationsOf, partKinds } from "@/server/awml-file";
 import { followOldName, isPageView, pageContext, underOwner, workflowPath, type PageView } from "@/server/page";
 import { drawingsOf } from "@/server/drawing";
+import { whereItCanRun, type JudgedPlatform } from "@/server/fit";
 import { partLinks } from "@/server/part-links";
 import { organisationsOf } from "@/server/organisations";
-import { drawnDescriptions } from "@/server/platforms";
+import { drawnDescriptions, PUBLIC_JUDGED } from "@/server/platforms";
 import { forksOf, readVersion, referrersOf, systemsWith, VIEWS, type FileName, type View } from "@/server/registry";
 import type { Viewer } from "@/server/viewer";
 
@@ -177,6 +178,12 @@ export async function versionProps(
   const storedFailed = checks.some((c) => c.name === source && c.listed === "stored" && mistakesIn([c]) > 0);
   const drawable = drawnFile !== undefined && !storedFailed && (await engine.unsound(drawnFile)).length === 0;
   const drawnAs = drawable ? drawnImplementation(source!, placed, drawnFile) : undefined;
+  // Only the "Where it can run" tab works out the fit (#1), so no other tab
+  // costs a fit. It judges the design, or a security view stored before 0.4.
+  const fit =
+    shown === "fit"
+      ? await fitTab(db, viewer, workflow ? workflowRead : readFile("security"), `${address}/fit`)
+      : null;
   // A public workflow can be forked into the viewer's own account or one of
   // their organisations; someone signed out is asked to sign in first.
   const fork =
@@ -230,8 +237,53 @@ export async function versionProps(
             : await engine.graph(drawnFile, drawnAs, await drawnDescriptions(db, viewer, drawnFile, drawnAs)),
         ),
     drawnErrors: drawable ? errorsIn(checks.filter((c) => c.name === source)) : 0,
+    fit,
     summary: v.summary,
     versions: v.versions,
+  };
+}
+
+// The "Where it can run" tab (#1): the fit of the design, as the engine
+// judges it, in groups: the viewer's own private platforms, each of their
+// organisations', then the public ones, each closest first, the fewest
+// reasons, ties by owner/slug. A reason every public platform shares is
+// given once, beside them. An invalid file isn't fitted, as the fit API
+// refuses one.
+async function fitTab(db: Db, viewer: Viewer, file: string | undefined, address: string): Promise<FitTab> {
+  if (file === undefined || (await engine.unsound(file)).length) return { unfittable: true };
+  const [where, organisations] = await Promise.all([
+    whereItCanRun(db, viewer, file),
+    viewer ? organisationsOf(db, viewer.id) : [],
+  ]);
+  const name = (p: JudgedPlatform) => `${p.owner}/${p.slug}`;
+  const closest = [...where.judged].sort(
+    (a, b) => a.reasons.length - b.reasons.length || (name(a) < name(b) ? -1 : name(a) > name(b) ? 1 : 0),
+  );
+  const open = closest.filter((p) => p.visibility === "public");
+  const groups: FitGroup[] = [
+    { name: "Your platforms", platforms: closest.filter((p) => p.visibility === "private" && p.ownerType === "user") },
+    ...organisations.map((o) => ({
+      name: `${o.name}'s platforms`,
+      platforms: closest.filter((p) => p.visibility === "private" && p.ownerType === "organisation" && p.owner === o.slug),
+    })),
+  ]
+    .filter((g) => g.platforms.length)
+    .map((g) => ({ ...g, public: false, shared: [] }));
+  if (open.length)
+    groups.push({
+      name: "Public platforms",
+      public: true,
+      platforms: open,
+      shared: open.length > 1 ? open[0].reasons.filter((r) => open.every((p) => p.reasons.includes(r))) : [],
+    });
+  return {
+    fits: where.judged.filter((p) => p.fits).length,
+    seen: where.seen,
+    newest: where.publicCount > PUBLIC_JUDGED ? PUBLIC_JUDGED : null,
+    gaps: where.gaps,
+    groups,
+    placements: where.placements,
+    signIn: viewer ? null : `/login?${new URLSearchParams({ next: address })}`,
   };
 }
 

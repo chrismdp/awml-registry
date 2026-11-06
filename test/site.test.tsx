@@ -207,6 +207,7 @@ describe("a workflow's page", () => {
     expect(tabs(page.html)).toEqual([
       { href: `/${o}/bin-day/security`, label: "Who may see each part", selected: true },
       { href: `/${o}/bin-day/platform`, label: "Where each part runs", selected: false },
+      { href: `/${o}/bin-day/fit`, label: "Where it can run", selected: false },
       { href: `/${o}/bin-day/yaml`, label: "YAML", selected: false },
       { href: `/${o}/bin-day/checks`, label: "Checks No mistakes", selected: false },
     ]);
@@ -262,6 +263,7 @@ describe("a workflow's page", () => {
     expect(tabs(drawn.html)).toEqual([
       { href: `/${o}/bin-day/v/1/security`, label: "Who may see each part", selected: false },
       { href: `/${o}/bin-day/v/1/platform`, label: "Where each part runs", selected: true },
+      { href: `/${o}/bin-day/v/1/fit`, label: "Where it can run", selected: false },
       { href: `/${o}/bin-day/v/1/yaml`, label: "YAML", selected: false },
       { href: `/${o}/bin-day/v/1/checks`, label: "Checks No mistakes", selected: false },
     ]);
@@ -306,7 +308,7 @@ describe("a workflow's page", () => {
     expect((await renderPage(VersionPlatformPage, { owner: o, slug: "bins", n: "1" })).status).toBe(404);
     const page = await renderPage(WorkflowSecurityPage, { owner: o, slug: "bins" });
     expect(page.status).toBe(200);
-    expect(tabs(page.html).map((t) => t.href)).toEqual([`/${o}/bins/security`, `/${o}/bins/yaml`, `/${o}/bins/checks`]);
+    expect(tabs(page.html).map((t) => t.href)).toEqual([`/${o}/bins/security`, `/${o}/bins/fit`, `/${o}/bins/yaml`, `/${o}/bins/checks`]);
   });
 
   it("keeps each file's raw download at /v/{n}/{view}.yaml", async () => {
@@ -396,7 +398,7 @@ describe("a workflow's YAML view", () => {
     const reasons = await engine.convert([titled, platform]);
     expect(shown).toContain(
       `${o} / dinners Dinners <b>&</b> Public · Version 1 of 1 Fork ` +
-        `Who may see each part Where each part runs YAML Checks ${"error" in reasons ? reasons.error.split("\n").length : 0} mistakes ` +
+        `Who may see each part Where each part runs Where it can run YAML Checks ${"error" in reasons ? reasons.error.split("\n").length : 0} mistakes ` +
         "security.yaml Copy Download security.yaml is AWML 0.2, as it was pushed. " +
         "The registry draws, checks and fits it converted to AWML 0.11. # The family's dinners",
     );
@@ -497,6 +499,7 @@ describe("a workflow's Checks view", () => {
     expect(tabs(passing.html).map((t) => [t.label, t.selected])).toEqual([
       ["Who may see each part", false],
       ["Where each part runs", false],
+      ["Where it can run", false],
       ["YAML", false],
       ["Checks No mistakes", true],
     ]);
@@ -512,13 +515,13 @@ describe("a workflow's Checks view", () => {
     const reasons = await engine.convert([security, platform]);
     const platformReasons = "error" in reasons ? reasons.error.split("\n") : [];
     expect(platformReasons.length).toBeGreaterThan(0);
-    expect(tabs(page.html)[3]).toEqual({ href: `/${o}/dinners/checks`, label: `Checks ${platformReasons.length} mistakes`, selected: true });
+    expect(tabs(page.html)[4]).toEqual({ href: `/${o}/dinners/checks`, label: `Checks ${platformReasons.length} mistakes`, selected: true });
     // AWML 0.7 warns of parts the converted security view links to no trigger, which fail nothing.
     const converted = await engine.convert([security]);
     const warned = "file" in converted ? await engine.warnings(converted.file) : [];
     expect(warned.length).toBeGreaterThan(0);
     expect(text(page.html)).toContain(
-      `${o} / dinners The family's dinners Public · Version 1 of 1 Fork Who may see each part Where each part runs YAML Checks ${platformReasons.length} mistakes ` +
+      `${o} / dinners The family's dinners Public · Version 1 of 1 Fork Who may see each part Where each part runs Where it can run YAML Checks ${platformReasons.length} mistakes ` +
         `${CHECKS_INTRO} ` +
         `security.yaml Checked by AWML ${engine.version.tag} awml check No mistakes ${warned.length} warnings Warnings don't fail the check. ${warned.join(" ")} ` +
         `platform.yaml Checked by AWML ${engine.version.tag} awml convert ${platformReasons.length} mistakes ${platformReasons.join(" ")} ` +
@@ -544,7 +547,7 @@ describe("a workflow's Checks view", () => {
 
     const page = await renderPage(WorkflowChecksPage, { owner: o, slug: "dinners" });
     expect(page.status).toBe(200);
-    expect(tabs(page.html)[2]).toEqual({ href: `/${o}/dinners/checks`, label: "Checks 1 mistake", selected: true });
+    expect(tabs(page.html)[3]).toEqual({ href: `/${o}/dinners/checks`, label: "Checks 1 mistake", selected: true });
     expect(text(page.html)).toContain(`security.yaml Checked by AWML ${engine.version.tag} awml check 1 mistake ${mistake} `);
     expect(header(page.html)).toBe(`${o} / dinners The family's dinners Public · Version 1 of 1 Fork`);
 
@@ -553,7 +556,7 @@ describe("a workflow's Checks view", () => {
     expect(drawn.html).not.toContain("flowchart");
     expect(text(drawn.html)).toContain("security.yaml has 1 mistake, so it cannot be drawn. See Checks.");
     expect(drawn.html).toContain(`href="/${o}/dinners/checks"`);
-    expect(tabs(drawn.html)[2].label).toBe("Checks 1 mistake");
+    expect(tabs(drawn.html)[3].label).toBe("Checks 1 mistake");
   });
 
   it("works on an older version, each file checked as that version has it", async () => {
@@ -565,6 +568,7 @@ describe("a workflow's Checks view", () => {
     expect(page.status).toBe(200);
     expect(tabs(page.html).map((t) => t.href)).toEqual([
       `/${o}/bins/v/1/security`,
+      `/${o}/bins/v/1/fit`,
       `/${o}/bins/v/1/yaml`,
       `/${o}/bins/v/1/checks`,
     ]);

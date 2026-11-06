@@ -9,6 +9,7 @@ import WorkflowPage from "@/app/[owner]/[slug]/page";
 import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
 import WorkflowYamlPage from "@/app/[owner]/[slug]/yaml/page";
 import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
+import WorkflowFitPage from "@/app/[owner]/[slug]/fit/page";
 import ImplementationPage from "@/app/[owner]/[slug]/platform/[implementation]/page";
 import { example, person, request } from "./helpers";
 import { renderPage } from "./pages";
@@ -69,7 +70,7 @@ describe("a workflow page's tabs", () => {
     for (const page of pages) shown.push((await renderPage(page, params)).html);
     shown.push((await renderPage(ImplementationPage, { ...params, implementation: "away" })).html);
     for (const html of shown) {
-      expect(tabLinks(html)).toHaveLength(4);
+      expect(tabLinks(html)).toHaveLength(5);
       for (const tag of tabLinks(html)) {
         expect(tag).toContain('data-link=""');
         expect(tag).toContain('data-scroll="false"');
@@ -91,7 +92,7 @@ describe("a workflow page's tabs", () => {
   it("draws only on the tabs that show a drawing", async () => {
     const owner = await pushed();
     const draw = vi.spyOn(engine, "graph");
-    for (const page of [WorkflowYamlPage, WorkflowChecksPage]) {
+    for (const page of [WorkflowFitPage, WorkflowYamlPage, WorkflowChecksPage]) {
       expect((await renderPage(page, { owner, slug: "dinners" })).status).toBe(200);
     }
     expect(draw).not.toHaveBeenCalled();

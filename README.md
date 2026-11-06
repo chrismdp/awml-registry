@@ -64,13 +64,13 @@ curl -X POST http://localhost:3000/api/v1/platforms/<you>/<platform>/versions \
   -d '{"description": "<the YAML of the description>", "recipe": "<Markdown steps>"}'
 ```
 
-A recipe says where each secret goes, but never holds a secret itself. Anyone can read it, unless the platform is private. Only an organisation can keep a private platform: add `"visibility": "private"` to the first push.
+A recipe says where each secret goes, but never holds a secret itself. Anyone can read it, unless the platform is private. To keep a platform private, add `"visibility": "private"` to the first push: on your own account only you see it, and an organisation's only its members.
 
 Read the latest version at `GET /api/v1/platforms/<owner>/<platform>`, one version at `.../v/<n>`, and its files at `/<owner>/platforms/<platform>/v/<n>/description.yaml` and `.../recipe.md`. A platform's page is `/<owner>/platforms/<platform>`, the same as the reference AWML gives it; the old `/platforms/<owner>/<platform>` addresses redirect there.
 
 On the site, `/<owner>/platforms` lists an owner's platforms with links to their files, and `/platforms` lists and searches every platform you can see.
 
-To find where a workflow can run:
+On the site, every workflow's page has a "Where it can run" tab, at `/<owner>/<workflow>/fit`: it judges the workflow against your own private platforms, your organisations' and the 100 newest public ones, and says which fit and what each of the others is missing. To ask the API instead:
 
 ```sh
 curl -X POST http://localhost:3000/api/v1/fit \
@@ -78,7 +78,7 @@ curl -X POST http://localhost:3000/api/v1/fit \
   -d '{"workflow": "<owner>/<workflow>", "platforms": ["<owner>/<platform>"]}'
 ```
 
-Leave out `platforms` to fit against every platform you can see: the public ones, and your organisations' private ones. Send `"file": "<YAML>"` in place of `workflow` to fit a 0.11 file that is not in the registry. For each platform, the answer says whether the workflow's design fits, and if not, every reason. Add `"implementation": "<id>"` to judge where one implementation places each part instead, as `awml fit --implementation` does: each block is judged against the platform it names, found among those platforms by its description's id, or by the platform's address, as in `platform: acme/platforms/ops-runner`. Add `"parts": true` to judge each part of the design on its own too, as `awml fit --parts` does: the answer's `parts` gives the platforms that can hold each part and why each other can't, and every option, a set of the platforms that between them hold every part with none to spare. Whether the parts of an option on several platforms can reach each other isn't judged yet, and such an option says so in its `note`. `parts` judges at most 8 platforms together and a design of at most 80 parts, each with an id of at most 64 characters, so with more platforms than that to see, name the ones to judge in `platforms`. A new registry has no platforms until someone pushes one.
+Leave out `platforms` to fit against every platform you can see: the public ones, your own private ones and your organisations' private ones. Send `"file": "<YAML>"` in place of `workflow` to fit a 0.11 file that is not in the registry. For each platform, the answer says whether the workflow's design fits, and if not, every reason. Add `"implementation": "<id>"` to judge where one implementation places each part instead, as `awml fit --implementation` does: each block is judged against the platform it names, found among those platforms by its description's id, or by the platform's address, as in `platform: acme/platforms/ops-runner`. Add `"parts": true` to judge each part of the design on its own too, as `awml fit --parts` does: the answer's `parts` gives the platforms that can hold each part and why each other can't, and every option, a set of the platforms that between them hold every part with none to spare. Whether the parts of an option on several platforms can reach each other isn't judged yet, and such an option says so in its `note`. `parts` judges at most 8 platforms together and a design of at most 80 parts, each with an id of at most 64 characters, so with more platforms than that to see, name the ones to judge in `platforms`. A new registry has no platforms until someone pushes one.
 
 A platform description must be marked `awml: "0.11"`. The registry refuses an older one with a 400 that says to convert it with `awml convert`; one stored before is converted whenever the fit reads it. A description may give its own address as its id, `platform: { id: <owner>/platforms/<slug>, ... }`, but never another platform's.
 

@@ -12,6 +12,7 @@ import {
 } from "better-auth/oauth2";
 import { errors as jose, type JSONWebKeySet } from "jose";
 import * as z from "zod";
+import { mayUse, naturalList } from "@/components/words";
 import { getDb, type Db } from "@/db/client";
 import { getAuth } from "./auth";
 import { mcpUrl, ownUrl } from "./http";
@@ -139,20 +140,6 @@ const listing = (rows: Listed[]) => {
 
 const platformPage = (owner: string, slug: string, number?: number) =>
   ownUrl(`/${owner}/platforms/${slug}${number === undefined ? "" : `/v/${number}`}`);
-
-// "a", "a and b", "a, b and c".
-const naturalList = (items: string[]) => (items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0]);
-
-// The AI steps that may use the same companies, as `awml fit` says it:
-// "choose, draft and learn may use anthropic".
-function mayUse(models: Record<string, string[]>) {
-  const byCompanies = new Map<string, string[]>();
-  for (const [step, companies] of Object.entries(models)) {
-    const key = companies.join(" and ");
-    byCompanies.set(key, [...(byCompanies.get(key) ?? []), step]);
-  }
-  return [...byCompanies].map(([companies, steps]) => `${naturalList(steps)} may use ${companies}`).join("; ");
-}
 
 // Each part's fit, as `awml fit --parts` says it: the platforms that hold
 // each part and why each other doesn't, then each option with where each
@@ -401,7 +388,7 @@ function server(person: Person) {
     {
       title: "Search platforms",
       description:
-        "Search the platforms you may see by words in their label or slug, newest first: public platforms, and the private ones of organisations you belong to. With no query, gives them all.",
+        "Search the platforms you may see by words in their label or slug, newest first: public platforms, your own private ones, and the private ones of organisations you belong to. With no query, gives them all.",
       inputSchema: z.object({ query: z.string().optional().describe("Words in the label or slug") }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -459,7 +446,7 @@ function server(person: Person) {
     {
       title: "Add a platform",
       description:
-        "Save a new version of the platform owner/slug from its description, and its install recipe if it has one. The description is checked first and refused if it has mistakes. A recipe says what to create, where each secret goes, how to schedule the triggers and how to check the workflow runs; it must never hold a secret itself. The owner is your own username or an organisation you belong to. The first version sets whether the platform is public or private, and only an organisation can keep a private one. Gives the platform's page and the new version number.",
+        "Save a new version of the platform owner/slug from its description, and its install recipe if it has one. The description is checked first and refused if it has mistakes. A recipe says what to create, where each secret goes, how to schedule the triggers and how to check the workflow runs; it must never hold a secret itself. The owner is your own username or an organisation you belong to. The first version sets whether the platform is public or private: a private one on your own account is seen by you alone, and one of an organisation's by its members. Gives the platform's page and the new version number.",
       inputSchema: z.object({
         owner,
         slug: platformSlug,
@@ -472,7 +459,7 @@ function server(person: Person) {
         visibility: z
           .enum(["public", "private"])
           .optional()
-          .describe("Only for the first version. Default public. Private needs an organisation."),
+          .describe("Only for the first version. Default public."),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },

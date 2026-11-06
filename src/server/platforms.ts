@@ -1,7 +1,7 @@
 // Platforms: where a workflow can run, each described in AWML's platform
 // description format, with an install recipe when it has one. A platform is
 // owned, versioned and kept private exactly as a workflow is.
-import { and, desc, eq, inArray, max, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, max, or, sql } from "drizzle-orm";
 import { parse } from "yaml";
 import type { Db } from "@/db/client";
 import { membership, platform, platformVersion, user } from "@/db/schema";
@@ -157,8 +157,9 @@ async function versionList(db: Db, platformId: string) {
 }
 
 // A platform version the viewer may read, or null: a private platform is the
-// same as one that does not exist to anyone outside its organisation. This
-// records nothing; a caller that shows the platform records the view.
+// same as one that does not exist to anyone outside its organisation, or for
+// a person's own, to anyone but them. This records nothing; a caller that
+// shows the platform records the view.
 export async function findReadablePlatformVersion(
   db: Db,
   viewer: Viewer,
@@ -218,8 +219,10 @@ export async function drawnDescriptions(db: Db, viewer: Viewer, file: string, im
 const labelOf = (description: string) =>
   String((parse(description) as { platform: { label: string } }).platform.label);
 
-// Records that the viewer saw a private platform's version: its description
-// or recipe, or a fit judged against it.
+// Records that the viewer saw an organisation's private platform's version:
+// its description or recipe, or a fit judged against it. A person's own
+// private platforms are theirs alone, so nothing records them, as nothing
+// records their own private workflows (#1).
 export async function notePrivatePlatformView(
   db: Db,
   viewer: Viewer,
@@ -268,19 +271,9 @@ const isLatest = sql`${platformVersion.number} = (select max(v2.number) from pla
 
 const hasRecipe = sql<number>`${platformVersion.recipe} is not null`;
 
-// Every platform the viewer may see, newest first, with its latest version:
-// the public ones, and the private ones of the organisations they belong to.
-// With a query, only those whose label or slug has it.
-export async function visiblePlatforms(db: Db, viewer: Viewer, query = "") {
-  const q = query.trim();
-  const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-  const theirs = viewer
-    ? inArray(
-        platform.ownerOrganisationId,
-        db.select({ id: membership.organisationId }).from(membership).where(eq(membership.userId, viewer.id)),
-      )
-    : undefined;
-  return db
+// Each platform with its latest version, as the lists and the fit read it.
+const latestPlatforms = (db: Db) =>
+  db
     .select({
       owner: ownerSlugSql,
       ownerType: sql<Owner["type"]>`case when ${platform.ownerUserId} is null then 'organisation' else 'user' end`,
@@ -294,14 +287,64 @@ export async function visiblePlatforms(db: Db, viewer: Viewer, query = "") {
       hasRecipe,
     })
     .from(platform)
-    .innerJoin(platformVersion, and(eq(platformVersion.platformId, platform.id), isLatest))
+    .innerJoin(platformVersion, and(eq(platformVersion.platformId, platform.id), isLatest));
+
+// The platforms whose private ones the viewer may see: their own, and their
+// organisations' (#1).
+const theirs = (db: Db, viewer: NonNullable<Viewer>) =>
+  or(
+    eq(platform.ownerUserId, viewer.id),
+    inArray(
+      platform.ownerOrganisationId,
+      db.select({ id: membership.organisationId }).from(membership).where(eq(membership.userId, viewer.id)),
+    ),
+  );
+
+// Every platform the viewer may see, newest first, with its latest version:
+// the public ones, their own private ones and the private ones of the
+// organisations they belong to. With a query, only those whose label or slug
+// has it.
+export async function visiblePlatforms(db: Db, viewer: Viewer, query = "") {
+  const q = query.trim();
+  const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  return latestPlatforms(db)
     .where(
       and(
-        theirs ? or(eq(platform.visibility, "public"), theirs) : eq(platform.visibility, "public"),
+        viewer ? or(eq(platform.visibility, "public"), theirs(db, viewer)) : eq(platform.visibility, "public"),
         q ? sql`(${platform.label} like ${like} escape '\\' or ${platform.slug} like ${like} escape '\\')` : undefined,
       ),
     )
     .orderBy(desc(platform.updatedAt));
+}
+
+// How many public platforms a workflow's "Where it can run" tab judges at
+// most, the newest (#1). Anyone signed in may publish a public platform, so
+// without it the tab's work would grow with every one published. Workflows
+// that fit a platform are bounded the same way (#125).
+export const PUBLIC_JUDGED = 100;
+
+// The platforms the "Where it can run" tab judges for the viewer (#1): every
+// private platform they may see, their own and their organisations', and the
+// PUBLIC_JUDGED newest public ones, by when each was last pushed, ties by
+// owner and slug; and how many public platforms there are in all.
+export async function judgedPlatforms(db: Db, viewer: Viewer) {
+  const [own, open, [{ publicCount }]] = await Promise.all([
+    viewer
+      ? latestPlatforms(db)
+          .where(and(eq(platform.visibility, "private"), theirs(db, viewer)))
+          .orderBy(ownerSlugSql, platform.slug)
+      : [],
+    latestPlatforms(db)
+      .where(eq(platform.visibility, "public"))
+      .orderBy(desc(platform.updatedAt), ownerSlugSql, platform.slug)
+      .limit(PUBLIC_JUDGED),
+    db
+      .select({ publicCount: count() })
+      .from(platform)
+      .innerJoin(platformVersion, and(eq(platformVersion.platformId, platform.id), isLatest))
+      .where(eq(platform.visibility, "public")),
+  ]);
+  return { platforms: [...own, ...open], publicCount };
 }
 
 // The platforms the viewer may see whose label or slug has the query: public
