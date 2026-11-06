@@ -8,9 +8,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { boxText, headHeight, headWidth, LABEL, partText, SCOPE_PAD, SCOPE_TITLE, SCOPE_WHO, type Drawing } from "@/components/flow/drawing";
 import { graphOf } from "@/components/flow/graph";
 import { textWidth, wrap } from "@/components/flow/text";
-import { layOut, mapLinks } from "@/server/drawing";
+import { getDb } from "@/db/client";
+import { drawingsOf, layOut, mapLinks } from "@/server/drawing";
 import { laidOut } from "./drawn";
-import { example } from "./helpers";
+import { example, statements } from "./helpers";
 
 // The drawing laid out, which these tests expect to be.
 const lay = async (json: string) => laidOut(await layOut(json));
@@ -148,37 +149,44 @@ describe("laying a drawing out on the server", () => {
     for (const line of carers.who!) expect(textWidth(line, SCOPE_WHO.size)).toBeLessThanOrEqual(carers.width - 2 * SCOPE_TITLE.left);
   });
 
-  it("keeps each layout once worked out, by the graph, the switch and the engine, so the same drawing isn't laid out twice", async () => {
+  it("keeps each graph's drawings once worked out, so the same graph isn't laid out twice", async () => {
+    const db = await getDb();
+    const stored = async (json: string) => laidOut(await drawingsOf(db, json));
     const layout = vi.spyOn(ELK.prototype, "layout");
-    const first = await lay(small("x"));
+    const first = await stored(small("x"));
     // The whole drawing and Flow only: two layouts.
     expect(layout).toHaveBeenCalledTimes(2);
-    const again = await lay(small("x"));
+    const again = await stored(small("x"));
     expect(layout).toHaveBeenCalledTimes(2);
     expect(again).toEqual(first);
     // Each caller gets its own copy.
     again.full.parts[0].x = -1;
-    expect((await lay(small("x"))).full.parts[0].x).not.toBe(-1);
+    expect((await stored(small("x"))).full.parts[0].x).not.toBe(-1);
     // Another graph is laid out afresh.
-    await lay(small("y"));
+    await stored(small("y"));
     expect(layout).toHaveBeenCalledTimes(4);
   });
 
-  it("keeps only the 200 layouts used last", async () => {
+  it("keeps the 200 layouts used last in front of the database, and reads the others from it", async () => {
+    const db = await getDb();
     const layout = vi.spyOn(ELK.prototype, "layout");
-    // A hundred drawings, each laid out whole and Flow only: 200 layouts, all kept.
-    for (let i = 0; i < 100; i++) await lay(small(`k${i}`));
+    const reads = () => statements.filter((s) => /^select .* from "drawing"/.test(s)).length;
+    // A hundred graphs, each laid out whole and Flow only, and stored: 200 layouts, all kept.
+    for (let i = 0; i < 100; i++) await drawingsOf(db, small(`k${i}`));
     expect(layout).toHaveBeenCalledTimes(200);
-    // Using the first again keeps it as the newest.
-    await lay(small("k0"));
-    expect(layout).toHaveBeenCalledTimes(200);
-    // One more drawing lets go of the two layouts used longest ago, the second drawing's.
-    await lay(small("k100"));
+    expect(reads()).toBe(100);
+    // Using the first again reads nothing, and keeps it as the newest.
+    await drawingsOf(db, small("k0"));
+    expect(reads()).toBe(100);
+    // One more graph lets go of the two layouts used longest ago, the second graph's, which
+    // is read from the database again, and isn't laid out.
+    await drawingsOf(db, small("k100"));
+    expect(reads()).toBe(101);
+    await drawingsOf(db, small("k1"));
+    expect(reads()).toBe(102);
+    await drawingsOf(db, small("k0"));
+    expect(reads()).toBe(102);
     expect(layout).toHaveBeenCalledTimes(202);
-    await lay(small("k1"));
-    expect(layout).toHaveBeenCalledTimes(204);
-    await lay(small("k0"));
-    expect(layout).toHaveBeenCalledTimes(204);
   }, 60_000);
 
   it("sizes each part's box round its label, broken into lines no wider than the box", () => {

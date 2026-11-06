@@ -17,6 +17,15 @@ export const sentEmails: { to: string; url: string }[] = [];
 // Every statement sent to the database in this test, as SQL, in order.
 export const statements: string[] = [];
 
+// The work a request handed to Next's `after`, to run once it has answered,
+// as a Worker's waitUntil does. It waits here until a test runs it with
+// `settle`, and what a test leaves is dropped (see test/setup.ts).
+export const afterwork: (() => unknown)[] = [];
+
+export async function settle() {
+  while (afterwork.length) await afterwork.shift()!();
+}
+
 export const example = (name: string) =>
   fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8");
 

@@ -30,7 +30,7 @@ import { drawing, expectedOf } from "./drawn";
 import TokensPage from "@/app/settings/tokens/page";
 import LoginPage from "@/app/login/page";
 import { makeToken } from "@/app/settings/tokens/actions";
-import { example, orgWith, person, request, signIn, storeVersion, withEdition, type Who } from "./helpers";
+import { example, orgWith, person, request, settle, signIn, storeVersion, withEdition, type Who } from "./helpers";
 import { pageRequest, renderPage } from "./pages";
 
 // Most of these pages are shown here for versions stored before the registry
@@ -162,6 +162,10 @@ describe("the public gallery", () => {
   it("shows each workflow as a card with its drawing, who decides its steps and its address", async () => {
     const ana = await person("ana");
     await push(ana.username, "dinners", ana, { security, platform });
+    // A version stored before has no drawing stored: the gallery asks for it once it has
+    // answered, and shows it next time.
+    expect(drawing((await renderPage(GalleryPage, {})).html)).toBeNull();
+    await settle();
     const page = await renderPage(GalleryPage, {});
     const shown = text(page.html);
     expect(shown).toContain("Public workflows");

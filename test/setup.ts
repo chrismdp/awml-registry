@@ -4,11 +4,17 @@ import { openSqlite } from "@/db/driver";
 import { BOUND_VALUES_LIMIT } from "@/db/rows";
 import { setMetadataTransport } from "@/server/client-metadata";
 import { setEmailSender } from "@/server/email";
-import { sentEmails, statements } from "./helpers";
+import { afterwork, sentEmails, statements } from "./helpers";
 import { pageRequest } from "./pages";
 
 vi.mock("next/headers", () => ({
   headers: async () => pageRequest.headers,
+}));
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: (task: () => unknown) => {
+    afterwork.push(task);
+  },
 }));
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 
@@ -31,6 +37,7 @@ beforeEach(() => {
   setDb(openSqlite(":memory:", asD1));
   statements.length = 0;
   sentEmails.length = 0;
+  afterwork.length = 0;
   setEmailSender({
     async sendMagicLink(to, url) {
       sentEmails.push({ to, url });

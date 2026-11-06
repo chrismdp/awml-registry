@@ -1,12 +1,16 @@
 // The registry's drawing of a workflow or a system's map (issue #62): the
 // engine's graph of what it draws (issue #69), laid out here on the server
-// with ELK, and sent to the page with every position worked out, so the
-// browser never loads ELK. The page draws it as plain SVG, which needs no
-// scripts, and React Flow takes it over to drag, pan and zoom.
+// with ELK, once for each graph and stored (issue #131), and sent to the
+// page with every position worked out, so the browser never loads ELK. The
+// page draws it as plain SVG, which needs no scripts, and React Flow takes it
+// over to drag, pan and zoom.
+import { and, eq, ne, sql } from "drizzle-orm";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ElkExtendedEdge, ElkNode } from "elkjs/lib/elk-api";
+import { after } from "next/server";
+import type { Db } from "@/db/client";
+import { drawing } from "@/db/schema";
 import { engine } from "@/engine";
-import { memoise } from "@/engine/memo";
 import {
   boxText,
   containers,
@@ -249,25 +253,19 @@ const NOTES_STRIP = 36;
 // after that. A drawing with a part's description is laid out twice more,
 // with every description open (#114): measured in Node on 2026-11-05, each
 // open layout took as long as a closed one, so its page's first view takes
-// about twice as long. Real graphs cost far less, as the map does. The
-// gallery lays out many at once, so its cards keep lower limits
-// (CARD_LIMITS), and lay out one. A note isn't laid out,
+// about twice as long. Real graphs cost far less, as the map does. From
+// 2026-11-06 (issue #131) a push lays its drawings out once it has answered,
+// and stores them, so a page lays out only a graph none is stored for, and
+// the gallery never lays out. A note isn't laid out,
 // but each counts as a part, and each part or scope it is on as a line. The
-// limits also bound what the kept layouts hold. `depth` is how deep scopes
-// nest: 1 when none is inside another.
+// limits also bound what the kept and stored layouts hold. `depth` is how
+// deep scopes nest: 1 when none is inside another.
 export const LIMITS = { parts: 150, lines: 250, characters: 20_000, depth: 8 };
 
-// The most a gallery card's drawing may hold: the limits before 2026-11-05.
-// The gallery lays out a card for each of up to 50 workflows in one request,
-// so at LIMITS its first view could take 50 × 2.5 s, far past a Worker's 30 s
-// of CPU; at these, 50 × 0.56 s at worst, as before. A card beyond them shows
-// no drawing, though its page draws it.
-export const CARD_LIMITS = { ...LIMITS, parts: 80, lines: 120 };
-
-// Whether a graph is beyond `limits`: its parts, scopes and notes, its lines
+// Whether a graph is beyond LIMITS: its parts, scopes and notes, its lines
 // and the notes' ties, the characters of every label and description in it,
 // and how deep its scopes nest.
-export function tooBig(g: Graph, limits = LIMITS) {
+export function tooBig(g: Graph) {
   const notes = new Set(g.notes.map((n) => n.id)).size;
   const ties = g.notes.filter((n) => n.on).length;
   const characters =
@@ -275,10 +273,10 @@ export function tooBig(g: Graph, limits = LIMITS) {
     g.parts.reduce((n, p) => n + (p.tier?.length ?? 0) + (p.description?.length ?? 0), 0) +
     g.lines.reduce((n, l) => n + (l.label?.length ?? 0), 0);
   return (
-    g.parts.length + g.scopes.length + notes > limits.parts ||
-    g.lines.length + ties > limits.lines ||
-    characters > limits.characters ||
-    nesting(g) > limits.depth
+    g.parts.length + g.scopes.length + notes > LIMITS.parts ||
+    g.lines.length + ties > LIMITS.lines ||
+    characters > LIMITS.characters ||
+    nesting(g) > LIMITS.depth
   );
 }
 
@@ -326,46 +324,154 @@ export function mapLinks(d: Drawing, given: Record<string, { title: string; addr
 }
 
 // One drawing of the engine's graph, the whole of it or Flow only, with its
-// descriptions closed or open, kept by the SHA-256 of the graph's JSON, the
-// switches, and the engine that gave the graph (see memo.ts), for the 200
-// drawings used last. A drawing too big to lay out, or one whose layout
-// fails, is kept as that, so it isn't tried again; LIMITS also bounds what
-// the 200 hold.
-const drawingOf = memoise(async (json: string, flow: boolean, opened: boolean, _engine: string): Promise<Drawing | Undrawn> => {
+// descriptions closed or open. A drawing too big to lay out, or one whose
+// layout fails, says so.
+async function drawingOf(graph: Graph, flow: boolean, opened: boolean): Promise<Drawing | Undrawn> {
   try {
-    const graph = graphOf(json);
-    if (tooBig(graph)) return { undrawn: "too big" };
     return await layOutGraph(flow ? flowOnly(graph) : graph, opened);
   } catch (e) {
     console.error(`[awml] a drawing could not be laid out: ${(e as Error).message}`);
     return { undrawn: "failed" };
   }
-});
+}
 
 // Every drawing a page may show of the engine's graph, given as its JSON: the
 // whole drawing, and Flow only, and when a part has a description, both
 // again with every description open (#114). All are laid out here, so the
 // switches need nothing more from the server. Never throws: a drawing that
-// can't be laid out says why.
+// can't be laid out says why. It lays out every time: a page reads its
+// drawings with `drawingsOf`, which lays them out only when none are stored.
 export async function layOut(json: string): Promise<Drawings | Undrawn> {
-  const version = JSON.stringify(engine.version);
-  const [full, flow] = await Promise.all([drawingOf(json, false, false, version), drawingOf(json, true, false, version)]);
+  let graph: Graph;
+  try {
+    graph = graphOf(json);
+  } catch (e) {
+    console.error(`[awml] a drawing could not be laid out: ${(e as Error).message}`);
+    return { undrawn: "failed" };
+  }
+  if (tooBig(graph)) return { undrawn: "too big" };
+  const [full, flow] = await Promise.all([drawingOf(graph, false, false), drawingOf(graph, true, false)]);
   if ("undrawn" in full) return full;
   if ("undrawn" in flow) return flow;
   if (!full.parts.some((p) => p.description)) return { full, flow };
-  const [fullOpen, flowOpen] = await Promise.all([drawingOf(json, false, true, version), drawingOf(json, true, true, version)]);
+  const [fullOpen, flowOpen] = await Promise.all([drawingOf(graph, false, true), drawingOf(graph, true, true)]);
   if ("undrawn" in fullOpen) return fullOpen;
   if ("undrawn" in flowOpen) return flowOpen;
   return { full, flow, open: { full: fullOpen, flow: flowOpen } };
 }
 
-// The whole drawing alone, as the gallery's cards show it, within
-// CARD_LIMITS. Reading the graph to tell looks at each part and line once.
-export async function layOutWhole(json: string): Promise<Drawing | Undrawn> {
-  try {
-    if (tooBig(graphOf(json), CARD_LIMITS)) return { undrawn: "too big" };
-  } catch {
-    // drawingOf says why, and keeps the answer.
+// The layout a stored drawing was made by: the pinned engine's tag, and a
+// number bumped by hand whenever the layout code here, or ELK's options,
+// change. A drawing stored under any other is stale, and laid out again
+// (issue #131).
+export const LAYOUT_VERSION = `${engine.version.tag}+layout.1`;
+
+// The SHA-256 of a graph's JSON, which a drawing is stored and kept by.
+async function keyOf(json: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(json));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// The drawings this server or Worker used last, by their graph's key, in
+// front of the database, so a hot one doesn't read it for every view: the
+// 200 layouts used last, a graph's whole drawing, Flow only and each open
+// one counting as one, as many as were kept before they were stored. Each
+// caller gets its own copy. LIMITS bounds what each holds.
+const kept = new Map<string, Drawings | Undrawn>();
+let keptLayouts = 0;
+const layoutsIn = (d: Drawings | Undrawn) => ("undrawn" in d ? 1 : d.open ? 4 : 2);
+function keep(key: string, drawn: Drawings | Undrawn) {
+  const was = kept.get(key);
+  if (was) {
+    kept.delete(key);
+    keptLayouts -= layoutsIn(was);
   }
-  return drawingOf(json, false, false, JSON.stringify(engine.version));
+  kept.set(key, drawn);
+  keptLayouts += layoutsIn(drawn);
+  for (const [oldest, d] of kept) {
+    if (keptLayouts <= 200) break;
+    kept.delete(oldest);
+    keptLayouts -= layoutsIn(d);
+  }
+  return structuredClone(drawn);
+}
+
+// The drawings stored for a graph under this layout, kept or read from the
+// database, or null when none are, or when the database can't be read,
+// which the server logs, so the page lays them out as if none were stored.
+async function stored(db: Db, key: string): Promise<Drawings | Undrawn | null> {
+  const here = kept.get(key);
+  if (here) return keep(key, here);
+  try {
+    const [row] = await db
+      .select({ drawn: drawing.drawn })
+      .from(drawing)
+      .where(and(eq(drawing.graph, key), eq(drawing.layout, LAYOUT_VERSION)));
+    return row ? keep(key, row.drawn) : null;
+  } catch (e) {
+    console.error(`[awml] a stored drawing could not be read: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+// Every drawing a page may show of a graph: the stored ones, or when none
+// are stored under this layout, laid out now and stored, replacing any
+// stored under another. Two views at once may both lay out; the second write
+// replaces the first. A drawing too big to lay out, or whose layout fails,
+// is stored as that, so it isn't tried again. Never throws for the layout:
+// one that can't be stored is still shown, and the server logs why.
+export async function drawingsOf(db: Db, json: string): Promise<Drawings | Undrawn> {
+  const key = await keyOf(json);
+  const found = await stored(db, key);
+  if (found) return found;
+  const drawn = await layOut(json);
+  try {
+    await db
+      .insert(drawing)
+      .values({ graph: key, layout: LAYOUT_VERSION, drawn })
+      .onConflictDoUpdate({ target: [drawing.graph, drawing.layout], set: { drawn } });
+    await db.delete(drawing).where(and(eq(drawing.graph, key), ne(drawing.layout, LAYOUT_VERSION)));
+  } catch (e) {
+    console.error(`[awml] a drawing could not be stored: ${(e as Error).message}`);
+  }
+  return keep(key, drawn);
+}
+
+// The whole drawing stored for a graph, as the gallery's cards show it,
+// which never lay one out, or null when none is stored under this layout, or
+// the database can't be read. Only the whole drawing is read, and nothing is
+// kept, so up to 50 cards neither parse every layout of their graphs nor push
+// the pages' drawings out of `kept`.
+export async function storedDrawing(db: Db, json: string): Promise<Drawing | Undrawn | null> {
+  const key = await keyOf(json);
+  const here = kept.get(key);
+  if (here) return structuredClone("undrawn" in here ? here : here.full);
+  try {
+    const [row] = await db
+      .select({
+        full: sql<string | null>`json_extract(${drawing.drawn}, '$.full')`,
+        undrawn: sql<Undrawn["undrawn"] | null>`json_extract(${drawing.drawn}, '$.undrawn')`,
+      })
+      .from(drawing)
+      .where(and(eq(drawing.graph, key), eq(drawing.layout, LAYOUT_VERSION)));
+    if (!row) return null;
+    return row.undrawn ? { undrawn: row.undrawn } : (JSON.parse(row.full!) as Drawing);
+  } catch (e) {
+    console.error(`[awml] a stored drawing could not be read: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+// Lays out and stores the drawings of the graphs `graphs` gives, one at a
+// time, once the request has answered (Next's `after`, a Worker's
+// waitUntil), so a push, or the gallery, never waits for ELK. What goes
+// wrong is logged, never thrown: a push is never refused for its drawing.
+export function layOutLater(db: Db, graphs: () => Promise<string[]>) {
+  after(async () => {
+    try {
+      for (const json of await graphs()) await drawingsOf(db, json);
+    } catch (e) {
+      console.error(`[awml] a drawing could not be laid out after the request: ${(e as Error).message}`);
+    }
+  });
 }
