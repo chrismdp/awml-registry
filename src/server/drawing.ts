@@ -100,10 +100,68 @@ function headings(g: Graph, holding: Set<string>, widthOf: (id: string) => numbe
   return (s: Graph["scopes"][number]) => heading.get(s.id) ?? scopeHeading(s, 0);
 }
 
+// A workflow's triggers along the top (#127): each trigger, and each scope
+// round one, in the first layer of the scope or drawing it is in, level with
+// the top of the others there, and left to right by the first trigger it is
+// or holds in the file. Each by its id, with that trigger's place among the
+// triggers. A system's map keeps its triggers where ELK places them.
+function triggersFirst(g: Graph) {
+  const order = new Map<string, number>();
+  if (g.map) return order;
+  const parent = new Map(g.scopes.map((s) => [s.id, s.scope]));
+  g.parts
+    .filter((p) => p.kind === "trigger")
+    .forEach((p, i) => {
+      order.set(p.id, i);
+      // Up through the scopes round it, to the first an earlier trigger already
+      // put first, and through each at most once, so scopes that are each
+      // inside the other can't keep it walking.
+      for (let at = p.scope, up = 0; at !== undefined && !order.has(at) && up < g.scopes.length; at = parent.get(at), up++)
+        order.set(at, i);
+    });
+  return order;
+}
+
+// The options that put a trigger, or a scope round one, along the top. ELK
+// keeps parts with a position in that order in their layer when the crossing
+// minimisation is semi-interactive, in the drawing and in each scope, even
+// where it adds a crossing; it reads no position for a scope, which keeps its
+// place by the model order instead, so each scope's children are given ELK
+// with these first, in order.
+const first = (i: number) => ({
+  "elk.layered.layering.layerConstraint": "FIRST",
+  "elk.alignment": "TOP",
+  "elk.position": `(${i},0)`,
+});
+
 // Lays a graph out: every part's and scope's box, every line's route and its
 // label's, in the drawing's own coordinates. `opened`, each part with a
-// description is laid out with it open (#114).
+// description is laid out with it open (#114). A workflow's triggers are
+// along the top (#127), unless ELK can't lay them out so, as when a trigger
+// outside a scope starts a step inside one that holds a trigger, both in the
+// first layer: then it is laid out again with every trigger where ELK places
+// it, and the server logs why.
 export async function layOutGraph(g: Graph, opened = false): Promise<Drawing> {
+  const order = triggersFirst(g);
+  if (order.size) {
+    try {
+      return await placed(g, opened, order);
+    } catch (e) {
+      console.error(
+        `[awml] ELK could not lay a drawing out with its triggers along the top, so it is laid out again without them: ${(e as Error).message}`,
+      );
+    }
+  }
+  return placed(g, opened, new Map());
+}
+
+// Lays a graph out as layOutGraph does, with the parts and scopes `order`
+// gives along the top.
+async function placed(g: Graph, opened: boolean, order: Map<string, number>): Promise<Drawing> {
+  const along = (id: string) => (order.has(id) ? first(order.get(id)!) : {});
+  const rank = (n: ElkNode) => order.get(n.id) ?? order.size;
+  // Read from the drawing and from each scope alike, as the spacing is.
+  const semi: Record<string, string> = order.size ? { "elk.layered.crossingMinimization.semiInteractive": "true" } : {};
   const holding = containers(g);
   const depth = depths(g);
   const parts = new Map(
@@ -121,13 +179,15 @@ export async function layOutGraph(g: Graph, opened = false): Promise<Drawing> {
       .filter((s) => s.scope === scope)
       .map((s): ElkNode => {
         const box = boxes.get(s.id);
-        if (box) return { id: s.id, width: box.width, height: box.height };
+        if (box) return { id: s.id, width: box.width, height: box.height, layoutOptions: along(s.id) };
         const heading = headingOf(s);
         return {
           id: s.id,
           children: childrenOf(s.id),
           layoutOptions: {
             ...SPACING,
+            ...semi,
+            ...along(s.id),
             "elk.padding": `[top=${headHeight(heading.who)},left=${SCOPE_PAD},bottom=${SCOPE_PAD},right=${SCOPE_PAD}]`,
             // At least as wide as its heading. Laying the scopes out nested
             // together (INCLUDE_CHILDREN), top to bottom, ELK reads a scope's
@@ -141,8 +201,8 @@ export async function layOutGraph(g: Graph, opened = false): Promise<Drawing> {
       }),
     ...g.parts
       .filter((p) => p.scope === scope)
-      .map((p): ElkNode => ({ id: p.id, width: parts.get(p.id)!.width, height: parts.get(p.id)!.height })),
-  ];
+      .map((p): ElkNode => ({ id: p.id, width: parts.get(p.id)!.width, height: parts.get(p.id)!.height, layoutOptions: along(p.id) })),
+  ].sort((a, b) => rank(a) - rank(b));
   const edges: ElkExtendedEdge[] = g.lines.map((l) => {
     const label = labels.get(l.id);
     return {
@@ -156,7 +216,7 @@ export async function layOutGraph(g: Graph, opened = false): Promise<Drawing> {
           : { "elk.layered.priority.direction": "10", "elk.layered.priority.straightness": "10" },
     };
   });
-  const root: ElkNode = { id: "root", layoutOptions: OPTIONS, children: childrenOf(undefined), edges };
+  const root: ElkNode = { id: "root", layoutOptions: { ...OPTIONS, ...semi }, children: childrenOf(undefined), edges };
   const out = await elkHere().layout(root);
 
   // Every box, in the drawing's coordinates rather than its scope's.
@@ -246,17 +306,18 @@ const NOTES_STRIP = 36;
 // against the limit of parts, and 167 lines, laid out in 0.65 s. Measured on
 // Node on 2026-11-05, one layout at these limits, 150 parts and scopes and
 // 250 lines, most of them crossing many layers, took about 1 s with no
-// nesting and up to 2.5 s with scopes nested 8 deep. A page lays out the
-// whole drawing and Flow only one after the other, and they are the same size
-// when Flow only leaves nothing out, so at these limits a page's first view
-// takes about 5 s at worst, on a graph made to be slow; its layouts are kept
-// after that. A drawing with a part's description is laid out twice more,
-// with every description open (#114): measured in Node on 2026-11-05, each
-// open layout took as long as a closed one, so its page's first view takes
-// about twice as long. Real graphs cost far less, as the map does. From
-// 2026-11-06 (issue #131) a push lays its drawings out once it has answered,
-// and stores them, so a page lays out only a graph none is stored for, and
-// the gallery never lays out. A note isn't laid out,
+// nesting and up to 2.5 s with scopes nested 8 deep. A graph is laid out as
+// the whole drawing and Flow only, and twice more with every description open
+// when a part has one (#114). With the triggers along the top (#127),
+// measured on Node on 2026-11-06 at these limits, on graphs made to be slow,
+// 20 triggers each starting a step far down took up to 5.3 s for the two
+// layouts, against 3.5 s before, and with a description on each step up to
+// 8.7 s for all four, against 8.6 s; in workerd, per the referral on #127, each
+// layout is about 20% slower than on Node. From 2026-11-06 (issue #131) a
+// push lays its drawings out once it has answered, and stores them, so a page
+// lays out only a graph none is stored for, and the gallery never lays out;
+// awml.io gives a request up to 2 minutes of CPU. Real graphs cost far less,
+// as the map does. A note isn't laid out,
 // but each counts as a part, and each part or scope it is on as a line. The
 // limits also bound what the kept and stored layouts hold. `depth` is how
 // deep scopes nest: 1 when none is inside another.
@@ -363,8 +424,8 @@ export async function layOut(json: string): Promise<Drawings | Undrawn> {
 // The layout a stored drawing was made by: the pinned engine's tag, and a
 // number bumped by hand whenever the layout code here, or ELK's options,
 // change. A drawing stored under any other is stale, and laid out again
-// (issue #131).
-export const LAYOUT_VERSION = `${engine.version.tag}+layout.1`;
+// (issue #131). 2 from 2026-11-06, with the triggers along the top (#127).
+export const LAYOUT_VERSION = `${engine.version.tag}+layout.2`;
 
 // The SHA-256 of a graph's JSON, which a drawing is stored and kept by.
 async function keyOf(json: string) {

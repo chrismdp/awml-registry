@@ -79,7 +79,9 @@ export type Line = {
 // whole drawing.
 export type Note = { id: string; text: string; on?: string; gap?: true };
 
-export type Graph = { parts: Part[]; scopes: Scope[]; lines: Line[]; notes: Note[] };
+// `map`, a system's map, whose triggers are laid out where ELK places them,
+// not along the top as a workflow's are (#127).
+export type Graph = { parts: Part[]; scopes: Scope[]; lines: Line[]; notes: Note[]; map?: true };
 
 // The engine's graph, as `awml graph` and the WebAssembly's graphJSON give
 // it (AWML's spec, "awml graph"). A field a part, group or line doesn't have
@@ -237,7 +239,7 @@ export function readGraph(g: EngineGraph): Graph {
     if (!c.gap && c.in && groups.has(c.in)) notes.push({ id: c.id, text, on: c.in });
     else notes.push({ id: c.id, text, ...gap });
   }
-  return { parts, scopes, lines, notes };
+  return { parts, scopes, lines, notes, ...(g.view === "map" ? { map: true as const } : {}) };
 }
 
 // The engine's graph JSON as the registry's graph.
@@ -260,5 +262,6 @@ export function flowOnly(g: Graph): Graph {
     scopes: g.scopes,
     lines: lines.filter((l) => ids.has(l.from) && ids.has(l.to)),
     notes: g.notes.filter((n) => !n.on || ids.has(n.on)),
+    ...(g.map ? { map: true as const } : {}),
   };
 }
