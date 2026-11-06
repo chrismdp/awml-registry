@@ -6,8 +6,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "@/db/client";
 import { insertRows } from "@/db/rows";
-import { platform, platformVersion } from "@/db/schema";
+import { eq } from "drizzle-orm";
+import { auditEvent, platform, platformVersion } from "@/db/schema";
 import { engine } from "@/engine";
+import { createOrganisation } from "@/server/organisations";
 import { findOwner } from "@/server/owners";
 import { PUBLIC_JUDGED } from "@/server/platforms";
 import WorkflowPage from "@/app/[owner]/[slug]/page";
@@ -17,7 +19,7 @@ import WorkflowYamlPage from "@/app/[owner]/[slug]/yaml/page";
 import WorkflowChecksPage from "@/app/[owner]/[slug]/checks/page";
 import WorkflowFitPage from "@/app/[owner]/[slug]/fit/page";
 import VersionFitPage from "@/app/[owner]/[slug]/v/[n]/fit/page";
-import { example, orgWith, person, request, type Who } from "./helpers";
+import { example, orgWith, person, request, storeVersion, type Who } from "./helpers";
 import { renderPage } from "./pages";
 
 afterEach(() => vi.restoreAllMocks());
@@ -156,6 +158,50 @@ describe("the Where it can run tab", () => {
       for (const slug of ["diary", "nothing-here"])
         expect((await renderPage(WorkflowFitPage, { owner: ana.username, slug }, { as })).status).toBe(404);
     expect((await renderPage(WorkflowFitPage, { owner: ana.username, slug: "diary" }, { as: { cookie: ana.cookie } })).status).toBe(200);
+  });
+
+  it("says a version stored with only a platform view has no security view to fit, not that it has mistakes", async () => {
+    const nell = await person("nell");
+    await storeVersion(nell.username, "drawn", nell, { platform: example("legacy/dinners-platform.yaml") }, {
+      summary: JSON.parse(example("legacy/dinners-platform.summary.json")),
+    });
+    const page = await renderPage(WorkflowFitPage, { owner: nell.username, slug: "drawn" });
+    expect(page.status).toBe(200);
+    const shown = text(page.html);
+    expect(shown).toContain("This version has no security view, which the fit needs.");
+    expect(shown).not.toContain("mistakes");
+  });
+
+  it("heads two organisations of one name apart, each by its own slug", async () => {
+    const { nell } = await registry();
+    const ann = await person("ann");
+    const db = await getDb();
+    for (const slug of ["north", "south"]) {
+      const org = await createOrganisation(db, ann.id, { slug, name: "Acme" });
+      expect(org.ok).toBe(true);
+      await pushPlatform(slug, "box", { token: ann.token }, { description: fitsAll(`${slug}-box`, `The ${slug} box`), visibility: "private" });
+    }
+    const shown = text((await fitTab(nell.username, { cookie: ann.cookie })).html);
+    expect(shown).toContain("Acme (north)'s platforms");
+    expect(shown).toContain("Acme (south)'s platforms");
+  });
+});
+
+describe("the views the tab records", () => {
+  it("records one view of an organisation's private platform that is both judged and placed", async () => {
+    const { ana, nell } = await registry();
+    await pushWorkflow(
+      nell.username,
+      "placed",
+      { token: nell.token },
+      clientEmail.replace(
+        '{ id: cowork, label: "Claude Cowork, Mac mini", parts',
+        '{ id: cowork, label: "Claude Cowork, Mac mini", platform: acme/platforms/back-office, parts',
+      ),
+    );
+    await renderPage(WorkflowFitPage, { owner: nell.username, slug: "placed" }, { as: { cookie: ana.cookie } });
+    const rows = await (await getDb()).select().from(auditEvent).where(eq(auditEvent.action, "private_view"));
+    expect(rows.map((r) => r.target)).toEqual(["platforms/acme/back-office v1"]);
   });
 });
 

@@ -3,7 +3,8 @@ import { pageContext } from "@/server/page";
 import { visiblePlatforms } from "@/server/platforms";
 
 // Every platform the viewer may see, newest first, searched by label or slug:
-// the public ones of every owner, and their organisations' private ones.
+// the public ones of every owner, their own private ones and their
+// organisations'.
 export default async function SharedPlatformsPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const q = (await searchParams).q ?? "";
   const { db, viewer } = await pageContext();
@@ -23,7 +24,7 @@ export default async function SharedPlatformsPage({ searchParams }: { searchPara
           <h1>Shared platforms</h1>
           <p>
             {viewer
-              ? "Public platforms from every owner, and your organisations' private ones."
+              ? "Public platforms from every owner, your own private ones and your organisations'."
               : "Public platforms from every owner."}
           </p>
         </div>

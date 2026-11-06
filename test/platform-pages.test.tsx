@@ -254,7 +254,7 @@ describe("Private platforms on the platform pages", () => {
     for (const who of [olive, mo]) {
       expect(text((await page("acme", { cookie: who.cookie })).html)).toContain("Acme's back office acme/back-office Private");
       const words = text((await shared({ cookie: who.cookie })).html);
-      expect(words).toContain("Public platforms from every owner, and your organisations' private ones.");
+      expect(words).toContain("Public platforms from every owner, your own private ones and your organisations'.");
       expect(words).toContain("acme/back-office");
     }
   });

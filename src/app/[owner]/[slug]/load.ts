@@ -179,11 +179,14 @@ export async function versionProps(
   const drawable = drawnFile !== undefined && !storedFailed && (await engine.unsound(drawnFile)).length === 0;
   const drawnAs = drawable ? drawnImplementation(source!, placed, drawnFile) : undefined;
   // Only the "Where it can run" tab works out the fit (#1), so no other tab
-  // costs a fit. It judges the design, or a security view stored before 0.4.
+  // costs a fit. It judges the design, or a security view stored before 0.4;
+  // a version stored with none has nothing to fit, as the fit API says.
   const fit =
-    shown === "fit"
-      ? await fitTab(db, viewer, workflow ? workflowRead : readFile("security"), `${address}/fit`)
-      : null;
+    shown !== "fit"
+      ? null
+      : !workflow && v.files.security === undefined
+        ? { unfittable: "no security view" as const }
+        : await fitTab(db, viewer, workflow ? workflowRead : readFile("security"), `${address}/fit`);
   // A public workflow can be forked into the viewer's own account or one of
   // their organisations; someone signed out is asked to sign in first.
   const fork =
@@ -250,7 +253,7 @@ export async function versionProps(
 // given once, beside them. An invalid file isn't fitted, as the fit API
 // refuses one.
 async function fitTab(db: Db, viewer: Viewer, file: string | undefined, address: string): Promise<FitTab> {
-  if (file === undefined || (await engine.unsound(file)).length) return { unfittable: true };
+  if (file === undefined || (await engine.unsound(file)).length) return { unfittable: "invalid" };
   const [where, organisations] = await Promise.all([
     whereItCanRun(db, viewer, file),
     viewer ? organisationsOf(db, viewer.id) : [],
@@ -260,10 +263,14 @@ async function fitTab(db: Db, viewer: Viewer, file: string | undefined, address:
     (a, b) => a.reasons.length - b.reasons.length || (name(a) < name(b) ? -1 : name(a) > name(b) ? 1 : 0),
   );
   const open = closest.filter((p) => p.visibility === "public");
+  // An organisation's name needn't be unique, so one that another of the
+  // viewer's shares is headed with its slug as well.
+  const clashes = (o: { name: string; slug: string }) => organisations.some((q) => q.slug !== o.slug && q.name === o.name);
   const groups: FitGroup[] = [
-    { name: "Your platforms", platforms: closest.filter((p) => p.visibility === "private" && p.ownerType === "user") },
+    { key: "own", name: "Your platforms", platforms: closest.filter((p) => p.visibility === "private" && p.ownerType === "user") },
     ...organisations.map((o) => ({
-      name: `${o.name}'s platforms`,
+      key: `organisation:${o.slug}`,
+      name: `${clashes(o) ? `${o.name} (${o.slug})` : o.name}'s platforms`,
       platforms: closest.filter((p) => p.visibility === "private" && p.ownerType === "organisation" && p.owner === o.slug),
     })),
   ]
@@ -271,6 +278,7 @@ async function fitTab(db: Db, viewer: Viewer, file: string | undefined, address:
     .map((g) => ({ ...g, public: false, shared: [] }));
   if (open.length)
     groups.push({
+      key: "public",
       name: "Public platforms",
       public: true,
       platforms: open,

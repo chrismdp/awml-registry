@@ -81,11 +81,14 @@ export type VersionViewProps = {
 
 // One group of platforms on the "Where it can run" tab: the viewer's own,
 // an organisation's or the public ones, closest first, and for the public
-// ones, the reasons every one of them shares.
-export type FitGroup = { name: string; public: boolean; platforms: JudgedPlatform[]; shared: string[] };
+// ones, the reasons every one of them shares. Its key is unique where its
+// name, from an organisation's, may not be.
+export type FitGroup = { key: string; name: string; public: boolean; platforms: JudgedPlatform[]; shared: string[] };
 
 export type FitTab =
-  | { unfittable: true }
+  // Why the version can't be fitted: its file is invalid, or it was stored
+  // before 0.4 with no security view.
+  | { unfittable: "invalid" | "no security view" }
   | {
       fits: number;
       seen: number;

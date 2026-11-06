@@ -1008,11 +1008,13 @@ describe("A user's own private workflows", () => {
       expect(rows.filter((r) => r.target.includes("diary"))).toEqual([]);
     });
 
-    it("the owner fits it against public platforms and their organisations' private ones", async () => {
+    it("the owner fits it against public platforms, their own private ones and their organisations' private ones", async () => {
       const { ana, olive } = await anaDiary();
       const bea = await person("bea");
       await orgWith("beta", bea);
       for (const [owner, slug, as, body] of [
+        [ana.username, "home-box", ana, { description: backOffice.replace("back-office", "home-box"), visibility: "private" }],
+        [bea.username, "den", bea, { description: backOffice.replace("back-office", "bea-den"), visibility: "private" }],
         ["acme", "back-office", olive, { description: backOffice, visibility: "private" }],
         ["beta", "vault", bea, { description: betaVault, visibility: "private" }],
         ["beta", "open-box", bea, { description: example("platforms/worker.yaml") }],
@@ -1029,7 +1031,7 @@ describe("A user's own private workflows", () => {
       });
       expect(res.status).toBe(200);
       const results = (await res.json()).results as { platform: string }[];
-      expect(results.map((r) => r.platform).sort()).toEqual(["acme/back-office", "beta/open-box"]);
+      expect(results.map((r) => r.platform).sort()).toEqual(["acme/back-office", `${ana.username}/home-box`, "beta/open-box"]);
     });
   });
 

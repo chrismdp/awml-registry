@@ -22,9 +22,13 @@ export function WhereItCanRun({ fit, title, checks }: { fit: FitTab; title: stri
   if ("unfittable" in fit)
     return (
       <div className="fit-panel" role="tabpanel" aria-label={`${title}, where it can run`}>
-        <p className="cannot-draw">
-          This version has mistakes that make it invalid, so it can&apos;t be fitted. <a href={checks}>See Checks.</a>
-        </p>
+        {fit.unfittable === "no security view" ? (
+          <p className="cannot-draw">This version has no security view, which the fit needs.</p>
+        ) : (
+          <p className="cannot-draw">
+            This version has mistakes that make it invalid, so it can&apos;t be fitted. <a href={checks}>See Checks.</a>
+          </p>
+        )}
       </div>
     );
   return (
@@ -57,7 +61,7 @@ export function WhereItCanRun({ fit, title, checks }: { fit: FitTab; title: stri
       ) : fit.groups.length === 0 ? (
         <p className="fit-intro">There are no platforms you can see yet.</p>
       ) : (
-        fit.groups.map((g) => <Group key={g.name} group={g} />)
+        fit.groups.map((g) => <Group key={g.key} group={g} />)
       )}
     </div>
   );

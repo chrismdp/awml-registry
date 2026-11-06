@@ -206,7 +206,7 @@ A user's own private workflows have the same boundaries, under "A user's own pri
 
 | Boundary | Test |
 |---|---|
-| Positive | The user reads and pushes their private workflow, sees its pages at every view's address, finds it on their own page and fits it against public platforms and their organisations' private ones; nothing is recorded in any audit log |
+| Positive | The user reads and pushes their private workflow, sees its pages at every view's address, finds it on their own page and fits it against public platforms, their own private ones and their organisations' private ones; nothing is recorded in any audit log |
 | Negative | Another user and a signed-out visitor get 404 on its pages, every view, its files, its versions and its API, exactly as for a missing workflow; it is not listed on the user's page to them, nor in the gallery; an old `?view=` address redirects as a missing one's does |
 | Cross-tenant | Another user's token, and the owner and a member of an organisation the user belongs to, can neither read nor push it, a push answered as one to a missing workflow; nobody can make a private workflow on another user's account |
 | Roles | A role in an organisation gives nothing on a user's own account; a user may keep a private platform there too (from 2026-11-06) |
