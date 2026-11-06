@@ -59,9 +59,10 @@ export async function followOldName(db: Db, owner: string, rest = "", before = "
   permanentRedirect(`${before}/${now}${rest}`);
 }
 
-// A workflow's page shows one of its files drawn, all of them as text, or
-// what checking them found.
-export type PageView = View | "yaml" | "checks";
+// A workflow's page shows one of its files drawn, where it can run (#1), all
+// of them as text, or what checking them found. Only the views were ever
+// asked for as ?view=, so only they, the text and the checks redirect.
+export type PageView = View | "fit" | "yaml" | "checks";
 export const isPageView = (value: unknown): value is PageView =>
   value === "yaml" || value === "checks" || (VIEWS as readonly unknown[]).includes(value);
 

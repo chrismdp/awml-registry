@@ -24,8 +24,8 @@ export async function mayPushTo(db: Db, viewer: NonNullable<Viewer>, owner: Owne
 // The first push sets an item's visibility, public unless it asks otherwise,
 // and a later push cannot change it. An organisation keeps private items of
 // every kind, a user private workflows, up to the edition's limit (see
-// pushVersion), and private systems, with no limit. The edition may stop an organisation pushing, or keeping
-// private items.
+// pushVersion), and private platforms and systems, with no limit (#1). The
+// edition may stop an organisation pushing, or keeping private items.
 export async function pushedVisibility(
   owner: Owner,
   existing: { visibility: Visibility } | null,
@@ -41,8 +41,6 @@ export async function pushedVisibility(
     );
   const visibility: Visibility = existing?.visibility ?? (requested as Visibility | undefined) ?? "public";
 
-  if (owner.type === "user" && visibility === "private" && kind === "platform")
-    return refuse(422, `Private ${kind}s belong to organisations. Push it to one of yours.`);
   if (owner.type === "organisation") {
     if (!(await edition.canPush(owner)))
       return refuse(403, `${owner.slug} cannot push new versions at the moment. Reading still works.`);

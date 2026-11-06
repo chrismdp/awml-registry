@@ -25,6 +25,9 @@
 // - acme/platforms/worker, public, at two versions: without an install recipe, then with one;
 // - acme/platforms/codex-laptop, public;
 // - acme/platforms/cowork-mac-mini, private;
+// - ana/platforms/mac-mini, private on ana's own account, with an install recipe, which
+//   acme/client-email fits, so its "Where it can run" tab shows ana her own platforms, then
+//   acme's, then the public ones, and a visitor the public ones alone;
 // - acme/systems/kitchen, public, holding acme/dinners, acme/shopping and acme's private
 //   acme/cupboards, so a visitor sees "1 private workflow" where ana sees all three. An
 //   organisation's system may hold only its own workflows and public ones, so ana's private
@@ -74,6 +77,13 @@ const recipe = `# Install on a code worker
 2. Put the Anthropic key in the worker's secret store as ANTHROPIC_API_KEY.
 3. Schedule each trigger with the worker's cron.
 4. Check the worker's log after the first run.
+`;
+
+const macMiniRecipe = `# Install on ana's Mac mini
+
+1. Copy the workflow's scripts to ~/workflows.
+2. Put the Anthropic key in the login keychain as ANTHROPIC_API_KEY.
+3. Schedule each trigger with launchd.
 `;
 
 const kitchen = `Everything that keeps the family's kitchen going: **dinners** planned each week, the
@@ -144,6 +154,10 @@ export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ c
     [
       "/api/v1/platforms/acme/cowork-mac-mini/versions",
       { description: fixture("platforms/cowork-mac-mini.yaml"), visibility: "private" },
+    ],
+    [
+      "/api/v1/platforms/ana/mac-mini/versions",
+      { description: fixture("platforms/scripts-mac-mini.yaml"), recipe: macMiniRecipe, visibility: "private" },
     ],
   ];
   for (const [path, json] of pushes) await call("POST", path, { json }, ana);

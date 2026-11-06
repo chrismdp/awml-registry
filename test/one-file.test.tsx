@@ -404,6 +404,7 @@ describe("a workflow's page", () => {
     expect(tabs(page.html)).toEqual([
       { href: `/${o}/dinners/security`, label: "Who may see each part", selected: true },
       { href: `/${o}/dinners/platform`, label: "Where each part runs", selected: false },
+      { href: `/${o}/dinners/fit`, label: "Where it can run", selected: false },
       { href: `/${o}/dinners/yaml`, label: "YAML", selected: false },
       { href: `/${o}/dinners/checks`, label: "Checks No mistakes", selected: false },
     ]);
@@ -472,6 +473,7 @@ describe("a workflow's page", () => {
     expect(tabs(away.html).map((t) => t.href)).toEqual([
       `/${o}/dinners/v/1/security`,
       `/${o}/dinners/v/1/platform`,
+      `/${o}/dinners/v/1/fit`,
       `/${o}/dinners/v/1/yaml`,
       `/${o}/dinners/v/1/checks`,
     ]);
@@ -488,7 +490,13 @@ describe("a workflow's page", () => {
     expect(page.status).toBe(200);
     expect(text(page.html)).toContain("This workflow doesn't say where it runs yet.");
     expect(drawing(page.html)).toBeNull();
-    expect(tabs(page.html).map((t) => t.label)).toEqual(["Who may see each part", "Where each part runs", "YAML", "Checks No mistakes"]);
+    expect(tabs(page.html).map((t) => t.label)).toEqual([
+      "Who may see each part",
+      "Where each part runs",
+      "Where it can run",
+      "YAML",
+      "Checks No mistakes",
+    ]);
     expect(drawing((await renderPage(WorkflowPage, { owner: o, slug: "dinners" })).html)).toEqual(expected(nowhere));
   });
 
@@ -1046,6 +1054,7 @@ describe("versions stored before the registry took only 0.4 files", () => {
     expect(tabs(page.html).map((t) => t.href)).toEqual([
       `/${o}/dinners/v/1/security`,
       `/${o}/dinners/v/1/platform`,
+      `/${o}/dinners/v/1/fit`,
       `/${o}/dinners/v/1/yaml`,
       `/${o}/dinners/v/1/checks`,
     ]);
@@ -1083,7 +1092,7 @@ describe("versions stored before the registry took only 0.4 files", () => {
 
     // Version 2, a 0.3 security view alone, has no platform tab.
     const v2 = await renderPage(VersionPage, { ...v1, n: "2" });
-    expect(tabs(v2.html).map((t) => t.label)).toEqual(["Who may see each part", "YAML", "Checks No mistakes"]);
+    expect(tabs(v2.html).map((t) => t.label)).toEqual(["Who may see each part", "Where it can run", "YAML", "Checks No mistakes"]);
     expect((await renderPage(VersionPlatformPage, { ...v1, n: "2" })).status).toBe(404);
 
     // The latest, 0.11, sits beside them.

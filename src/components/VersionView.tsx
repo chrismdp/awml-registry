@@ -15,6 +15,8 @@ import { CopyButton } from "./CopyButton";
 import { ForkForm } from "./ForkForm";
 import { Versions, type ListedVersion } from "./VersionList";
 import { Drawing } from "./Drawing";
+import { Placed, WhereItCanRun } from "./WhereItCanRun";
+import type { JudgedPlatform, Placement } from "@/server/fit";
 import { undrawnText, type Drawings, type Undrawn } from "./flow/drawing";
 import { count } from "./words";
 
@@ -70,13 +72,40 @@ export type VersionViewProps = {
   // break a rule, such as untrusted text reaching an outside action nothing
   // stops, which the drawing draws red (#83). Its refs' errors aren't counted.
   drawnErrors: number;
+  // Where it can run (#1), worked out only on its own tab, and null on any
+  // other.
+  fit: FitTab | null;
   summary: Summary;
   versions: ListedVersion[];
 };
 
+// One group of platforms on the "Where it can run" tab: the viewer's own,
+// an organisation's or the public ones, closest first, and for the public
+// ones, the reasons every one of them shares. Its key is unique where its
+// name, from an organisation's, may not be.
+export type FitGroup = { key: string; name: string; public: boolean; platforms: JudgedPlatform[]; shared: string[] };
+
+export type FitTab =
+  // Why the version can't be fitted: its file is invalid, or it was stored
+  // before 0.4 with no security view.
+  | { unfittable: "invalid" | "no security view" }
+  | {
+      fits: number;
+      seen: number;
+      // How many public platforms were judged, the newest, when there are
+      // more than that; null when every one was.
+      newest: number | null;
+      gaps: string[];
+      groups: FitGroup[];
+      placements: Placement[];
+      // Where someone signed out signs in to check their own platforms too.
+      signIn: string | null;
+    };
+
 const TAB: Record<PageView, string> = {
   security: "Who may see each part",
   platform: "Where each part runs",
+  fit: "Where it can run",
   yaml: "YAML",
   checks: "Checks",
 };
@@ -86,7 +115,8 @@ export function VersionView(p: VersionViewProps) {
   const latest = p.versions[0]?.number ?? p.number;
   const s = p.summary;
   const { publishingLabels } = names(s);
-  const tabs: PageView[] = [...p.views, "yaml", "checks"];
+  const tabs: PageView[] = [...p.views, "fit", "yaml", "checks"];
+  const fitting = p.fit && "fits" in p.fit ? p.fit.fits : 0;
   // Moving between the tabs is a client navigation that keeps the scroll
   // position, so only the new tab is fetched and React Flow stays loaded.
   const tablist = (
@@ -94,6 +124,7 @@ export function VersionView(p: VersionViewProps) {
       {tabs.map((view) => (
         <Link key={view} role="tab" href={`${p.address}/${view}`} aria-selected={view === p.shown} scroll={false}>
           {TAB[view]}
+          {view === "fit" && fitting > 0 && <span className="tab-count">{fitting}</span>}
           {view === "checks" && <ChecksMark files={p.checks} />}
         </Link>
       ))}
@@ -149,7 +180,31 @@ export function VersionView(p: VersionViewProps) {
         </div>
       </section>
 
-      {p.shown === "checks" ? (
+      {p.shown === "fit" && p.fit ? (
+        <div className="wf-body">
+          <main>
+            {tablist}
+            <WhereItCanRun fit={p.fit} title={p.title} checks={`${p.address}/checks`} />
+          </main>
+          <aside>
+            <section className="change">
+              <div>
+                <h2>Add your own machine</h2>
+                <p>
+                  Describe where your team runs work: how long it may be off, whose agents run there, which models it
+                  can call and which systems it holds. It stays private to you, or to the organisation you add it for.
+                </p>
+              </div>
+              <section className="own-ai">
+                <h3>Ask your own AI</h3>
+                <p>Connect it to the registry and ask it to describe the machine and add it for you or your organisation.</p>
+                <pre>{mcpUrl()}</pre>
+              </section>
+            </section>
+            {"placements" in p.fit && p.fit.placements.length > 0 && <Placed placements={p.fit.placements} />}
+          </aside>
+        </div>
+      ) : p.shown === "checks" ? (
         <div className="full">
           {tablist}
           <Checks title={p.title} files={p.checks} refs={p.refs} />

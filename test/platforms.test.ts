@@ -88,11 +88,12 @@ describe("pushing a platform through the API", () => {
     expect((await pushPlatform(ana.username, "box", { token: ben.token }, { description: worker })).status).toBe(403);
   });
 
-  it("keeps a user's own platforms public, as their workflows are", async () => {
+  it("keeps a user's own platform private when its first push asks, as their workflows are (#1)", async () => {
     const ana = await person("ana");
     const res = await pushPlatform(ana.username, "box", { token: ana.token }, { description: worker, visibility: "private" });
-    expect(res.status).toBe(422);
-    expect((await res.json()).errors).toEqual(["Private platforms belong to organisations. Push it to one of yours."]);
+    expect(res.status).toBe(201);
+    const read = await request("GET", `/api/v1/platforms/${ana.username}/box`, { as: { token: ana.token } });
+    expect((await read.json()).visibility).toBe("private");
   });
 
   it("refuses a slug that is not a slug, and answers 404 for an owner that does not exist", async () => {

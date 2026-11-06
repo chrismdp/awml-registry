@@ -16,7 +16,7 @@ import {
   WORKFLOW_IS_TOO_OLD,
 } from "./awml-file";
 import type { Owner } from "./owners";
-import { findReadablePlatformVersion, notePrivatePlatformView, visiblePlatforms } from "./platforms";
+import { findReadablePlatformVersion, judgedPlatforms, notePrivatePlatformView, platformTarget, visiblePlatforms } from "./platforms";
 import { readVersion } from "./registry";
 import { refuse, type Result } from "./result";
 import type { Viewer } from "./viewer";
@@ -259,15 +259,155 @@ export async function fitWorkflow(db: Db, viewer: Viewer, body: FitBody): Promis
   }
 
   const parts = body.parts ? await partsOf(source, found.platforms) : undefined;
-  const results: PlatformFit[] = [];
-  for (const p of found.platforms) {
-    const report = await engine.fit(source, [p.description]);
-    if (report.gaps.length) return answer([], report.gaps, parts);
-    for (const { platform: id, ...rest } of report.results)
-      results.push({ platform: `${p.owner.slug}/${p.slug}`, number: p.number, id, label: p.label, ...rest });
-  }
+  const fitted = await judgeDesign(source, found.platforms);
+  if (fitted.gaps.length) return answer([], fitted.gaps, parts);
+  const results: PlatformFit[] = fitted.results.map(({ platform: p, result: { platform: id, ...rest } }) => ({
+    platform: `${p.owner.slug}/${p.slug}`,
+    number: p.number,
+    id,
+    label: p.label,
+    ...rest,
+  }));
   for (const p of found.platforms) await notePrivatePlatformView(db, viewer, p.owner, p, p.number);
   return answer(results, [], parts);
+}
+
+// The design judged against each platform on its own, so one platform's
+// description never touches another's answer; or the gaps, when the design
+// doesn't say all the fit needs.
+async function judgeDesign<P extends Candidate>(source: string, platforms: P[]) {
+  const results: { platform: P; result: FitResult }[] = [];
+  for (const p of platforms) {
+    const report = await engine.fit(source, [p.description]);
+    if (report.gaps.length) return { gaps: report.gaps, results: [] };
+    for (const result of report.results) results.push({ platform: p, result });
+  }
+  return { gaps: [] as string[], results };
+}
+
+// One platform as a workflow's "Where it can run" tab judged it (#1).
+export type JudgedPlatform = {
+  owner: string;
+  ownerType: Owner["type"];
+  slug: string;
+  label: string;
+  visibility: "public" | "private";
+  number: number;
+  hasRecipe: boolean;
+  fits: boolean;
+  reasons: string[];
+  models: Record<string, string[]>;
+};
+
+// One implementation whose blocks name registered platforms, and whether
+// that placement fits: the blocks that name one, by label, with the address
+// each names, and the engine's reasons, or its gaps when it can't judge it.
+export type Placement = {
+  implementation: string;
+  placed: { block: string; address: string }[];
+  fits: boolean;
+  reasons: string[];
+  gaps: string[];
+};
+
+export type WhereItRuns = {
+  judged: JudgedPlatform[];
+  gaps: string[];
+  // How many platforms the viewer may see, and how many of them are public;
+  // of these, at most PUBLIC_JUDGED are judged.
+  seen: number;
+  publicCount: number;
+  placements: Placement[];
+};
+
+// Where a workflow's design can run, for its "Where it can run" tab (#1):
+// judged by the engine, as the fit judges it, against the platforms
+// judgedPlatforms bounds, and each implementation's placement on registered
+// platforms. Each private platform judged is recorded as viewed, as the fit
+// records it.
+export async function whereItCanRun(db: Db, viewer: Viewer, source: string): Promise<WhereItRuns> {
+  const { platforms, publicCount } = await judgedPlatforms(db, viewer);
+  const candidates = await Promise.all(
+    platforms.map(async (r) => ({
+      ...r,
+      owner: { type: r.ownerType, id: r.ownerId, slug: r.owner },
+      description: await descriptionAsRead(r.description),
+    })),
+  );
+  const fitted = await judgeDesign(source, candidates);
+  const { placements, placedOn } = await placementsOf(db, viewer, source);
+  // A platform both judged and placed on is one view.
+  const viewed = new Map(
+    [...(fitted.gaps.length ? [] : candidates), ...placedOn].map((p) => [platformTarget(p.owner.slug, p.slug, p.number), p]),
+  );
+  for (const p of viewed.values()) await notePrivatePlatformView(db, viewer, p.owner, p, p.number);
+  return {
+    judged: fitted.results.map(({ platform: p, result }) => ({
+      owner: p.owner.slug,
+      ownerType: p.ownerType,
+      slug: p.slug,
+      label: p.label,
+      visibility: p.visibility,
+      number: p.number,
+      hasRecipe: Boolean(p.hasRecipe),
+      fits: result.fits,
+      reasons: result.reasons,
+      models: result.models,
+    })),
+    gaps: fitted.gaps,
+    seen: candidates.filter((p) => p.visibility === "private").length + publicCount,
+    publicCount,
+    placements,
+  };
+}
+
+// Each implementation whose blocks name a registered platform,
+// owner/platforms/slug, judged against the latest version of each it names
+// that the viewer may read, given to the engine under that address. A
+// platform the viewer may not read is not given, exactly as one that doesn't
+// exist isn't, so the engine answers the same for both. Each platform a
+// placement the engine could judge is on is given back, to be recorded as
+// viewed.
+async function placementsOf(db: Db, viewer: Viewer, source: string) {
+  const implementations = readYaml(source)?.implementations as
+    | Record<string, { blocks?: { id?: unknown; label?: unknown }[] }>
+    | undefined;
+  const placements: Placement[] = [];
+  const placedOn: Pick<Candidate, "owner" | "slug" | "visibility" | "number">[] = [];
+  for (const { id, label } of implementationsOf(source)) {
+    const named = blockPlatforms(source, id);
+    const addresses = [...new Set(named.values())].filter((a) => REGISTERED_PLATFORM.test(a)).sort();
+    if (!addresses.length) continue;
+    const found = (
+      await Promise.all(
+        addresses.map(async (address) => {
+          const [, owner, slug] = REGISTERED_PLATFORM.exec(address)!;
+          const read = await findReadablePlatformVersion(db, viewer, owner, slug, "latest");
+          return read ? [{ address, read }] : [];
+        }),
+      )
+    ).flat();
+    const given = await Promise.all(
+      found.map(async (f) => withDescriptionId(await descriptionAsRead(f.read.version.description), f.address)),
+    );
+    const report = await engine.fit(source, given.length ? given : [NO_DESCRIPTION], id);
+    const judged = report.results.filter((r) => r.judged);
+    const blocks = implementations?.[id]?.blocks ?? [];
+    placements.push({
+      implementation: label,
+      placed: blocks.flatMap((b) => {
+        const address = named.get(String(b.id));
+        return address && REGISTERED_PLATFORM.test(address) ? [{ block: String(b.label ?? b.id), address }] : [];
+      }),
+      fits: !report.gaps.length && judged.every((r) => r.fits),
+      reasons: judged.flatMap((r) => r.reasons),
+      gaps: report.gaps,
+    });
+    if (!report.gaps.length)
+      for (const { read } of found)
+        placedOn.push({ owner: read.owner, slug: read.platform.slug, visibility: read.platform.visibility, number: read.version.number });
+  }
+  return { placements, placedOn };
 }
 
 // Each part of the design judged on its own against the platforms, all

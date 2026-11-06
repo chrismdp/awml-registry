@@ -8,6 +8,7 @@ import { findOwner } from "@/server/owners";
 import { listMembers } from "@/server/organisations";
 import SystemPage from "@/app/[owner]/systems/[slug]/page";
 import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
+import WorkflowFitPage from "@/app/[owner]/[slug]/fit/page";
 import { seed } from "../scripts/seed-pictures";
 import { BASE, request, sentEmails, type Who } from "./helpers";
 import { renderPage } from "./pages";
@@ -123,6 +124,21 @@ describe("seeding a registry for the build's pictures", () => {
     expect((await read("/api/v1/acme/platforms/codex-laptop")).status).toBe(200);
     expect((await read("/api/v1/acme/platforms/cowork-mac-mini")).status).toBe(404);
     expect((await read("/api/v1/acme/platforms/cowork-mac-mini", cookie)).status).toBe(200);
+  });
+
+  it("keeps ana's own Mac mini private, which acme/client-email's Where it can run tab shows her alone (#1)", async () => {
+    const { cookie } = await seeded();
+    expect((await read("/api/v1/ana/platforms/mac-mini")).status).toBe(404);
+    expect((await read("/api/v1/ana/platforms/mac-mini", cookie)).body).toMatchObject({ visibility: "private" });
+    const toAna = await renderPage(WorkflowFitPage, { owner: "acme", slug: "client-email" }, { as: { cookie } });
+    expect(toAna.html).toContain("Your platforms");
+    expect(toAna.html).toContain("Acme&#x27;s platforms");
+    expect(toAna.html).toContain('href="/ana/platforms/mac-mini/recipe"');
+    const toVisitor = await renderPage(WorkflowFitPage, { owner: "acme", slug: "client-email" });
+    expect(toVisitor.status).toBe(200);
+    expect(toVisitor.html).toContain("Public platforms");
+    expect(toVisitor.html).not.toContain("mac-mini");
+    expect(toVisitor.html).not.toContain("Your platforms");
   });
 
   it("pushes acme/inbox, public, whose Mac mini block names acme's private agent platform, outlined for ana alone", async () => {
