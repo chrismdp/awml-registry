@@ -3,13 +3,12 @@ import { rowsOf } from "@/app/[owner]/[slug]/load";
 import type { CheckedFile } from "@/components/Checks";
 import type { ListedMember, SystemPanel, SystemViewProps } from "@/components/SystemView";
 import type { Db } from "@/db/client";
-import { engine, type Named } from "@/engine";
-import { layOut, mapLinks } from "@/server/drawing";
-import { asRead, descriptionAsRead } from "@/server/as-read";
+import { engine } from "@/engine";
+import { drawingsOf, mapLinks } from "@/server/drawing";
+import { descriptionAsRead } from "@/server/as-read";
 import { followOldName, pageContext, systemPath, underOwner, type SystemTab } from "@/server/page";
 import { notePrivatePlatformView, visiblePlatforms } from "@/server/platforms";
-import { refPath } from "@/server/refs";
-import { readSystemVersion } from "@/server/systems";
+import { memberAsRead, readSystemVersion, type MemberRead, type SeenMember } from "@/server/systems";
 import type { Viewer } from "@/server/viewer";
 
 // One system version for its page, `n` or "latest", with the tab asked for.
@@ -43,14 +42,9 @@ export async function systemProps(
   tab: SystemTab,
 ): Promise<SystemViewProps> {
   const read = await Promise.all(
-    s.members.map(async (m) => {
-      if (m.state !== "found") return { member: m, file: null, error: null };
-      const name = m.files.workflow !== undefined ? "workflow" : m.files.security !== undefined ? "security" : null;
-      const r = name ? await asRead(m.files, name) : { error: ["It has no workflow file the registry can read."] };
-      if ("error" in r) return { member: m, file: null, error: r.error };
-      const named: Named = { file: refPath(m.owner, m.slug), source: r.file };
-      return { member: m, file: named, error: null, notes: r.notes, drawn: (await engine.unsound(r.file)).length === 0 };
-    }),
+    s.members.map(async (m): Promise<MemberRead & { member: SeenMember }> =>
+      m.state !== "found" ? { member: m, file: null, error: null } : { member: m, ...(await memberAsRead(m)) },
+    ),
   );
   const given = read.flatMap((r) => (r.file ? [r.file] : []));
   const drawn = read.flatMap((r) => (r.file && r.drawn ? [r.file] : []));
@@ -95,7 +89,7 @@ export async function systemProps(
       tab,
       ...(await attempt(async () => {
         if (!drawn.length) return {};
-        const drawing = await layOut(await engine.graphMap(drawn));
+        const drawing = await drawingsOf(db, await engine.graphMap(drawn));
         if ("undrawn" in drawing) return { drawing };
         const boxes = Object.fromEntries(
           drawing.full.scopes.flatMap((b) =>

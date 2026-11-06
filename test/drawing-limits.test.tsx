@@ -1,7 +1,7 @@
 // What the server does with a drawing it can't lay out (src/server/drawing.ts): one too big
 // to lay out in good time, one whose layout fails, and labels whose line breaks the engine's
 // graph gives as the file wrote them. A page shows each as a message, never a 500, and the
-// answer is kept, so the work isn't tried again on the next request.
+// answer is stored and kept, so the work isn't tried again on the next request.
 import ELK from "elkjs/lib/elk.bundled.js";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,8 @@ import type { EngineGraph } from "@/components/flow/graph";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
 import { textWidth, wrap } from "@/components/flow/text";
 import { engine } from "@/engine";
-import { CARD_LIMITS, LIMITS, layOut, layOutWhole, nesting } from "@/server/drawing";
+import { getDb } from "@/db/client";
+import { LIMITS, drawingsOf, layOut, nesting } from "@/server/drawing";
 import { expected, laidOut } from "./drawn";
 import { example } from "./helpers";
 
@@ -108,54 +109,25 @@ describe("a drawing too big to lay out", () => {
     expect("undrawn" in (await layOut(noted(126, 1, 0, "p")))).toBe(false);
   });
 
-  it("is kept as too big, so its graph isn't read again", async () => {
+  it("is stored and kept as too big, so its graph isn't read again", async () => {
+    const db = await getDb();
     const big = chain(LIMITS.parts, 8, "f");
-    await layOut(big);
+    expect(await drawingsOf(db, big)).toEqual({ undrawn: "too big" });
     const reads = parsed.mock.calls.length;
-    expect(await layOut(big)).toEqual({ undrawn: "too big" });
+    expect(await drawingsOf(db, big)).toEqual({ undrawn: "too big" });
     expect(parsed.mock.calls.length).toBe(reads);
   });
 });
 
 describe("a drawing whose layout fails", () => {
-  it("says so rather than throwing, and is kept, so ELK isn't tried again", async () => {
+  it("says so rather than throwing, and is stored and kept, so ELK isn't tried again", async () => {
+    const db = await getDb();
     const layout = vi.spyOn(ELK.prototype, "layout").mockRejectedValue(new Error("org.eclipse.elk.core.UnsupportedGraphException: Referenced shape does not exist"));
     const text = chain(3, 8, "g");
-    expect(await layOut(text)).toEqual({ undrawn: "failed" });
+    expect(await drawingsOf(db, text)).toEqual({ undrawn: "failed" });
     const tries = layout.mock.calls.length;
-    expect(await layOut(text)).toEqual({ undrawn: "failed" });
-    expect(await layOutWhole(text)).toEqual({ undrawn: "failed" });
+    expect(await drawingsOf(db, text)).toEqual({ undrawn: "failed" });
     expect(layout.mock.calls.length).toBe(tries);
-  });
-});
-
-describe("the gallery's drawing, the whole of it alone", () => {
-  it("lays out the whole drawing and not Flow only", async () => {
-    const layout = vi.spyOn(ELK.prototype, "layout");
-    const text = chain(3, 8, "h");
-    const whole = laidOut(await layOutWhole(text));
-    expect(layout).toHaveBeenCalledTimes(1);
-    // The same drawing a page shows, kept for it.
-    expect(laidOut(await layOut(text)).full).toEqual(whole);
-    expect(layout).toHaveBeenCalledTimes(2);
-  });
-
-  it("is laid out within the gallery's own limits, lower than a page's, as it lays out many at once", async () => {
-    expect(CARD_LIMITS).toEqual({ parts: 80, lines: 120, characters: LIMITS.characters, depth: LIMITS.depth });
-    const layout = vi.spyOn(ELK.prototype, "layout");
-    // The scope and the trigger are two of the parts.
-    expect("undrawn" in (await layOutWhole(chain(CARD_LIMITS.parts - 2, 8, "q")))).toBe(false);
-    layout.mockClear();
-    const past = chain(CARD_LIMITS.parts - 1, 8, "r");
-    expect(await layOutWhole(past)).toEqual({ undrawn: "too big" });
-    // Lines past the limit too: a chain of ten steps has ten lines, and these are 111 more.
-    const lined = chained(10, 8, "s");
-    expect(
-      await layOutWhole(json({ ...lined, lines: [...lined.lines, ...Array.from({ length: CARD_LIMITS.lines - 9 }, () => start("s0", "s1"))] })),
-    ).toEqual({ undrawn: "too big" });
-    expect(layout).not.toHaveBeenCalled();
-    // Its page still draws it, within LIMITS.
-    expect("undrawn" in (await layOut(past))).toBe(false);
   });
 });
 

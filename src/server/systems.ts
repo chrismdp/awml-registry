@@ -13,11 +13,14 @@ import { and, desc, eq, inArray, max, or, sql } from "drizzle-orm";
 import type { Db } from "@/db/client";
 import { insertRows } from "@/db/rows";
 import { membership, system, systemMember, systemVersion, user, version, workflow } from "@/db/schema";
-import type { Files } from "@/engine";
+import { engine, type Files, type Named } from "@/engine";
+import { asRead } from "./as-read";
 import { record } from "./audit";
 import { awmlOf } from "./awml-file";
+import { layOutLater } from "./drawing";
 import { findOwner, isOwnerOrMember, ownerMaySee, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH, type Visibility } from "./push";
+import { refPath } from "./refs";
 import { refuse, type Result } from "./result";
 import { systemSlugProblem } from "./slugs";
 import type { Viewer } from "./viewer";
@@ -196,7 +199,46 @@ export async function pushSystemVersion(
   }
   await db.update(system).set({ title, updatedAt: new Date() }).where(eq(system.id, s.id));
   if (owner.type === "organisation") await record(db, owner.id, viewer.id, "push", systemTarget(owner.slug, slug, number));
+  // Its map, as its owner's members see it, every member drawn, laid out and
+  // stored once the push has answered (issue #131).
+  layOutLater(db, async () => {
+    const drawn = [];
+    for (const m of members.found) {
+      const { files } = await latestFiles(db, m.id);
+      const read = await memberAsRead({ owner: m.owner.slug, slug: m.slug, files });
+      if (read.file && read.drawn) drawn.push(read.file);
+    }
+    return drawn.length ? [await engine.graphMap(drawn)] : [];
+  });
   return { ok: true, owner: owner.slug, slug, number };
+}
+
+// A workflow's latest version's files.
+async function latestFiles(db: Db, workflowId: string) {
+  const [latest] = await db
+    .select({ number: version.number, workflow: version.workflow, security: version.security, platform: version.platform })
+    .from(version)
+    .where(eq(version.workflowId, workflowId))
+    .orderBy(desc(version.number))
+    .limit(1);
+  const files: Files = {};
+  if (latest?.workflow != null) files.workflow = latest.workflow;
+  if (latest?.security != null) files.security = latest.security;
+  if (latest?.platform != null) files.platform = latest.platform;
+  return { number: latest?.number ?? 0, files };
+}
+
+// A member's file as the engine reads it (converted, when stored in an
+// older AWML), at a path ending owner/slug.yaml, so the refs between members
+// are followed, and whether the map draws it: a member invalid on its own is
+// left out, and one with errors is drawn, its errors red (AWML 0.9, #100).
+export type MemberRead = { file: Named | null; error: string[] | null; notes?: string[]; drawn?: boolean };
+export async function memberAsRead(m: { owner: string; slug: string; files: Files }): Promise<MemberRead> {
+  const name = m.files.workflow !== undefined ? "workflow" : m.files.security !== undefined ? "security" : null;
+  const r = name ? await asRead(m.files, name) : { error: ["It has no workflow file the registry can read."] };
+  if ("error" in r) return { file: null, error: r.error };
+  const named: Named = { file: refPath(m.owner, m.slug), source: r.file };
+  return { file: named, error: null, notes: r.notes, drawn: (await engine.unsound(r.file)).length === 0 };
 }
 
 // A system's versions, newest first: who pushed each and when. A system
@@ -277,17 +319,7 @@ async function membersAsSeen(db: Db, viewer: Viewer, versionId: string) {
       hidden++;
       continue;
     }
-    const [latest] = await db
-      .select({ number: version.number, workflow: version.workflow, security: version.security, platform: version.platform })
-      .from(version)
-      .where(eq(version.workflowId, w.id))
-      .orderBy(desc(version.number))
-      .limit(1);
-    const number = latest?.number ?? 0;
-    const files: Files = {};
-    if (latest?.workflow != null) files.workflow = latest.workflow;
-    if (latest?.security != null) files.security = latest.security;
-    if (latest?.platform != null) files.platform = latest.platform;
+    const { number, files } = await latestFiles(db, w.id);
     // Recorded as opening the workflow at that version is.
     if (w.visibility === "private" && owner.type === "organisation" && viewer)
       await record(db, owner.id, viewer.id, "private_view", `${w.owner}/${w.slug} v${number}`);

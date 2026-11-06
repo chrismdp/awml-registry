@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import type { Drawings, Undrawn } from "@/components/flow/drawing";
 import type { ListedCheck, Summary } from "@/engine/types";
 
 const id = () => text("id").primaryKey().$defaultFn(() => crypto.randomUUID());
@@ -503,6 +504,21 @@ export const auditEvent = sqliteTable(
   (t) => [index("audit_event_org_at_idx").on(t.organisationId, t.at)],
 );
 
-export type CheckResult = { workflow?: string[]; security?: string[]; platform?: string[] };
+// A graph laid out (issue #131): every drawing a page may show of the
+// engine's graph, or why it isn't drawn, as `layOut` gives them, by the
+// SHA-256 of the graph's JSON and the layout that made them, LAYOUT_VERSION
+// in src/server/drawing.ts. One row per graph and layout; a row of another
+// layout is stale, and goes when its replacement is written.
+export const drawing = sqliteTable(
+  "drawing",
+  {
+    graph: text("graph").notNull(),
+    layout: text("layout").notNull(),
+    drawn: text("drawn", { mode: "json" }).notNull().$type<Drawings | Undrawn>(),
+  },
+  (t) => [primaryKey({ columns: [t.graph, t.layout] })],
+);
+
+export type CheckResult ={ workflow?: string[]; security?: string[]; platform?: string[] };
 
 export type CheckList = { awml: { tag: string; commit: string }; checks: ListedCheck[] };

@@ -10,6 +10,7 @@ import { findOwner, isOwnerOrMember, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH } from "./push";
 import { asRead } from "./as-read";
 import { awmlOf, isOlderAwml, partKinds, readYaml, WORKFLOW_IS_TOO_OLD } from "./awml-file";
+import { layOutLater } from "./drawing";
 import { namedAtPush, refPath, rewriteRefs, type Ref, type Rewrite } from "./refs";
 import { refuse, type Result } from "./result";
 import { workflowSlugProblem } from "./slugs";
@@ -274,6 +275,8 @@ async function saveVersion(
   }
   await db.update(workflow).set({ title: title!, updatedAt: new Date() }).where(eq(workflow.id, w.id));
   if (owner.type === "organisation") await record(db, owner.id, viewer.id, "push", `${owner.slug}/${slug} v${number}`);
+  // Its drawing, laid out and stored once the push has answered (issue #131).
+  layOutLater(db, async () => [await engine.graph(file)]);
   const found = (result: "warn" | "error") =>
     checks.checks.flatMap((c) => (c.result === result ? c.mistakes.map((message) => ({ check: c.id, message })) : []));
   return { ok: true, owner: owner.slug, slug, number, rewrites, warnings: found("warn"), errors: found("error") };

@@ -7,7 +7,7 @@ import { asRead } from "@/server/as-read";
 import { refPath, refsAsSeen } from "@/server/refs";
 import { awmlOf, implementationsOf, partKinds } from "@/server/awml-file";
 import { followOldName, isPageView, pageContext, underOwner, workflowPath, type PageView } from "@/server/page";
-import { layOut } from "@/server/drawing";
+import { drawingsOf } from "@/server/drawing";
 import { partLinks } from "@/server/part-links";
 import { organisationsOf } from "@/server/organisations";
 import { drawnDescriptions } from "@/server/platforms";
@@ -216,13 +216,15 @@ export async function versionProps(
     // viewer may know of both, so it names nothing they can't see.
     links: partLinks(refs.shown, referredBy ?? [], workflowRead ? partKinds(workflowRead) : new Map()),
     systems: systems ?? [],
-    // The drawing, laid out here from the engine's graph (src/server/drawing.ts),
-    // so the page draws it with no layout of its own. A platform view is drawn
+    // The drawing, as stored for the engine's graph, or laid out here and
+    // stored when none is (src/server/drawing.ts), so the page draws it with
+    // no layout of its own. A platform view is drawn
     // with the descriptions of the platforms its blocks name that the viewer
     // may read, so it marks each code step a model carries out (AWML 0.10.1).
     drawing: !drawable
       ? null
-      : await layOut(
+      : await drawingsOf(
+          db,
           drawnAs === undefined
             ? await engine.graph(drawnFile)
             : await engine.graph(drawnFile, drawnAs, await drawnDescriptions(db, viewer, drawnFile, drawnAs)),
