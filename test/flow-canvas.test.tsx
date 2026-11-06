@@ -7,7 +7,7 @@ import { ReactFlow } from "@xyflow/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { headHeight, lineRoutes, type Point, type Rect } from "@/components/flow/drawing";
-import { NODE_TYPES, nodesOf } from "@/components/flow/FlowCanvas";
+import { linesOf, NODE_TYPES, nodesOf, routedLines } from "@/components/flow/FlowCanvas";
 import { roundedPath } from "@/components/flow/Graphic";
 import { atServer } from "@/components/flow/physics";
 import { StaticDrawing } from "@/components/flow/StaticDrawing";
@@ -142,7 +142,7 @@ describe("a line, once a part is dragged (#67, #116)", () => {
     ((p.x === r.x || p.x === r.x + r.width) && p.y >= r.y && p.y <= r.y + r.height) ||
     ((p.y === r.y || p.y === r.y + r.height) && p.x >= r.x && p.x <= r.x + r.width);
 
-  it("keeps the server's route while its ends haven't moved, or have moved together, and goes square once one has", async () => {
+  it("keeps the server's route while its ends haven't moved, or have moved together, its bends once one has moved a little, and goes square once that no longer holds", async () => {
     const { full } = laidOut(await layOut(example("flow/issue-to-pull-request.graph.json")));
     const at = new Map<string, Rect>([...full.parts, ...full.scopes].map((b) => [b.id, b]));
     const line = full.lines.find((l) => l.label && l.points.length > 3)!;
@@ -157,12 +157,22 @@ describe("a line, once a part is dragged (#67, #116)", () => {
     expect(together.server).toBe(true);
     expect(together.points[0]).toEqual({ x: line.points[0].x + 40, y: line.points[0].y + 30 });
 
-    // Dragged across and up: square, out of the dragged part's side or bottom and into the other.
+    // Dragged a little, it keeps the server's bends but the one by the dragged part (#126).
+    for (const [dx, dy] of [
+      [-300, 20],
+      [0, 0.4 * (t.y - s.y)],
+    ]) {
+      const route = routed({ [line.from]: by(s, dx, dy) });
+      expect(route.server, `${dx}, ${dy}`).toBe(true);
+      expect(route.points.slice(2)).toEqual(line.points.slice(2));
+    }
+
+    // Dragged so its route no longer holds: square, out of the dragged part's side or bottom and into the other.
     for (const [dx, dy] of [
       [260, -40],
-      [-300, 20],
+      [-300, 150],
       [500, s.y < t.y ? t.y - s.y : 0],
-      [0, 0.4 * (t.y - s.y)],
+      [0, 0.6 * (t.y - s.y)],
     ]) {
       const dragged = by(s, dx, dy);
       const route = routed({ [line.from]: dragged });
@@ -187,6 +197,25 @@ describe("a line, once a part is dragged (#67, #116)", () => {
       expect(below.points.at(-1)!.y).toBe(t.y);
       expect(below.points.at(-2)!.x).toBe(below.points.at(-1)!.x);
     }
+  });
+
+  it("is drawn by the lines the physics routed again, which drawing them never changes (#126)", async () => {
+    const { full } = laidOut(await layOut(example("flow/issue-to-pull-request.graph.json")));
+    const at = new Map<string, Rect>([...full.parts, ...full.scopes].map((b) => [b.id, b]));
+    const line = full.lines.find((l) => l.label && l.points.length > 3)!;
+    // The nodes with the line's part moved by (dx, dy), and the line as the page draws them.
+    const drawn = (dx: number, dy: number, rerouted: Set<string>) => {
+      const nodes = [...at].map(([id, r]) => ({ id, position: id === line.from ? { x: r.x + dx, y: r.y + dy } : { x: r.x, y: r.y }, width: r.width, height: r.height, data: {} }) as unknown as Parameters<typeof routedLines>[1][number]);
+      return routedLines(linesOf(full, "d"), nodes, full, at, rerouted).find((e) => e.id === line.id)!.data!.route!;
+    };
+    const none = new Set<string>();
+    expect(drawn(260, -40, none).server).toBe(false);
+    expect([...none]).toEqual([]);
+    const again = new Set([line.id]);
+    expect(drawn(-300, 20, again).server).toBe(false);
+    expect(drawn(0, 0, again).server).toBe(true);
+    expect([...again]).toEqual([line.id]);
+    expect(drawn(-300, 20, new Set()).server).toBe(true);
   });
 });
 

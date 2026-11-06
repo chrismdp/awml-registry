@@ -24,14 +24,14 @@ const bound = (rs: Rect[]) => {
   return { width: Math.max(...rs.map((r) => r.x + r.width)) - x, height: Math.max(...rs.map((r) => r.y + r.height)) - y };
 };
 
-type State = { bodies: Body[]; hulls: Map<string, Rect>; opened: number; along: Map<string, number> };
+type State = { bodies: Body[]; hulls: Map<string, Rect>; opened: number; along: Map<string, number>; rerouted: Set<string> };
 
 // Each line's label where the page draws it with the boxes where they are (FlowCanvas.tsx's
 // LineView): on its route from lineRoutes, the server's while its ends are where the server put
-// them, and where the physics slid it along it, if it did.
+// them, its bends while they hold, and where the physics slid it along it, if it did.
 function labelsOf(d: Drawing, s: State) {
   const byId = new Map(s.bodies.map((b) => [b.id, boxOf(b)]));
-  const routes = lineRoutes(d.lines, new Map([...s.hulls, ...byId]), new Map([...d.parts, ...d.scopes].map((b) => [b.id, b])));
+  const routes = lineRoutes(d.lines, new Map([...s.hulls, ...byId]), new Map([...d.parts, ...d.scopes].map((b) => [b.id, b])), new Set(s.rerouted));
   return d.lines.flatMap((l) => {
     const route = routes.get(l.id);
     if (!l.label || l.from === l.to || !byId.has(l.from) || !byId.has(l.to) || !route) return [];
@@ -61,13 +61,17 @@ function overlaps(d: Drawing, s: State) {
 }
 
 // The physics of a drawing: its state each time it moves, and when it has opened.
+// The lines routed again as it moved are shared with the page, as FlowCanvas.tsx shares them,
+// and each state keeps them as they were when it was told.
 function physicsOf(d: Drawing) {
   const states: State[] = [];
   let rest: () => void = () => {};
+  const rerouted = new Set<string>();
   const sim = startPhysics(
     d,
-    (bodies, hulls, opened, along) => states.push({ bodies: bodies.map((b) => ({ ...b })), hulls: new Map(hulls), opened, along: new Map(along) }),
+    (bodies, hulls, opened, along) => states.push({ bodies: bodies.map((b) => ({ ...b })), hulls: new Map(hulls), opened, along: new Map(along), rerouted: new Set(rerouted) }),
     () => rest(),
+    rerouted,
   );
   const resting = () => new Promise<void>((r) => (rest = r));
   return { sim, states, now: () => states.at(-1)!, resting };
@@ -195,6 +199,41 @@ describe("a drag", () => {
     }
     expect(overlaps(full, now())).toEqual([]);
   });
+
+  it("judges labels on the lines routed again as the part moved, which it shares with the page (#126)", async () => {
+    const { full } = laidOut(await layOut(dinners));
+    const { sim, now } = opened(full);
+    drag(sim, "mealplan", 300, 300);
+    const { rerouted } = now();
+    const labelled = full.lines.filter((l) => l.label && (l.from === "mealplan" || l.to === "mealplan")).map((l) => l.id);
+    expect(labelled.length).toBeGreaterThan(0);
+    for (const id of labelled) expect(rerouted.has(id), id).toBe(true);
+    expect(overlaps(full, now())).toEqual([]);
+  });
+
+  for (const [name, text] of drawings)
+    it(`on ${name}, routes a line again only from where the parts are after each move, not from a nudge half done (#126)`, async () => {
+      const { full } = laidOut(await layOut(text));
+      const served = new Map([...full.parts, ...full.scopes].map((b) => [b.id, b]));
+      for (const part of full.parts.map((p) => p.id))
+        for (const [dx, dy] of [
+          [80, 0],
+          [0, 80],
+          [-80, 0],
+          [0, -80],
+        ]) {
+          const { sim, states } = opened(full);
+          const from = states.length;
+          drag(sim, part, dx, dy, 8);
+          // The lines the page routes again, told only where the parts were after each move.
+          const again = new Set<string>();
+          for (const s of states.slice(from)) {
+            lineRoutes(full.lines, new Map([...s.hulls, ...s.bodies.map((b) => [b.id, boxOf(b)] as const)]), served, again);
+            expect([...s.rerouted].sort(), `${part} ${dx},${dy}`).toEqual([...again].sort());
+          }
+          sim.stop();
+        }
+    }, 20_000);
 
   for (const [name, text] of drawings)
     it(`on ${name}, dragging each part by (300, 100) and by (-200, 150) moves nothing far from where it is dropped, leaves nothing overlapping, and nothing moves once it is dropped`, async () => {

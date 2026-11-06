@@ -191,3 +191,106 @@ describe("a line whose ends have moved apart (#116)", () => {
     expect([roomy[0].y, roomy.at(-1)!.y]).toEqual([50, 80]);
   });
 });
+
+describe("a line whose part is moved a little (#126)", () => {
+  const a = { x: 0, y: 0, width: 200, height: 60 };
+  const b = { x: 0, y: 200, width: 200, height: 60 };
+  const served = boxes({ a, b });
+  // Out of the bottom of `a`, a jog halfway down, and into the top of `b`.
+  const server = [
+    { x: 60, y: 60 },
+    { x: 60, y: 130 },
+    { x: 150, y: 130 },
+    { x: 150, y: 200 },
+  ];
+  const l = line("l", "a", "b", server);
+
+  it("keeps every bend but the first when its part moves sideways, the first moving with it", () => {
+    const r = lineRoutes([l], boxes({ a: by(a, 10, 0), b }), served).get("l")!;
+    expect(r.points).toEqual([{ x: 70, y: 60 }, { x: 70, y: 130 }, server[2], server[3]]);
+    expect(r.server).toBe(true);
+  });
+
+  it("shortens the first stretch when its part moves down, and keeps every bend", () => {
+    const r = lineRoutes([l], boxes({ a: by(a, 0, 10), b }), served).get("l")!;
+    expect(r.points).toEqual([{ x: 60, y: 70 }, server[1], server[2], server[3]]);
+  });
+
+  it("moves the bend at each end with its own part when both have moved apart", () => {
+    const r = lineRoutes([l], boxes({ a: by(a, 10, 0), b: by(b, -10, 5) }), served).get("l")!;
+    expect(r.points).toEqual([
+      { x: 70, y: 60 },
+      { x: 70, y: 130 },
+      { x: 140, y: 130 },
+      { x: 140, y: 205 },
+    ]);
+  });
+
+  it("keeps its label where the server put it, unless the stretch it is on moves, and then moves it with that", () => {
+    const label = { x: 105, y: 130, width: 40, height: 22, lines: ["x"] };
+    const moved = boxes({ a: by(a, 10, 0), b });
+    expect(lineRoutes([{ ...l, label }], moved, served).get("l")!.label).toEqual({ x: 105, y: 130 });
+    expect(lineRoutes([{ ...l, label: { ...label, x: 60, y: 95 } }], moved, served).get("l")!.label).toEqual({ x: 70, y: 95 });
+  });
+
+  it("slides its label along a stretch cut shorter by as little as keeps it on it, and not at all while it is still on it", () => {
+    const label = { x: 60, y: 95, width: 40, height: 22, lines: ["x"] };
+    expect(lineRoutes([{ ...l, label }], boxes({ a: by(a, 0, 50), b }), served).get("l")!.label).toEqual({ x: 60, y: 110 });
+    expect(lineRoutes([{ ...l, label }], boxes({ a: by(a, 0, 20), b }), served).get("l")!.label).toEqual({ x: 60, y: 95 });
+  });
+
+  it("is routed again, as before, once its first stretch would reverse", () => {
+    const r = lineRoutes([l], boxes({ a: by(a, 0, 80), b }), served).get("l")!;
+    expect(r.server).toBe(false);
+    expect(r.points).toEqual([
+      { x: 60, y: 140 },
+      { x: 60, y: 170 },
+      { x: 150, y: 170 },
+      { x: 150, y: 200 },
+    ]);
+  });
+
+  it("is routed again once a stretch would be shorter than a corner", () => {
+    expect(lineRoutes([l], boxes({ a: by(a, 0, 62), b }), served).get("l")!.server).toBe(false);
+  });
+
+  it("is routed again once a stretch would cross another part", () => {
+    const c = { x: 20, y: 90, width: 30, height: 20 };
+    expect(lineRoutes([l], boxes({ a: by(a, -10, 0), b, c }), boxes({ a, b, c })).get("l")!.server).toBe(true);
+    expect(lineRoutes([l], boxes({ a: by(a, -20, 0), b, c }), boxes({ a, b, c })).get("l")!.server).toBe(false);
+  });
+
+  it("stays routed again once it has been, until its part is back where the server put it", () => {
+    const again = new Set<string>();
+    const at = (dx: number, dy: number) => lineRoutes([l], boxes({ a: by(a, dx, dy), b }), served, again).get("l")!;
+    expect(at(10, 0).server).toBe(true);
+    expect(at(0, 80).server).toBe(false);
+    expect(at(10, 0).server).toBe(false);
+    expect(at(0, 0)).toEqual({ points: server, label: { x: 105, y: 130 }, server: true });
+    expect(at(10, 0).server).toBe(true);
+  });
+
+  it("runs a re-routed line apart from one that keeps the server's bends in the same gap", () => {
+    const [p, c, q, d] = [
+      { x: 0, y: 0, width: 100, height: 60 },
+      { x: 150, y: 0, width: 100, height: 60 },
+      { x: 0, y: 200, width: 100, height: 60 },
+      { x: 300, y: 200, width: 100, height: 60 },
+    ];
+    const k = line("k", "c", "d", [
+      { x: 200, y: 60 },
+      { x: 200, y: 130 },
+      { x: 350, y: 130 },
+      { x: 350, y: 200 },
+    ]);
+    const m = line("m", "p", "q", [
+      { x: 50, y: 60 },
+      { x: 50, y: 200 },
+    ]);
+    const routes = lineRoutes([k, m], boxes({ p, c: by(c, 10, 0), q: by(q, 180, 0), d }), boxes({ p, c, q, d }));
+    const [kept, moved] = [routes.get("k")!, routes.get("m")!];
+    expect(kept.points).toEqual([{ x: 210, y: 60 }, { x: 210, y: 130 }, k.points[2], k.points[3]]);
+    expect(moved.server).toBe(false);
+    expect(Math.abs(moved.points[1].y - 130)).toBeGreaterThanOrEqual(14);
+  });
+});
