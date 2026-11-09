@@ -68,7 +68,7 @@ A recipe says where each secret goes, but never holds a secret itself. Anyone ca
 
 Read the latest version at `GET /api/v1/platforms/<owner>/<platform>`, one version at `.../v/<n>`, and its files at `/<owner>/platforms/<platform>/v/<n>/description.yaml` and `.../recipe.md`. A platform's page is `/<owner>/platforms/<platform>`, the same as the reference AWML gives it; the old `/platforms/<owner>/<platform>` addresses redirect there.
 
-On the site, `/<owner>/platforms` lists an owner's platforms with links to their files, and `/platforms` lists and searches every platform you can see.
+On the site, `/<owner>/platforms` lists an owner's platforms with links to their files, and `/platforms` lists and searches every platform you can see. Every platform's page has a "Workflows that fit" tab, at `/<owner>/platforms/<platform>/workflows`: it judges your own private workflows, your organisations' and the 100 newest public ones against the platform, and lists those that fit.
 
 On the site, every workflow's page has a "Where it can run" tab, at `/<owner>/<workflow>/fit`: it judges the workflow against your own private platforms, your organisations' and the 100 newest public ones, and says which fit and what each of the others is missing. To ask the API instead:
 

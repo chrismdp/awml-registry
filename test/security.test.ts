@@ -17,6 +17,7 @@ import WorkflowFitPage from "@/app/[owner]/[slug]/fit/page";
 import VersionFitPage from "@/app/[owner]/[slug]/v/[n]/fit/page";
 import PlatformPage from "@/app/[owner]/platforms/[slug]/page";
 import PlatformVersionPage from "@/app/[owner]/platforms/[slug]/v/[n]/page";
+import PlatformWorkflowsPage from "@/app/[owner]/platforms/[slug]/workflows/page";
 import OwnerPlatformsPage from "@/app/[owner]/platforms/page";
 import SharedPlatformsPage from "@/app/platforms/page";
 import OwnerPage from "@/app/[owner]/page";
@@ -1212,6 +1213,7 @@ describe("A person's own private platforms", () => {
   const pages = async (owner: string, slug: string, as: Who) => ({
     page: (await renderPage(PlatformPage, { owner, slug }, { as })).status,
     versionPage: (await renderPage(PlatformVersionPage, { owner, slug, n: "1" }, { as })).status,
+    workflows: (await renderPage(PlatformWorkflowsPage, { owner, slug }, { as })).status,
   });
 
   const fitted = async (as: Who) => {
@@ -1227,7 +1229,7 @@ describe("A person's own private platforms", () => {
       const { ana } = await anaHomeBox();
       for (const as of [{ token: ana.token }, { cookie: ana.cookie }])
         expect(await platformReads(ana.username, "home-box", as)).toEqual(allPlatformReads(200));
-      expect(await pages(ana.username, "home-box", { cookie: ana.cookie })).toEqual({ page: 200, versionPage: 200 });
+      expect(await pages(ana.username, "home-box", { cookie: ana.cookie })).toEqual({ page: 200, versionPage: 200, workflows: 200 });
       const again = await pushPlatform(ana.username, "home-box", { token: ana.token }, { description: homeBox });
       expect([again.status, (await again.json()).number]).toEqual([201, 2]);
       expect((await allAudit()).filter((e) => e.includes("home-box"))).toEqual([]);
@@ -1255,7 +1257,7 @@ describe("A person's own private platforms", () => {
       const { ana, nell } = await anaHomeBox();
       for (const as of [{ token: nell.token }, { cookie: nell.cookie }, undefined]) {
         expect(await platformReads(ana.username, "home-box", as)).toEqual(allPlatformReads(404));
-        expect(await pages(ana.username, "home-box", as)).toEqual({ page: 404, versionPage: 404 });
+        expect(await pages(ana.username, "home-box", as)).toEqual({ page: 404, versionPage: 404, workflows: 404 });
         for (const [hidden, missing] of [
           [`/api/v1/platforms/${ana.username}/home-box`, `/api/v1/platforms/${ana.username}/nothing-here`],
           [`/api/v1/${ana.username}/platforms/home-box/v/1`, `/api/v1/${ana.username}/platforms/nothing-here/v/1`],
@@ -1292,7 +1294,7 @@ describe("A person's own private platforms", () => {
       const { ana, olive, mo } = await anaHomeBox();
       for (const who of [olive, mo]) {
         expect(await platformReads(ana.username, "home-box", { token: who.token })).toEqual(allPlatformReads(404));
-        expect(await pages(ana.username, "home-box", { cookie: who.cookie })).toEqual({ page: 404, versionPage: 404 });
+        expect(await pages(ana.username, "home-box", { cookie: who.cookie })).toEqual({ page: 404, versionPage: 404, workflows: 404 });
         expect((await pushPlatform(ana.username, "home-box", { token: who.token }, { description: homeBox })).status).toBe(403);
       }
     });

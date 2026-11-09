@@ -7,6 +7,8 @@ import { CURRENT_AWML } from "@/server/awml-file";
 import { ConvertedNote } from "./ConvertedNote";
 import { CopyButton } from "./CopyButton";
 import { Versions, type ListedVersion } from "./VersionList";
+import { WorkflowsThatFit } from "./WorkflowsThatFit";
+import type { JudgedWorkflow } from "@/server/fit";
 
 export type PlatformViewProps = {
   owner: string;
@@ -24,13 +26,35 @@ export type PlatformViewProps = {
   awml: string | null;
   described: { intro: string; rows: OfferRow[] };
   recipe: string | null;
+  // The workflows that fit (#125), worked out only on their own tab, and
+  // null on any other.
+  workflows: WorkflowsTab | null;
   versions: ListedVersion[];
+};
+
+// One group of workflows on the "Workflows that fit" tab: the viewer's own,
+// an organisation's or the public ones, with how many were judged and those
+// that fit, newest first. Its key is unique where its name, from an
+// organisation's, may not be.
+export type WorkflowGroup = { key: string; name: string; public: boolean; judged: number; workflows: JudgedWorkflow[] };
+
+export type WorkflowsTab = {
+  fits: number;
+  // How many workflows the viewer may see, public and private.
+  seen: number;
+  // How many public workflows were judged, the newest, when there are more
+  // than that; null when every one was.
+  newest: number | null;
+  groups: WorkflowGroup[];
+  // Where someone signed out signs in to check their own workflows too.
+  signIn: string | null;
 };
 
 const TAB: Record<PlatformTab, string> = {
   offers: "What it offers",
   recipe: "Install recipe",
   yaml: "YAML",
+  workflows: "Workflows that fit",
 };
 
 // Markdown as HTML, with any raw HTML in it shown as text, not run.
@@ -99,25 +123,29 @@ export function PlatformView(p: PlatformViewProps) {
         <div className="wf-body">
           <main>
             {tablist}
-            <div className="figure pf-panel" role="tabpanel" aria-label={`${p.label}, ${TAB[p.tab].toLowerCase()}`}>
-              {p.tab === "offers" ? (
-                <dl className="offers">
-                  {p.described.rows.map((r) => (
-                    <div key={r.label}>
-                      <dt>{r.label}</dt>
-                      <dd>
-                        <span className="value">{r.value}</span>
-                        {r.comment && <Said text={r.comment} />}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              ) : p.recipe ? (
-                <div className="recipe" dangerouslySetInnerHTML={{ __html: markdown.render(p.recipe) }} />
-              ) : (
-                <p className="plain">This platform has no install recipe yet.</p>
-              )}
-            </div>
+            {p.workflows ? (
+              <WorkflowsThatFit tab={p.workflows} label={p.label} />
+            ) : (
+              <div className="figure pf-panel" role="tabpanel" aria-label={`${p.label}, ${TAB[p.tab].toLowerCase()}`}>
+                {p.tab === "offers" ? (
+                  <dl className="offers">
+                    {p.described.rows.map((r) => (
+                      <div key={r.label}>
+                        <dt>{r.label}</dt>
+                        <dd>
+                          <span className="value">{r.value}</span>
+                          {r.comment && <Said text={r.comment} />}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : p.recipe ? (
+                  <div className="recipe" dangerouslySetInnerHTML={{ __html: markdown.render(p.recipe) }} />
+                ) : (
+                  <p className="plain">This platform has no install recipe yet.</p>
+                )}
+              </div>
+            )}
           </main>
 
           <aside>

@@ -9,6 +9,7 @@ import SharedPlatformsPage from "@/app/platforms/page";
 import PlatformPage from "@/app/[owner]/platforms/[slug]/page";
 import PlatformRecipePage from "@/app/[owner]/platforms/[slug]/recipe/page";
 import PlatformYamlPage from "@/app/[owner]/platforms/[slug]/yaml/page";
+import PlatformWorkflowsPage from "@/app/[owner]/platforms/[slug]/workflows/page";
 import PlatformVersionPage from "@/app/[owner]/platforms/[slug]/v/[n]/page";
 import PlatformVersionRecipePage from "@/app/[owner]/platforms/[slug]/v/[n]/recipe/page";
 import PlatformVersionYamlPage from "@/app/[owner]/platforms/[slug]/v/[n]/yaml/page";
@@ -344,7 +345,7 @@ async function laptopFor(name = "ana") {
 }
 
 describe("a platform's page", () => {
-  it("has a header of crumb, label, visibility and version, the file's top comment, and three tabs, each its own address", async () => {
+  it("has a header of crumb, label, visibility and version, the file's top comment, and four tabs, each its own address", async () => {
     const ana = await laptopFor();
     const o = ana.username;
     const page = await show(PlatformPage, o, "laptop");
@@ -359,8 +360,9 @@ describe("a platform's page", () => {
       { href: `/${o}/platforms/laptop`, label: "What it offers", selected: true },
       { href: `/${o}/platforms/laptop/recipe`, label: "Install recipe", selected: false },
       { href: `/${o}/platforms/laptop/yaml`, label: "YAML", selected: false },
+      { href: `/${o}/platforms/laptop/workflows`, label: "Workflows that fit", selected: false },
     ]);
-    for (const P of [PlatformRecipePage, PlatformYamlPage]) {
+    for (const P of [PlatformRecipePage, PlatformYamlPage, PlatformWorkflowsPage]) {
       const other = await show(P, o, "laptop");
       expect(other.status).toBe(200);
       expect(headOf(other.html)).toBe(headOf(page.html));
@@ -456,6 +458,7 @@ holds: []
       `/${o}/platforms/laptop/v/1`,
       `/${o}/platforms/laptop/v/1/recipe`,
       `/${o}/platforms/laptop/v/1/yaml`,
+      `/${o}/platforms/laptop/v/1/workflows`,
     ]);
     expect(old.html).toContain(`href="/${o}/platforms/laptop">#2</a>`);
     expect(text((await show(PlatformPage, o, "laptop")).html)).toContain("Off for up to 7 days");
@@ -560,7 +563,7 @@ describe("a platform's old address", () => {
 });
 
 describe("Private platforms on a platform's page", () => {
-  const tabs = [PlatformPage, PlatformRecipePage, PlatformYamlPage];
+  const tabs = [PlatformPage, PlatformRecipePage, PlatformYamlPage, PlatformWorkflowsPage];
 
   it("positive: the owner and a member of the organisation see its private platform", async () => {
     const { olive, mo } = await platforms();

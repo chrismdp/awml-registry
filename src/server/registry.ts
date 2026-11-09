@@ -8,6 +8,7 @@ import { record } from "./audit";
 import { measures, total } from "./summary";
 import { findOwner, isOwnerOrMember, type Owner } from "./owners";
 import { mayPushTo, pushedVisibility, SIGN_IN_TO_PUSH } from "./push";
+import { PUBLIC_JUDGED } from "./platforms";
 import { asRead } from "./as-read";
 import { awmlOf, isOlderAwml, partKinds, readYaml, WORKFLOW_IS_TOO_OLD } from "./awml-file";
 import { layOutLater } from "./drawing";
@@ -621,6 +622,45 @@ export async function explore(db: Db, query = "", limit = 50) {
     )
     .orderBy(desc(workflow.updatedAt))
     .limit(limit);
+}
+
+// The workflows a platform's "Workflows that fit" tab judges for the viewer
+// (#125), each with its latest version's files: every private workflow they
+// may see, their own and their organisations', and the PUBLIC_JUDGED newest
+// public ones, each newest first by when it was last pushed, ties by owner
+// and slug; and how many public workflows there are in all.
+export async function judgedWorkflows(db: Db, viewer: Viewer) {
+  const latest = () =>
+    db
+      .select({
+        owner: ownerSlugSql,
+        ownerType: sql<Owner["type"]>`case when ${workflow.ownerUserId} is null then 'organisation' else 'user' end`,
+        slug: workflow.slug,
+        title: workflow.title,
+        visibility: workflow.visibility,
+        number: version.number,
+        workflow: version.workflow,
+        security: version.security,
+      })
+      .from(workflow)
+      .innerJoin(version, and(eq(version.workflowId, workflow.id), isLatest));
+  const [own, open, [{ publicCount }]] = await Promise.all([
+    viewer
+      ? latest()
+          .where(and(eq(workflow.visibility, "private"), seenBy(db, viewer)))
+          .orderBy(desc(workflow.updatedAt), ownerSlugSql, workflow.slug)
+      : [],
+    latest()
+      .where(eq(workflow.visibility, "public"))
+      .orderBy(desc(workflow.updatedAt), ownerSlugSql, workflow.slug)
+      .limit(PUBLIC_JUDGED),
+    db
+      .select({ publicCount: count() })
+      .from(workflow)
+      .innerJoin(version, and(eq(version.workflowId, workflow.id), isLatest))
+      .where(eq(workflow.visibility, "public")),
+  ]);
+  return { workflows: [...own, ...open], publicCount };
 }
 
 // An owner's workflows: the public ones to everyone, the private ones to

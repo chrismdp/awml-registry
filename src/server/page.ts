@@ -78,9 +78,9 @@ export const underOwner = (slug: string, n: string | number, view?: string) =>
     .map((part) => `/${encodeURIComponent(part)}`)
     .join("");
 
-// A platform's page shows what it offers, its install recipe, or its
-// description as text.
-export type PlatformTab = "offers" | "recipe" | "yaml";
+// A platform's page shows what it offers, its install recipe, its
+// description as text, or the workflows that fit it (#125).
+export type PlatformTab = "offers" | "recipe" | "yaml" | "workflows";
 
 // The address of a platform's page: its latest version or version `n`, and
 // one tab, or none for what it offers. Each part is kept inside its own

@@ -21,6 +21,9 @@
 //   referred to by two workflows and their mark opens a menu;
 // - acme/cupboards, private;
 // - ana/dinners, private;
+// - ana/letters, private, a copy of acme/client-email under ana's own title, which her Mac mini
+//   holds, so ana/platforms/mac-mini's "Workflows that fit" tab shows her own workflows, then
+//   the public ones (#125);
 // - ana/family-dinners, public, a fork of acme/dinners at version 1;
 // - acme/platforms/worker, public, at two versions: without an install recipe, then with one;
 // - acme/platforms/codex-laptop, public;
@@ -70,6 +73,9 @@ const inbox = fixture("client-email.yaml")
     '{ id: cowork, label: "Claude Cowork, Mac mini", parts',
     '{ id: cowork, label: "Claude Cowork, Mac mini", platform: acme/platforms/cowork-mac-mini, parts',
   );
+
+// The client's email under ana's own title, kept private on her account.
+const letters = fixture("client-email.yaml").replace("title: A client's email, answered with a draft", "title: Ana's letters");
 
 const recipe = `# Install on a code worker
 
@@ -145,6 +151,7 @@ export async function seed({ base, send, signInLink }: SeedOptions): Promise<{ c
     ["/api/v1/acme/pantry/versions", { workflow: pantry, visibility: "public" }],
     ["/api/v1/acme/cupboards/versions", { workflow: cupboards, visibility: "private" }],
     ["/api/v1/ana/dinners/versions", { workflow: fixture("dinners.yaml"), visibility: "private" }],
+    ["/api/v1/ana/letters/versions", { workflow: letters, visibility: "private" }],
     ["/api/v1/platforms/acme/worker/versions", { description: fixture("platforms/worker.yaml"), visibility: "public" }],
     ["/api/v1/platforms/acme/worker/versions", { description: fixture("platforms/worker.yaml"), recipe }],
     [
