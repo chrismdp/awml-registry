@@ -235,4 +235,19 @@ describe("the bound on public workflows", () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(shown).not.toContain("Copy 4 ");
   });
+
+  it("lists a private group newest first too, not by slug", async () => {
+    const db = await getDb();
+    const ana = await person("ana");
+    await pushPlatform(ana.username, "open-box", { token: ana.token }, { description: fitsAll("open-box", "Ana's open box") });
+    await pushWorkflow(ana.username, "a-old", { token: ana.token }, titled("Old notes"), "private");
+    await pushWorkflow(ana.username, "z-new", { token: ana.token }, titled("New notes"), "private");
+    await db.update(workflow).set({ updatedAt: new Date(Date.UTC(2025, 0, 1)) }).where(eq(workflow.slug, "a-old"));
+    await db.update(workflow).set({ updatedAt: new Date(Date.UTC(2026, 10, 1)) }).where(eq(workflow.slug, "z-new"));
+    const shown = text((await tab("ana", { cookie: ana.cookie })).html);
+    expect(shown).toContain("Your workflows");
+    const order = ["New notes", "Old notes"].map((t) => shown.indexOf(t));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect(order[0]).toBeLessThan(order[1]);
+  });
 });

@@ -626,9 +626,9 @@ export async function explore(db: Db, query = "", limit = 50) {
 
 // The workflows a platform's "Workflows that fit" tab judges for the viewer
 // (#125), each with its latest version's files: every private workflow they
-// may see, their own and their organisations', by owner and slug, and the
-// PUBLIC_JUDGED newest public ones, by when each was last pushed, ties by
-// owner and slug; and how many public workflows there are in all.
+// may see, their own and their organisations', and the PUBLIC_JUDGED newest
+// public ones, each newest first by when it was last pushed, ties by owner
+// and slug; and how many public workflows there are in all.
 export async function judgedWorkflows(db: Db, viewer: Viewer) {
   const latest = () =>
     db
@@ -648,7 +648,7 @@ export async function judgedWorkflows(db: Db, viewer: Viewer) {
     viewer
       ? latest()
           .where(and(eq(workflow.visibility, "private"), seenBy(db, viewer)))
-          .orderBy(ownerSlugSql, workflow.slug)
+          .orderBy(desc(workflow.updatedAt), ownerSlugSql, workflow.slug)
       : [],
     latest()
       .where(eq(workflow.visibility, "public"))
