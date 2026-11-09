@@ -318,10 +318,10 @@ export async function visiblePlatforms(db: Db, viewer: Viewer, query = "") {
 }
 
 // How many public platforms a workflow's "Where it can run" tab judges at
-// most, the newest (#1). Anyone signed in may publish a public platform, so
-// without it the tab's work would grow with every one published. When a
-// platform's page lists the workflows that fit it (#125, not built yet), it
-// will take the same bound.
+// most, the newest (#1), and how many public workflows a platform's
+// "Workflows that fit" tab judges (#125). Anyone signed in may publish a
+// public platform or workflow, so without it either tab's work would grow
+// with every one published.
 export const PUBLIC_JUDGED = 100;
 
 // The platforms the "Where it can run" tab judges for the viewer (#1): every

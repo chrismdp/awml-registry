@@ -9,6 +9,7 @@ import { listMembers } from "@/server/organisations";
 import SystemPage from "@/app/[owner]/systems/[slug]/page";
 import WorkflowPlatformPage from "@/app/[owner]/[slug]/platform/page";
 import WorkflowFitPage from "@/app/[owner]/[slug]/fit/page";
+import PlatformWorkflowsPage from "@/app/[owner]/platforms/[slug]/workflows/page";
 import { seed } from "../scripts/seed-pictures";
 import { BASE, request, sentEmails, type Who } from "./helpers";
 import { renderPage } from "./pages";
@@ -139,6 +140,22 @@ describe("seeding a registry for the build's pictures", () => {
     expect(toVisitor.html).toContain("Public platforms");
     expect(toVisitor.html).not.toContain("mac-mini");
     expect(toVisitor.html).not.toContain("Your platforms");
+  });
+
+  it("keeps ana's letters private, which her Mac mini's Workflows that fit tab shows her before the public ones (#125)", async () => {
+    const { cookie } = await seeded();
+    expect((await read("/api/v1/ana/letters")).status).toBe(404);
+    expect((await read("/api/v1/ana/letters", cookie)).body).toMatchObject({ title: "Ana's letters", visibility: "private" });
+    const toAna = await renderPage(PlatformWorkflowsPage, { owner: "ana", slug: "mac-mini" }, { as: { cookie } });
+    const own = toAna.html.indexOf("Your workflows");
+    expect(own).toBeGreaterThan(0);
+    expect(toAna.html.indexOf('href="/ana/letters"')).toBeGreaterThan(own);
+    expect(toAna.html.indexOf('href="/acme/client-email"')).toBeGreaterThan(toAna.html.indexOf("Public workflows"));
+    const toVisitor = await renderPage(PlatformWorkflowsPage, { owner: "acme", slug: "worker" });
+    expect(toVisitor.status).toBe(200);
+    expect(toVisitor.html).toContain("Public workflows");
+    expect(toVisitor.html).not.toContain("Your workflows");
+    expect(toVisitor.html).not.toContain("letters");
   });
 
   it("pushes acme/inbox, public, whose Mac mini block names acme's private agent platform, outlined for ana alone", async () => {

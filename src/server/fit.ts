@@ -17,7 +17,7 @@ import {
 } from "./awml-file";
 import type { Owner } from "./owners";
 import { findReadablePlatformVersion, judgedPlatforms, notePrivatePlatformView, platformTarget, visiblePlatforms } from "./platforms";
-import { readVersion } from "./registry";
+import { judgedWorkflows, readVersion } from "./registry";
 import { refuse, type Result } from "./result";
 import type { Viewer } from "./viewer";
 
@@ -359,6 +359,40 @@ export async function whereItCanRun(db: Db, viewer: Viewer, source: string): Pro
     publicCount,
     placements,
   };
+}
+
+// One workflow as a platform's "Workflows that fit" tab judged it (#125).
+export type JudgedWorkflow = {
+  owner: string;
+  ownerType: Owner["type"];
+  slug: string;
+  title: string;
+  visibility: "public" | "private";
+  number: number;
+  fits: boolean;
+  models: Record<string, string[]>;
+};
+
+// Which workflows a platform's description holds, for its "Workflows that
+// fit" tab (#125): each workflow judgedWorkflows bounds, its latest version's
+// design judged by the engine against this one description, as the fit
+// judges it. A workflow whose file is invalid, that has no security view to
+// fit, or whose design doesn't say all the fit needs doesn't fit, and is
+// still counted as judged. A workflow listed is not recorded as viewed, as
+// an owner's page records none it lists.
+export async function workflowsThatFit(db: Db, viewer: Viewer, description: string) {
+  const [{ workflows, publicCount }, given] = await Promise.all([judgedWorkflows(db, viewer), descriptionAsRead(description)]);
+  const judged: JudgedWorkflow[] = [];
+  for (const { workflow, security, ...w } of workflows) {
+    const files = { ...(workflow !== null ? { workflow } : {}), ...(security !== null ? { security } : {}) };
+    const stored = workflow !== null ? "workflow" : security !== null ? "security" : null;
+    const read = stored ? await asRead(files, stored) : null;
+    const source = read && "file" in read && !(await engine.unsound(read.file)).length ? read.file : null;
+    const report = source ? await engine.fit(source, [given]) : null;
+    const result = report && !report.gaps.length ? report.results[0] : undefined;
+    judged.push({ ...w, fits: Boolean(result?.fits), models: result?.fits ? result.models : {} });
+  }
+  return { judged, publicCount };
 }
 
 // Each implementation whose blocks name a registered platform,
